@@ -121,6 +121,11 @@ ACQUIRE_REACH_HZ = float(os.environ.get("DATA2G_ACQUIRE_REACH_HZ", {"hf": 150.0,
 # 0.2-0.35, never worse. Not tried on HF yet. DATA2G_SYMBOL_NOISE (0/1):
 # studies only.
 SYMBOL_NOISE = bool(int(os.environ.get("DATA2G_SYMBOL_NOISE", int(PROFILE == "fm"))))
+# Interleaving window, frames (codes.spread_group): 0, every codeword over the whole
+# burst. A window lets a codeword group complete, and decode, while the burst
+# arrives (FM plan: decoding while the burst arrives). DATA2G_SPREAD_WINDOW:
+# studies only, Python only (native spreads over the whole burst).
+SPREAD_WINDOW = int(os.environ.get("DATA2G_SPREAD_WINDOW", 0))
 FIRST_PATH_SEARCH = NCP
 FIRST_PATH_FRAC = 0.5
 

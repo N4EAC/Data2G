@@ -136,7 +136,7 @@ def tx_audio(burst) -> np.ndarray:
                  for i, s in enumerate(burst.slots)]
         return cpm.modulate(spec, coded, dup=n_ctl == 2, cap=burst.cap)
     bits = np.stack([codes.encode(spec, s.payload, s.rv, mask_value(s.mask_id), i) for i, s in enumerate(burst.slots)])
-    return modem.modulate_bits(codes.spread(bits, spec.bits_per_cu), spec)
+    return modem.modulate_bits(codes.spread(bits, spec.bits_per_cu, codes.spread_group(spec)), spec)
 
 
 def measure(r: dict) -> dict:
@@ -187,7 +187,7 @@ def _dd_estimate(r: modem.Received, post: dict) -> modem.DataEstimate:
     for s, v in post.items():
         llr[s], have[s] = v, 1
     shape = y.shape
-    L = np.clip(codes.spread(llr, m).reshape(-1, m), -30, 30)
+    L = np.clip(codes.spread(llr, m, codes.spread_group(spec)).reshape(-1, m), -30, 30)
     labels = (np.arange(len(pts))[:, None] >> np.arange(m - 1, -1, -1)) & 1  # (M, m), modulate's order
     # log P(label) as matmuls: the (symbols, M, m) select-and-sum was 70% of a 256l refine
     lp = -np.logaddexp(0, L) @ labels.T - np.logaddexp(0, -L) @ (1 - labels).T
@@ -195,7 +195,7 @@ def _dd_estimate(r: modem.Received, post: dict) -> modem.DataEstimate:
     prob /= prob.sum(axis=1, keepdims=True)
     x = (prob @ pts).reshape(shape)
     v = (prob @ np.abs(pts) ** 2).reshape(shape) - np.abs(x) ** 2
-    k = codes.spread(have, m)[::m].reshape(shape).astype(bool) & (np.abs(x) > 1e-3)
+    k = codes.spread(have, m, codes.spread_group(spec))[::m].reshape(shape).astype(bool) & (np.abs(x) > 1e-3)
     g, nc = est["gain"], shape[2]
     p = est["p_sig"]
     with np.errstate(divide="ignore", invalid="ignore"):

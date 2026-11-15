@@ -255,3 +255,32 @@ def test_symbol_noise_scale_flags_a_click_hit_symbol():
     noise[17] *= np.sqrt(20)
     s = modem.symbol_noise_scale((h * x + noise)[None], h[None], np.full((1, n_rows, nc), var), pts)[0, :, 0]
     assert s[17] > 8 and np.delete(s, 17).max() < 1.5
+
+
+@pytest.mark.parametrize("group", [1, 2, 3, 7])
+def test_windowed_spread_round_trips_and_keeps_groups_together(group):
+    """codes.spread with a group: the inverse is despread with the same
+    group, and a group's symbols sit in its own stretch of the burst."""
+    rng = np.random.default_rng(0)
+    coded = rng.integers(0, 2, size=(7, 24))
+    x = codes.spread(coded, 2, group)
+    assert np.array_equal(codes.despread(x, 7, 2, group), coded)
+    pos = codes.despread(np.arange(7 * 12), 7, 1, group)  # each codeword's symbol positions
+    for a in range(0, 7, group):
+        g = pos[a:a + group]
+        assert g.min() == a * 12 and g.max() == min(a + group, 7) * 12 - 1
+
+
+def test_windowed_burst_loops_back_and_slot_soft_matches(monkeypatch):
+    from data2g import config
+
+    monkeypatch.setattr(config, "SPREAD_WINDOW", 8)  # 16-QAM r1/2: 4 frames a codeword, groups of 2
+    spec = SUBMODES["16qam-r1/2"]
+    sent = _payloads(spec, 5, 9)
+    x = np.concatenate([np.zeros(FS // 2), modem.modulate(sent, spec), np.zeros(FS // 2)])
+    r = modem.receive(hfchannel.apply_channel(x, snr_db=20, seed=3))
+    b = modem.decode_received(r)
+    assert b.payloads == sent and all(b.crc_ok)
+    soft = modem.burst_soft(r)
+    for s in range(5):
+        np.testing.assert_allclose(modem.slot_soft(r, r["est"], s), soft[s])

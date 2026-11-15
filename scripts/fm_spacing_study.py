@@ -102,7 +102,8 @@ def burst(spec, seed):
     from data2g.config import FS
 
     rng = np.random.default_rng(seed)
-    sent = [rng.bytes(codes.payload_bytes(spec)) for _ in range(N_CW)]
+    n = int(os.environ.get("FM_BURST_FRAMES", 0)) // spec.frames_per_cw or N_CW  # codewords: N_CW, or a burst length
+    sent = [rng.bytes(codes.payload_bytes(spec)) for _ in range(n)]
     return sent, np.concatenate([np.zeros(FS // 2), modem.modulate(sent, spec), np.zeros(FS // 2)])
 
 
@@ -136,7 +137,7 @@ def stream_receive(spec, sent, x, ch, keyup_late_s: float = -0.2) -> tuple[int, 
             except Exception:
                 continue
             best = max(best, sum(p == s and k for p, s, k in zip(b.payloads, sent, b.crc_ok)))
-    return N_CW - best, int(not found), false
+    return len(sent) - best, int(not found), false
 
 
 def job(args):
@@ -154,7 +155,7 @@ def job(args):
                          drive_dev_hz=drive, ppm=ppm)
         if stream:
             lost, nosync, false = stream_receive(spec, sent, x, ch)
-            rows.append((mode, radio, cond, mhz, ppm, trial, cnr, lost, nosync, false))
+            rows.append((mode, radio, cond, mhz, ppm, trial, cnr, lost, nosync, false, len(sent)))
             continue
         try:
             y = ch.apply(x)
@@ -163,10 +164,10 @@ def job(args):
 
                 y = audio.Blanker()(y)
             b = modem.demodulate(y)
-            lost, nosync = N_CW - sum(p == s and k for p, s, k in zip(b.payloads, sent, b.crc_ok)), 0
+            lost, nosync = len(sent) - sum(p == s and k for p, s, k in zip(b.payloads, sent, b.crc_ok)), 0
         except Exception:  # SyncError and kin: the burst was not acquired
-            lost, nosync = N_CW, 1
-        rows.append((mode, radio, cond, mhz, ppm, trial, cnr, lost, nosync, 0))
+            lost, nosync = len(sent), 1
+        rows.append((mode, radio, cond, mhz, ppm, trial, cnr, lost, nosync, 0, len(sent)))
     return rows
 
 
@@ -188,7 +189,7 @@ def run_variant(out: Path, variant, trials, workers):
     out.mkdir(parents=True, exist_ok=True)
     with (out / f"{variant}.csv").open("w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["mode", "radio", "condition", "mhz", "ppm", "trial", "cnr", "lost", "nosync", "false"])
+        w.writerow(["mode", "radio", "condition", "mhz", "ppm", "trial", "cnr", "lost", "nosync", "false", "n"])
         with ProcessPoolExecutor(workers) as ex:
             for rows in ex.map(job, jobs, chunksize=2):
                 w.writerows(rows)
@@ -233,7 +234,7 @@ def report_db(out: Path, variants):
         with (out / f"{v}.csv").open() as f:
             for r in csv.DictReader(f):
                 k = (r["mode"], r["radio"], r["condition"], r["mhz"], r["ppm"])
-                fail[v][k][(int(r["trial"]), col[int(r["cnr"])])] = int(r["lost"]) / N_CW
+                fail[v][k][(int(r["trial"]), col[int(r["cnr"])])] = int(r["lost"]) / int(r.get("n") or N_CW)
                 nos[v][k][(int(r["trial"]), col[int(r["cnr"])])] = int(r["nosync"])
                 false[v][0] += int(r.get("false") or 0)
                 false[v][1] += 1

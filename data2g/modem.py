@@ -438,7 +438,7 @@ def modulate(payloads: list[bytes], submode: str | SubmodeSpec, rvs=None) -> np.
     if not 1 <= len(payloads) <= max_codewords(spec.sync_band):
         raise ValueError(f"1..{max_codewords(spec.sync_band)} codewords per burst, got {len(payloads)}")
     bits = np.stack([codes.encode(spec, p, rv, index=i) for i, (p, rv) in enumerate(zip(payloads, rvs or [0] * len(payloads)))])
-    return modulate_bits(codes.spread(bits, spec.bits_per_cu), spec)
+    return modulate_bits(codes.spread(bits, spec.bits_per_cu, codes.spread_group(spec)), spec)
 
 
 def modulate_bits(bits: np.ndarray, spec: SubmodeSpec) -> np.ndarray:
@@ -1135,7 +1135,8 @@ def burst_soft(r: Received, est: DataEstimate | None = None) -> np.ndarray:
     arq/phy's DD re-estimate): thermal, clip and estimation noise."""
     spec, est = r["spec"], est or r["est"]
     var = _data_var(r, est)
-    return np.asarray(codes.despread(soft_bits(r["raw"], est["h"], var, spec), r["n_cw"], spec.bits_per_cu))
+    return np.asarray(codes.despread(soft_bits(r["raw"], est["h"], var, spec), r["n_cw"], spec.bits_per_cu,
+                                     codes.spread_group(spec)))
 
 
 def _data_var(r: Received, est: DataEstimate) -> np.ndarray:
@@ -1153,7 +1154,8 @@ def slot_soft(r: Received, est: DataEstimate, slot: int) -> np.ndarray:
     round-robin, so the slot's are every n_cw-th of the burst's."""
     n = r["n_cw"]
     var = _data_var(r, est)
-    pick = lambda a: a.reshape(-1)[slot::n]  # noqa: E731
+    cells = codes.despread(np.arange(est["h"].size), n, 1, codes.spread_group(r["spec"]))[slot]  # the slot's, in its order
+    pick = lambda a: a.reshape(-1)[cells]  # noqa: E731
     return constellation.llr(pick(data_symbols(r["raw"])), pick(est["h"]), pick(var),
                              constellation.load(r["spec"].constellation))
 
