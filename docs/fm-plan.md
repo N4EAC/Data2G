@@ -161,6 +161,12 @@ The open question that could reshape the ladder. Wide at 20..25 kbit/s is about 
 - Cheaper decoding where the channel allows: fewer iterations at high SNR (most FM receptions are far above threshold), min-sum in place of sum-product on the top rungs. Each measured in dB lost against CPU saved.
 - Rate capability. If a Pi still cannot keep up, each node advertises the fastest mode it can decode (from a bench at first run, or a setting) in the connect exchange, and the gear shifter never recommends past it. This is a session-layer field, so it has to be in the FM connect frame before that is frozen (M6).
 - Depends: nothing for the first measurement. The interleave change depends on M1.
+- First measurement (2026-11-15, `docs/pi-bench-fm.md` in PR #206), on a Pi 4 with HF and FM builds of one tree:
+  - Listening costs FM 17% of a core against HF's 21%: the +-12.5 Hz search pays for 16 kHz.
+  - A converging 256l-r5/8 x39 burst (92 kbit, close to one 4 s burst at 25 kbit/s) delivers its payload 0.38-0.44 s after the burst ends on FM, against 0.27-0.31 s on HF. That is near a 0.3 s turnaround.
+  - Failing bursts spend the whole 1 s DD budget on both profiles. That is the risk.
+  - Per-symbol noise costs about 55 ms of soft bits on 256-point; a cheaper nearest-point search is wanted.
+  - Next: the DD budget, or decoding while the burst arrives (the interleave change), measured for loss on the simulator. Then bench again once a wide band exists. No rate-capability field is called for yet.
 
 ### M3. Receiver changes for FM (receiver-only, testable on today's waveform)
 
@@ -176,7 +182,12 @@ The open question that could reshape the ladder. Wide at 20..25 kbit/s is about 
   - The Blanker is neutral on FM. Without it, an idle carrier's clicks drive the detector to 35-38, but the receiver blanks before detecting.
   - Coloured noise: per-carrier noise (`equalizer.PER_CARRIER_NOISE`) is already on, and the demapper uses it.
   - Method note: `modem.demodulate` on a buffer known to hold the burst cannot see receiver-state changes. Thresholds and the blanker measured identical through it. Judge M3-type changes by the streamed harness.
-- Open: the damaged burst start (above). Per-symbol noise on HF, which needs a paired HF loss study first.
+- Damaged burst start (`scripts/fm_start_study.py`, 40 paired trials, 25 dB): no receiver change needed.
+  - Bursts were acquired almost every time with the carrier up to 0.45 s late (preamble and header gone): the header copy.
+  - Every mode decodes with the carrier up to 0.2 s late. Beyond that, the erased data loses high-rate modes: 64l-r3/4 at 0.3 s, 16qam-r1/2 on the mic path at 0.45 s.
+  - A key-up synthesiser transient changes nothing.
+  - So the TX delay must cover the radio's key-up time (M7).
+- Open: per-symbol noise on HF, issue #207.
 
 ### M4. Narrow ladder (mic/speaker, FS 8000)
 
@@ -216,7 +227,7 @@ The open question that could reshape the ladder. Wide at 20..25 kbit/s is about 
 
 - Deviation tune: a tone and a modem-like test burst, level meters, and a report of the far end's reading. VARA FM's Autotune steps the drive level against a remote station and gives a verdict with S/N and VU; users will expect the same. `sounding.py` is the starting point.
 - Ping: S/N and input level at both ends without opening a session, through digipeaters if M8 has them.
-- TX delay per station, with guidance for handhelds (squelch-tail elimination off).
+- TX delay per station, with guidance for handhelds (squelch-tail elimination off). Measure the radio's key-up time against the far end (M3: 0.2 s of slack past the TX delay before high-rate bursts fail).
 - A station receiving I/Q (M10) can measure the far end's deviation and occupied bandwidth in Hz, which turns Autotune from "sounds right" into a check of the 15 kHz limit.
 - Overdrive diagnostic: the signature seen on 2026-10-31 (OFDM SNR pinned near the PAPR while FSK reads 25 dB or more) as a plain warning to the operator.
 - Radio path setting: mic or flat, which picks narrow or wide and the TX tilt.
@@ -321,6 +332,7 @@ Measurements that decide design:
 
 ## Revisions
 
+- 2026-11-15, M2b first Pi bench and M3's damaged burst start (PR #206); HF per-symbol noise is issue #207.
 - 2026-11-15, M3 (PR #206): per-symbol noise up to 2.25 dB on mobile paths; +-12.5 Hz search at no cost, 6.7x less detector CPU; FM threshold 28.7.
 - 2026-11-15, Q19 measured (PR #205): keep 50 Hz; FM's 8-repeat preamble threshold needs about 26.7.
 - 2026-11-15, Q1 decided and M1/M2 begun (PRs #203, #204): bands 144-450 MHz primary; borderline fixed paths' slow fadeouts (TN 88) in the channel differences and the simulator; first simulator numbers; FM re-measurement list; Q19 (carrier spacing).
