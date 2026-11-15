@@ -9,7 +9,9 @@ Status: draft for discussion, 2026-11-13. Nothing here is built.
 - The structural cost is making `config.FS` and the mode tables a per-profile choice (HF or FM) in Python and native. Decide how before any FM mode is frozen (question Q1).
 - Rate targets are VARA FM 4.0's: 12750 bps narrow, 25210 bps wide. Both are reachable with 55 carriers and a 256-point r5/6 top rung.
 - The transmitted signal must measure 15 kHz occupied or less. That makes deviation a design output of the simulator, and on wide it trades audio bandwidth against deviation.
-- Decided: digipeating and repeaters are after the first release, the host only has to work with Pat and Winlink Express at the TNC layer, I/Q receive is an investigation (M10).
+- The biggest risk is CPU, not the channel: whether a Raspberry Pi can decode 20+ kbit/s with Data2G's codes inside an FM turnaround. Benchmark it first (M2b), on today's code. If the answer is no, nodes advertise the fastest rate they can decode.
+- Decided: digipeating and repeaters are after the first release. The host works with any client; Pat and Winlink Express are the yardsticks for existing VARA FM clients. I/Q receive is an investigation (M10).
+- Scope is what fits an audio passband (or a discriminator tap). Wider-than-audio and channel bonding are out; a microwave FM rung or two is an open question (Q18).
 - Still the user's: Q1 (profile mechanism), Q2 (how low the floor goes), Q15 (which bandwidth definition). The rest are measurements.
 
 ## What the others do
@@ -79,6 +81,17 @@ Targets this sets (rates only; the SNR each needs is still M0's job):
 - Wide: 25210 bps. With about 55 carriers on a 100 Hz grid (300..5700 Hz) the same two cases give 25.5 and 30.6 kbit/s at 256-point r5/6.
 - Both bands are 55 carriers, so one pilot and one header layout can serve narrow and wide.
 
+## Data2G, not a clone
+
+The aim is Data2G on FM, not a copy of VARA FM or VardeFM. The competitors set the rate targets above; the design keeps what Data2G already does differently:
+
+- Gear shifting from a learned outcome model, not a threshold table (M6).
+- HARQ with incremental redundancy, so a failed codeword is topped up, not resent.
+- Primed reception, nods, CW ID, broadcast and KISS, and the same host interfaces as Data2G HF, so Ragtime and other Data2G clients work unchanged.
+- Open source, with a native build for Linux, Windows, macOS, the Pi and Android.
+
+Where FM's channel argues against one of these (for example HARQ round trips against short overs), the plan measures it rather than dropping it by default.
+
 ## How FM differs from the HF channel the modem was tuned for
 
 1. The limit is peak deviation, not power. Audio SNR after the discriminator scales with deviation squared, so PAPR costs exactly what it costs on a PEP-limited HF transmitter. The existing clip headroom, ACE and PEP-fair machinery (`DATA2G_PEP_REF_DB`, `clip_constants.json`) carries over with "peak deviation" in place of "PEP".
@@ -111,6 +124,7 @@ Dependencies are named by ID. Sizes are rough new or changed lines of Python, na
 - Run today's ladder through M1's simulator, and on a real pair of FM radios through mic/speaker, with `sounding.py`.
 - Output: where each w48 mode fails against CNR, the SNR ceiling per radio path, and the CNR each VARA FM level needs if a licensed copy is at hand (the VARA Wine harness exists). Its rates are known (chart above); its thresholds are not.
 - Depends: M1 for the simulated half. The on-air half can start now.
+- Hardware: the maintainer has an IC-9700 (enough for M10's I/Q receive on air) but few 9600-capable radios. Volunteers with a pair of computer-connected VHF/UHF radios with flat, clean TX and RX audio are wanted for M0, M5 and M9.
 - This sets the targets for M4 and M5. Until then "match VARA FM narrow" is a guess.
 
 ### M1. FM channel simulator (`data2g/fmchannel.py`, about 300 lines)
@@ -130,6 +144,16 @@ Dependencies are named by ID. Sizes are rough new or changed lines of Python, na
 - The CRC seed must differ so an HF node rejects an FM header where the preamble is shared (narrow FM at 8 kHz would otherwise look like w48).
 - Mechanism is Q1. Recommendation: profile fixed at process start in Python (one env var or flag read in `config.py`), native built once per profile from its own generated header. Constexprs stay, no runtime indirection in the hot path, and the GUI picks which core to load.
 - Depends: Q1. Blocks M4, M5, M6 from freezing anything. Receiver work (M3) and exploration of M4/M5 can run before it using the existing `DATA2G_*` study overrides.
+
+### M2b. CPU budget (benchmark first, decide the ladder's top by it)
+
+The open question that could reshape the ladder. Wide at 20..25 kbit/s is about 3x the LDPC work per second of today's top mode (8222 bps), and FM turnarounds are about four times shorter than HF's `TURN_S = 1.3`.
+
+- Measure now, before M4/M5: decoded bits per second on a Pi 4 (minstrel) for today's top codes, native, at the default decoder effort. `data2g-bench-rx` already does this per burst. Compare with 25 kbit/s plus a 0.3 s turnaround. This needs no FM work.
+- Incremental decoding. `codes.spread` deals every codeword round-robin over the whole burst, so no codeword can be decoded until the burst ends and all of them are decoded at once. That diversity matters on HF fading; on FM's static or click-hit channel a bounded window (each codeword over a few frames, windows overlapping) may cost little. Then codewords finish during the burst and decoding streams, as the CPM receiver now does. Measure the loss on M1 with flutter before relying on it.
+- Cheaper decoding where the channel allows: fewer iterations at high SNR (most FM receptions are far above threshold), min-sum in place of sum-product on the top rungs. Each measured in dB lost against CPU saved.
+- Rate capability. If a Pi still cannot keep up, each node advertises the fastest mode it can decode (from a bench at first run, or a setting) in the connect exchange, and the gear shifter never recommends past it. This is a session-layer field, so it has to be in the FM connect frame before that is frozen (M6).
+- Depends: nothing for the first measurement. The interleave change depends on M1.
 
 ### M3. Receiver changes for FM (receiver-only, testable on today's waveform)
 
@@ -169,6 +193,7 @@ Dependencies are named by ID. Sizes are rough new or changed lines of Python, na
 
 - Timing constants per profile: `TURN_S`, `TIMEOUT_S`, `MAX_BURST_S`, burst-length policy, PTT lead (already `--ptt-on-delay-ms`). FM wants turnarounds near 0.2..0.3 s and bursts of a few seconds.
 - Gear shifter: start with a threshold table per mode on M1 (as `mode_thresholds.json`), then train the outcome model on FM data. The HF model's inputs (spread, fading regime) mean nothing here. Likely inputs: per-carrier SNR profile, click or erasure rate, SNR ceiling.
+- The connect exchange carries each node's rate capability (M2b) and the gear shifter caps its recommendations by it.
 - Cliff behaviour: fast fall-back on the first lost codewords, fast climb when quieting returns. Judge by paired sessions on M1 with fading and with a CNR ramp through threshold, in dB of CNR where a rate is reached.
 - Depends: M4 and M5 ladders frozen, M2.
 
@@ -185,7 +210,8 @@ Dependencies are named by ID. Sizes are rough new or changed lines of Python, na
 
 ### M8. Host and network features
 
-- TNC-layer compatibility with Pat's and Winlink Express's "VARA FM" session types. Both have the user pick VARA HF or VARA FM first, so the version reply need not imitate VARA. The work is a test against each client and accepting whatever they send in FM mode that `host.py` does not know (candidates: no BW commands, NARROW or WIDE on `CONNECTED`, `via` on `CONNECT`).
+- The host works with every client: Ragtime, other Data2G clients, and ones not written yet. The existing host interfaces stay the same on FM.
+- For existing VARA FM clients, Pat and Winlink Express are the yardsticks, in their "VARA FM" session types. Both have the user pick VARA HF or VARA FM first, so the version reply need not imitate VARA. The work is a test against each client and accepting whatever they send in FM mode that `host.py` does not know (candidates: no BW commands, NARROW or WIDE on `CONNECTED`, `via` on `CONNECT`).
 - Digipeating: in scope, after the first release. VARA FM's shape: one or two hops named in the connect, a digipeater callsign separate from the gateway's, a freestanding relay with a retries setting. Its own design doc when it starts. For now only two cheap things: `CONNECT ... via` gets a clean refusal, and the FM session's connect frame is checked for room to carry via calls before its version is frozen (M6).
 - S/N reports to the host, and a log of stations heard.
 - KISS and broadcast should work unchanged over the FM profile. Verify, do not redesign.
@@ -194,7 +220,7 @@ Dependencies are named by ID. Sizes are rough new or changed lines of Python, na
 ### M9. Native, Pi, on-air, release
 
 - Native port of M3..M6, generated tables per profile, `native/build-test` ctest.
-- Pi 4 bench: wide at 20 kbit/s is about 2.5x the LDPC work per second of today's top mode, against a turnaround four times shorter. Decode must stream during the burst (as CPM now does) or the turnaround target moves.
+- Pi 4 bench of the finished FM ladder, confirming M2b's numbers and the advertised rate caps.
 - On-air trials on at least: two mobiles/handhelds on mic, two 9600-port radios, one mixed pair. Simplex only. Measure occupied bandwidth of each on a spectrum display.
 - User guide chapter, speed sweep per `docs/speedtests/README.md`.
 - Depends: all of the above.
@@ -225,12 +251,13 @@ M1 sim ──┬─> M0 baseline ──> targets for M4, M5
          ├─> M3 receiver ──┬─> M4 narrow ──┐
          │                 └─> M5 wide ────┼─> M6 ARQ + shifter ──> M8 host ──> M9
 Q1 ──> M2 profiles ────────────> (freeze M4, M5, M6)
+M2b CPU budget: Pi measurement now; interleave change needs M1; caps the top of M4, M5; capability field in M6
 M7 tools: independent, needs M2 only for UI
 M10 I/Q receive study: needs M1, M3; feeds M3 (erasures), M6 (CNR), M7 (deviation)
 digipeating, repeaters: after the first release
 ```
 
-First three pieces of work, in order: M1, the on-air half of M0, M3. None needs a decision.
+First pieces of work: M1, the Pi measurement in M2b, the on-air half of M0 (needs volunteer radios for the 9600 path), M3. None needs a decision.
 
 ## Open questions
 
@@ -239,12 +266,13 @@ Decisions for the user:
 - Q1. Profile mechanism. One codebase with a profile fixed at start (recommended), a runtime switch inside one binary, or a fork? A runtime switch means templating or namespacing every constexpr in native.
 - Q2. How low does the FM floor go? VARA FM stops at 549 bps (4PSK on 14 carriers). The CPM floor reaches SNRs FM audio never delivers with a usable carrier, and squelch hides them anyway. Recommendation: keep the w and n10 QPSK rungs (down to 128 bps), no CPM, no n4.
 - Q15. Which bandwidth definition does "15 kHz occupied" mean: 99% power (ITU) or the -26 dB width (US Part 97)? M1 reports both. Until told otherwise the target is the stricter of the two per mode.
+- Q18. Is there a microwave FM rung or two worth having? Wider channels there allow more deviation and a wider audio or discriminator band than 15 kHz permits on 2 m and 70 cm. Only if it stays inside what a sound card or discriminator tap carries.
 - Q16. Are 12.5 kHz channels (2.5 kHz deviation, about 11 kHz occupied) a case to support, or is 15 kHz the only target?
 
 Decided (2026-11-13):
 
 - Q3. Digipeating is in scope, not needed for the first release.
-- Q4. No imitation of VARA's version reply. Compatible enough at the TNC layer for Pat and Winlink Express in their VARA FM session types.
+- Q4. No imitation of VARA's version reply. The host works with any client; Pat and Winlink Express (VARA FM session types) are the yardsticks for existing VARA FM clients.
 - Q5. Repeaters are not needed for the first release.
 - Q6. I/Q transmit is rare and not planned. I/Q receive with FM transmit is investigated (M10).
 
@@ -255,7 +283,7 @@ Measurements that decide design:
 - Q9. Fixed tilt or bit loading on wide (M5 step 3)?
 - Q10. Does symbol erasure plus the existing interleaver hold a mobile link at 20..50 Hz flutter, or do the codewords need to be longer in time?
 - Q11. Wide at FS 16000 or 24000? 16000 keeps every sample count and reaches 6 kHz with a 2 kHz transition band. 24000 only matters if radios pass more than 6 kHz, which Q7 answers.
-- Q12. Pi 4 decode budget at 20 kbit/s with a 0.3 s turnaround.
+- Q12. Pi 4 decode budget at 20..25 kbit/s with a 0.3 s turnaround, and how much incremental decoding and cheaper decoding recover (M2b).
 - Q13. Regulatory check beyond the 15 kHz target: symbol-rate or other limits for the wide mode on 2 m and 70 cm (US Part 97 at least). Not verified here.
 - Q17. How much deviation does 15 kHz allow at each candidate top edge (3.15, 4.6, 5.7 kHz), and does VARA FM wide at its recommended drive actually fit? Sets whether matching 25210 bps is possible inside the limit at all.
 - Q14. VARA FM's thresholds per level on the same simulator, for a like-for-like target. Its rates are in the chart above.
@@ -265,3 +293,8 @@ Measurements that decide design:
 - A new waveform family for FM. OFDM over the audio or flat path is what both competitors use, and the existing modem covers it.
 - Single-carrier FSK or constant-deviation modes for the weak-signal end (needs DC-coupled audio, see M5).
 - Interoperation between HF and FM profiles, by the brief.
+- Anything wider than an audio passband or a discriminator tap, and channel bonding. Wideband SDRs on 2.4 GHz can go much faster, but the sensible way to do that is OFDM in hardware at the radio, which is WiFi. Microwave FM within an audio passband is Q18.
+
+## Revisions
+
+- 2026-11-15, from the first comments: host scope is every client, with Pat and Winlink Express as yardsticks; CPU budget moved up front as M2b (incremental decoding, rate capability); "Data2G, not a clone" section; hardware and volunteers in M0; wider-than-audio out of scope, microwave FM rung as Q18.
