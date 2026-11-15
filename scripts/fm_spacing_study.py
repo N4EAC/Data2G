@@ -106,7 +106,7 @@ def burst(spec, seed):
     return sent, np.concatenate([np.zeros(FS // 2), modem.modulate(sent, spec), np.zeros(FS // 2)])
 
 
-def stream_receive(spec, sent, x, ch) -> tuple[int, int, int]:
+def stream_receive(spec, sent, x, ch, keyup_late_s: float = -0.2) -> tuple[int, int, int]:
     """The live receiver (FM_RX_STREAM): receiver.Receiver fed 0.25 s at a
     time, its Blanker (unless FM_RX_NO_BLANK) and StreamDetector at the
     band's threshold, accepting every mode of the burst's sync band. The
@@ -118,7 +118,7 @@ def stream_receive(spec, sent, x, ch) -> tuple[int, int, int]:
     from data2g.config import FS, SUBMODES
 
     lead = 2 * FS
-    ch.keyup_s = lead / FS - 0.2
+    ch.keyup_s = lead / FS + keyup_late_s  # the carrier arrives this long after the burst starts (-0.2: TX delay)
     y = ch.apply(np.concatenate([np.zeros(lead), x[FS // 2:], np.zeros(FS // 2)]))
     names = [n for n, s in SUBMODES.items() if s.sync_band == spec.sync_band]
     rx = receiver.Receiver(modem.Accept.of(names), blank=not os.environ.get("FM_RX_NO_BLANK"))
