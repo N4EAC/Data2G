@@ -26,6 +26,7 @@ inline constexpr int PREAMBLE_CP = 64;
 inline constexpr double ACQUIRE_REACH_HZ = 150.0;
 inline constexpr bool SYMBOL_NOISE = false;
 inline constexpr int SPREAD_WINDOW = 0;
+inline constexpr int EST_WINDOW = 0;
 inline constexpr int FIRST_PATH_SEARCH = 32;
 inline constexpr double FIRST_PATH_FRAC = 0.5;
 inline constexpr int PROFILE_TAG = 0;

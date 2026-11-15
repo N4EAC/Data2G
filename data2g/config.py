@@ -126,6 +126,10 @@ SYMBOL_NOISE = bool(int(os.environ.get("DATA2G_SYMBOL_NOISE", int(PROFILE == "fm
 # arrives (FM plan: decoding while the burst arrives). DATA2G_SPREAD_WINDOW:
 # studies only, Python only (native spreads over the whole burst).
 SPREAD_WINDOW = int(os.environ.get("DATA2G_SPREAD_WINDOW", 0))
+# Channel estimate in windows of this many frames (modem.data_channel), each from
+# its own pilots and one either side: what a receiver estimating as frames
+# arrive sees. 0: the whole burst. DATA2G_EST_WINDOW: studies only.
+EST_WINDOW = int(os.environ.get("DATA2G_EST_WINDOW", 0))
 FIRST_PATH_SEARCH = NCP
 FIRST_PATH_FRAC = 0.5
 

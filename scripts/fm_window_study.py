@@ -19,6 +19,10 @@ Variants (DATA2G_SPREAD_WINDOW, frames; a frame is 144 ms):
     w16   16 frames, 2.3 s: QPSK / 16-QAM in groups of 4, the 64-point of 8
     w8    8 frames, 1.15 s: groups of 2 and 4
     w4    4 frames, 0.58 s: groups of 1 and 2
+    e8    w8, and the channel estimated per 8 frames from their own pilots and
+          one either side (DATA2G_EST_WINDOW): what a receiver that
+          estimates and decodes as frames arrive sees
+    e4    w4, likewise per 4 frames
 """
 
 import argparse
@@ -37,6 +41,8 @@ VARIANTS = {
     "w16": {**_BASE, "DATA2G_SPREAD_WINDOW": "16"},
     "w8": {**_BASE, "DATA2G_SPREAD_WINDOW": "8"},
     "w4": {**_BASE, "DATA2G_SPREAD_WINDOW": "4"},
+    "e8": {**_BASE, "DATA2G_SPREAD_WINDOW": "8", "DATA2G_EST_WINDOW": "8"},
+    "e4": {**_BASE, "DATA2G_SPREAD_WINDOW": "4", "DATA2G_EST_WINDOW": "4"},
 }
 
 

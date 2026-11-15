@@ -1067,6 +1067,8 @@ def receive(x: np.ndarray, bands=None, accept: Accept | None = None, head: int |
     if kc is not None:
         raw = np.delete(raw, kc, axis=0)
         est["h"], est["mse"] = np.delete(est["h"], kc, axis=0), np.delete(est["mse"], kc, axis=0)
+        if np.ndim(est.get("n0_k")) == 3:  # per frame (config.EST_WINDOW)
+            est["n0_k"] = np.delete(est["n0_k"], kc, axis=0)
     return dict(
         spec=spec, n_cw=n_cw, raw=raw, est=est, acq=acq, band=db, hp=hp, kc=kc,
         cfo=acq.freq_offset + cfo_res, p0=p0, shift=shift, steps=steps, slips=slips, phi_ref=phi_ref, support=support, seen_support=seen,
@@ -1080,10 +1082,32 @@ def resolve_alias(fine: float, coarse: float) -> float:
 
 
 def data_channel(h_pilot: np.ndarray, support: tuple[int, int], band: str = "w",
-                 n0_pre: float = np.inf, clip: ClipConsts | None = None, n0_pre_k=None, n_frames: int | None = None) -> DataEstimate:
+                 n0_pre: float = np.inf, clip: ClipConsts | None = None, n0_pre_k=None, n_frames: int | None = None,
+                 _whole: bool = False) -> DataEstimate:
     """equalizer.estimate, rescaled from the pilots' channel to the one
     the data see. `clip` overrides config.CLIP[band] (clipper studies).
     `n_frames`: data frames, when the pilots include a header copy's."""
+    from .config import EST_WINDOW
+
+    n_air = len(h_pilot) - 1
+    if EST_WINDOW and not _whole and n_air > EST_WINDOW:
+        # studies (FM plan, decoding while a burst arrives): each window of
+        # frames from its own pilots and one either side, as a receiver that
+        # estimates as frames arrive would see them
+        parts = []
+        for a in range(0, n_air, EST_WINDOW):
+            lo, hi = max(0, a - 1), min(n_air, a + EST_WINDOW + 1)
+            e = data_channel(h_pilot[lo:hi + 1], support, band, n0_pre, clip, n0_pre_k, n_frames or n_air, _whole=True)
+            w = slice(a - lo, a - lo + min(EST_WINDOW, n_air - a))
+            nk = np.broadcast_to(np.asarray(e.get("n0_k", e["n0"]), dtype=float), (e["h"].shape[2],))
+            parts.append((e, e["h"][w], e["mse"][w], np.broadcast_to(nk, (len(e["h"][w]), 1, len(nk)))))
+        est = dict(parts[0][0])
+        est["h"] = np.concatenate([p[1] for p in parts])
+        est["mse"] = np.concatenate([p[2] for p in parts])
+        est["n0_k"] = np.concatenate([p[3] for p in parts])
+        for k in ("n0", "p_sig", "spread_hz"):
+            est[k] = float(np.mean([p[0][k] for p in parts]))
+        return est
     est = equalizer.estimate(h_pilot, support, bb=ofdm.band(band).bb, n0_pre=n0_pre, n0_pre_k=n0_pre_k)
     c = ClipConsts(*(clip or CLIP[band]))
     est["clip_ratio"] = c.ratio
