@@ -6,14 +6,14 @@ Status: draft for discussion, 2026-11-13. Nothing here is built.
 
 - Build one FM channel simulator first. Every later step is judged on it, and nothing in the repo models a limiter-discriminator today.
 - "Narrow" is a retune of the existing 8 kHz OFDM (w48 already sits at 350..2700 Hz). "Wide" is the same modem clocked at 16 kHz, then widened. Neither needs a new waveform family.
-- Status: M1 (the simulator) is draft PR #203, M2 (profiles, Q1 decided: fixed at process start) is draft PR #204. First numbers are under M1 and M2.
+- Status: M1 (the simulator) is draft PR #203, M2 (profiles, Q1 decided: fixed at process start) is draft PR #204, the carrier spacing study (Q19: 50 Hz, measured) draft PR #205. First numbers are under M1, M2 and Q19.
 - Bands: 144-450 MHz (2 m, 1.25 m, 70 cm) are the targets. Higher bands count only where they cost these nothing.
 - Rate targets are VARA FM 4.0's: 12750 bps narrow, 25210 bps wide. Both are reachable with 55 carriers and a 256-point r5/6 top rung.
 - The transmitted signal must measure 15 kHz occupied or less. That makes deviation a design output of the simulator, and on wide it trades audio bandwidth against deviation.
 - The biggest risk is CPU, not the channel: whether a Raspberry Pi can decode 20+ kbit/s with Data2G's codes inside an FM turnaround. Benchmark it first (M2b), on today's code. If the answer is no, nodes advertise the fastest rate they can decode.
 - Decided: digipeating and repeaters are after the first release. The host works with any client; Pat and Winlink Express are the yardsticks for existing VARA FM clients. I/Q receive is an investigation (M10).
 - Scope is what fits an audio passband (or a discriminator tap). Wider-than-audio and channel bonding are out; a microwave FM rung or two is an open question (Q18).
-- Still the user's: Q2 (how low the floor goes), Q15 (which bandwidth definition), Q19 (FM carrier spacing, a measurement first). The rest are measurements.
+- Still the user's: Q2 (how low the floor goes), Q15 (which bandwidth definition). The rest are measurements.
 
 ## What the others do
 
@@ -148,8 +148,8 @@ Dependencies are named by ID. Sizes are rough new or changed lines of Python, na
 - Needed: FS, numerology (M, NCP, RS, CARRIER0), BANDS, SUBMODES, thresholds, outcome model, ARQ timing and the header CRC seed all chosen by profile.
 - The CRC seed must differ so an HF node rejects an FM header where the preamble is shared (narrow FM at 8 kHz would otherwise look like w48).
 - Mechanism (Q1, decided): profile fixed at process start (`DATA2G_PROFILE`, read in `config.py`), native built once per profile from its own generated tables. Constexprs stay, no runtime indirection in the hot path.
-- Status (2026-11-15): draft PR #204. FM is provisional: 16 kHz on HF's 50 Hz grid (Q19), HF's ladder as a placeholder, its own protocol version line and a profile tag in the header CRC seed. HF is unchanged on air. Hidden 8 kHz assumptions found and fixed: the TX filter's tap count (at 16 kHz it cost the edge carriers ~3 dB), the Blanker's block and time constants, timing-slip bounds, the impulse filter, sync's FFT period, hand's sample counts.
-- What FM must re-measure (each an FM test skip with its reason): the preamble threshold (tilted noise reaches 24.9 against 24.1 on w48 at 16 kHz), Blanker levels on discriminator clicks (M3), CP and demod backoff (M4: 1.25-1.5 ms echoes already cost bits at a 2 ms CP), clip constants, mode thresholds, the outcome model.
+- Status (2026-11-15): draft PR #204. FM is provisional: 16 kHz on HF's 50 Hz grid (Q19: measured, keep it), HF's ladder as a placeholder, its own protocol version line and a profile tag in the header CRC seed. HF is unchanged on air. Hidden 8 kHz assumptions found and fixed: the TX filter's tap count (at 16 kHz it cost the edge carriers ~3 dB), the Blanker's block and time constants, timing-slip bounds, the impulse filter, sync's FFT period, hand's sample counts.
+- What FM must re-measure (each an FM test skip with its reason): the preamble threshold (white-noise peaks over 1200 s at 8 repeats reach 22.7-24.3 at 16 kHz against HF's 24.1, so about 26.7; tilted noise 24.9 on w48; re-measure on discriminator noise in M3), Blanker levels on discriminator clicks (M3), CP and demod backoff (M4: 1.25-1.5 ms echoes already cost bits at a 2 ms CP), clip constants, mode thresholds, the outcome model.
 - Blocks M4, M5, M6 from freezing anything.
 
 ### M2b. CPU budget (benchmark first, decide the ladder's top by it)
@@ -187,7 +187,7 @@ The open question that could reshape the ladder. Wide at 20..25 kbit/s is about 
 
 ### M5. Wide ladder (9600 port or direct taps)
 
-- Step 1: the FM profile runs at FS 16000 on the 50 Hz grid (M2), so a wide band is just more carriers, as VARA FM does. The alternative is 100 Hz spacing (every HF sample count kept, w48 on 700..5400 Hz at 16.4 kbit/s); Q19 decides.
+- Step 1: the FM profile runs at FS 16000 on the 50 Hz grid (M2), so a wide band is just more carriers, as VARA FM does. 100 Hz spacing was measured and lost (Q19).
 - Step 2: a wider band on the same grid, about 300..5700 Hz (55 carriers, the count M4's narrow band uses, so its pilot and header layout are shared). Arithmetic: about 19 kbit/s with today's top code, 25.5 kbit/s with 256-point r5/6, 30.6 with M4's prefix and pilot savings. VARA FM's top is 25210.
 - A narrower wide band (about 4.6 kHz, as VARA's 98 carriers) for ports that roll off early: on this grid it is just fewer carriers.
 - Step 3: fit the f-squared noise. A fixed TX tilt first (VardeFM uses +3 dB/octave). Per-carrier bit loading only if the fixed tilt leaves several dB on the table.
@@ -273,12 +273,20 @@ Decisions for the user:
 - Q2. How low does the FM floor go? VARA FM stops at 549 bps (4PSK on 14 carriers). The CPM floor reaches SNRs FM audio never delivers with a usable carrier, and squelch hides them anyway. Recommendation: keep the w and n10 QPSK rungs (down to 128 bps), no CPM, no n4.
 - Q15. Which bandwidth definition does "15 kHz occupied" mean: 99% power (ITU) or the -26 dB width (US Part 97)? M1 reports both. Until told otherwise the target is the stricter of the two per mode.
 - Q18. Is there a microwave FM rung or two worth having? Wider channels there allow more deviation and a wider audio or discriminator band than 15 kHz permits on 2 m and 70 cm. Only if it stays inside what a sound card or discriminator tap carries, and costs 2 m and 70 cm nothing.
-- Q19. FM carrier spacing: 50 Hz at 16 kHz (the profile's provisional choice: narrow and wide are bands of one grid, HF's numerology per carrier) or 100 Hz (shorter symbols, more robust to mobile flutter and clock error, fewer carriers per Hz of pilot overhead). Measure on the simulator's mobile conditions before freezing M4/M5.
 - Q16. Are 12.5 kHz channels (2.5 kHz deviation, about 11 kHz occupied) a case to support, or is 15 kHz the only target?
 
 Decided (2026-11-13, Q1 2026-11-15):
 
 - Q1. One codebase, profile fixed at process start, native built once per profile (PR #204).
+- Q19 (measured, PR #205). Keep 50 Hz spacing. 50 Hz (48 carriers) against 100 Hz (24 carriers, 2 ms CP), same band, modes matched in code and coded bits, every simulator condition, 30 paired trials, each at a measured preamble threshold:
+  - Fixed and static paths: no difference (within 0.3 dB).
+  - Mobile paths: 100 Hz is 1.1-1.2 dB worse for QPSK and 16-QAM. That holds even with a 16-repeat preamble, which matches 50 Hz's preamble time.
+  - Slow fading: 100 Hz is 2.2 dB worse.
+  - Flutter at 440 MHz: 100 Hz with 8 repeats is 0.6-2.6 dB worse.
+  - The 64-point mode: no significant difference.
+  - Where it loses, most of the loss is acquisition. The data path shows no 100 Hz gain: RF Doppler reaches the audio as clicks and dropouts, not as fast fading for shorter symbols to track.
+  - 50 Hz also carries 9% more at the same 2 ms CP.
+  - A 4 ms CP was worse than 2 ms. A 1 ms CP at 100 Hz does not decode at all (acquisition timing is good to +-1 ms at 16 kHz).
 - Q3. Digipeating is in scope, not needed for the first release.
 - Q4. No imitation of VARA's version reply. The host works with any client; Pat and Winlink Express (VARA FM session types) are the yardsticks for existing VARA FM clients.
 - Q5. Repeaters are not needed for the first release.
@@ -305,5 +313,6 @@ Measurements that decide design:
 
 ## Revisions
 
+- 2026-11-15, Q19 measured (PR #205): keep 50 Hz; FM's 8-repeat preamble threshold needs about 26.7.
 - 2026-11-15, Q1 decided and M1/M2 begun (PRs #203, #204): bands 144-450 MHz primary; borderline fixed paths' slow fadeouts (TN 88) in the channel differences and the simulator; first simulator numbers; FM re-measurement list; Q19 (carrier spacing).
 - 2026-11-15, from the first comments: host scope is every client, with Pat and Winlink Express as yardsticks; CPU budget moved up front as M2b (incremental decoding, rate capability); "Data2G, not a clone" section; hardware and volunteers in M0; wider-than-audio out of scope, microwave FM rung as Q18.
