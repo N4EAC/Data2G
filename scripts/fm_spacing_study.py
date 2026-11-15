@@ -163,6 +163,61 @@ def knee(fail, level=0.1):
     return float(np.interp(level, [fail[i + 1], fail[i]], [CNRS[i + 1], CNRS[i]]))
 
 
+FAMILY = {"static": "fixed", "fixed": "fixed", "fixed-fringe": "slow", "knife-edge": "slow", "flutter": "flutter",
+          "pedestrian": "mobile", "mobile-rural": "mobile", "mobile-urban": "mobile", "mobile-bad-urban": "mobile",
+          "mobile-hilly": "mobile", "mobile-rural@130": "mobile"}
+
+
+def report_db(rnd):
+    """Each variant against the round's first, in dB of CNR: codeword failure
+    integrated over the CNR grid (two shifted copies differ by the shift),
+    per condition family (flutter at 440 MHz apart), with a 90% bootstrap
+    interval over trials (paired: every variant ran the same seeds), and the
+    part from bursts not acquired (the rest is the data path).
+
+    Round 2 (2026-11-15, 30 trials): 100 Hz no better anywhere outside 0.3
+    dB; on mobile paths 1.1-2.1 dB worse, on slow fading 2.2-2.4 dB worse
+    for QPSK and 16-QAM even with A's preamble time (B2p16), most of it
+    acquisition; flutter at 440 MHz costs B2's 8-repeat preamble 0.6-2.6 dB."""
+    from collections import defaultdict
+
+    vs = [v for v in ROUNDS[rnd] if (out_dir(rnd) / f"{v}.csv").exists()]
+    col = {c: i for i, c in enumerate(CNRS)}
+    fail = {v: defaultdict(dict) for v in vs}
+    nos = {v: defaultdict(dict) for v in vs}
+    for v in vs:
+        with (out_dir(rnd) / f"{v}.csv").open() as f:
+            for r in csv.DictReader(f):
+                k = (r["mode"], r["radio"], r["condition"], r["mhz"], r["ppm"])
+                fail[v][k][(int(r["trial"]), col[int(r["cnr"])])] = int(r["lost"]) / N_CW
+                nos[v][k][(int(r["trial"]), col[int(r["cnr"])])] = int(r["nosync"])
+
+    def grid(d):  # {(trial, cnr index): x} -> (trials, cnrs)
+        a = np.zeros((1 + max(t for t, _ in d), len(CNRS)))
+        for (t, c), x in d.items():
+            a[t, c] = x
+        return a
+
+    def area(a):
+        return np.trapezoid(a, CNRS, axis=-1)
+
+    groups = defaultdict(list)
+    for k in fail[vs[0]]:
+        groups[(k[0], FAMILY[k[2]] + (" 440" if k[2] == "flutter" and k[3].startswith("440") else ""))].append(k)
+    rng = np.random.default_rng(0)
+    print(f"dB of CNR against {vs[0]} (positive: worse): total [90% interval] / acquisition part")
+    print(f"{'mode':>10} {'family':>11}  " + "  ".join(f"{v:>26}" for v in vs[1:]))
+    for g in sorted(groups):
+        cells = []
+        for v in vs[1:]:
+            tot = np.mean([area(grid(fail[v][k])) - area(grid(fail[vs[0]][k])) for k in groups[g]], axis=0)
+            acq = np.mean([area(grid(nos[v][k])) - area(grid(nos[vs[0]][k])) for k in groups[g]], axis=0)
+            boot = [tot[rng.integers(0, len(tot), len(tot))].mean() for _ in range(2000)]
+            lo, hi = np.percentile(boot, [5, 95])
+            cells.append(f"{tot.mean():+5.2f} [{lo:+5.2f},{hi:+5.2f}] / {acq.mean():+5.2f}")
+        print(f"{g[0]:>10} {g[1]:>11}  " + "  ".join(f"{c:>26}" for c in cells))
+
+
 def report(rnd):
     from collections import defaultdict
 
@@ -206,7 +261,8 @@ def main():
     for v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
         os.environ.setdefault(v, "1")
     if a.what == "report":
-        return report(a.round)
+        report(a.round)
+        return report_db(a.round)
     if a.what == "variant":
         return run_variant(a.round, a.variant, a.trials, a.workers)
     for v, env in ROUNDS[a.round].items():  # one process each: config reads the numerology at import
@@ -214,6 +270,7 @@ def main():
                         "--trials", str(a.trials), "--workers", str(a.workers)],
                        env={**os.environ, **env, "DATA2G_PROFILE": "fm"}, check=True)
     report(a.round)
+    report_db(a.round)
 
 
 if __name__ == "__main__":
