@@ -6,7 +6,7 @@ Status: draft for discussion, 2026-11-13. Nothing here is built.
 
 - Build one FM channel simulator first. Every later step is judged on it, and nothing in the repo models a limiter-discriminator today.
 - "Narrow" is a retune of the existing 8 kHz OFDM (w48 already sits at 350..2700 Hz). "Wide" is the same modem clocked at 16 kHz, then widened. Neither needs a new waveform family.
-- Status: M1 (the simulator) is draft PR #203, M2 (profiles, Q1 decided: fixed at process start) is draft PR #204, the carrier spacing study (Q19: 50 Hz, measured) draft PR #205. First numbers are under M1, M2 and Q19.
+- Status: M1 (the simulator) is draft PR #203, M2 (profiles, Q1 decided: fixed at process start) is draft PR #204, the carrier spacing study (Q19: 50 Hz, measured) draft PR #205, M3 (FM receiver) draft PR #206. First numbers are under M1, M2, M3 and Q19.
 - Bands: 144-450 MHz (2 m, 1.25 m, 70 cm) are the targets. Higher bands count only where they cost these nothing.
 - Rate targets are VARA FM 4.0's: 12750 bps narrow, 25210 bps wide. Both are reachable with 55 carriers and a 256-point r5/6 top rung.
 - The transmitted signal must measure 15 kHz occupied or less. That makes deviation a design output of the simulator, and on wide it trades audio bandwidth against deviation.
@@ -149,7 +149,7 @@ Dependencies are named by ID. Sizes are rough new or changed lines of Python, na
 - The CRC seed must differ so an HF node rejects an FM header where the preamble is shared (narrow FM at 8 kHz would otherwise look like w48).
 - Mechanism (Q1, decided): profile fixed at process start (`DATA2G_PROFILE`, read in `config.py`), native built once per profile from its own generated tables. Constexprs stay, no runtime indirection in the hot path.
 - Status (2026-11-15): draft PR #204. FM is provisional: 16 kHz on HF's 50 Hz grid (Q19: measured, keep it), HF's ladder as a placeholder, its own protocol version line and a profile tag in the header CRC seed. HF is unchanged on air. Hidden 8 kHz assumptions found and fixed: the TX filter's tap count (at 16 kHz it cost the edge carriers ~3 dB), the Blanker's block and time constants, timing-slip bounds, the impulse filter, sync's FFT period, hand's sample counts.
-- What FM must re-measure (each an FM test skip with its reason): the preamble threshold (white-noise peaks over 1200 s at 8 repeats reach 22.7-24.3 at 16 kHz against HF's 24.1, so about 26.7; tilted noise 24.9 on w48; re-measure on discriminator noise in M3), Blanker levels on discriminator clicks (M3), CP and demod backoff (M4: 1.25-1.5 ms echoes already cost bits at a 2 ms CP), clip constants, mode thresholds, the outcome model.
+- What FM must re-measure (each an FM test skip with its reason): the preamble threshold (done in M3: 28.7), Blanker levels on discriminator clicks (M3: the Blanker measured neutral), CP and demod backoff (M4: 1.25-1.5 ms echoes already cost bits at a 2 ms CP), clip constants, mode thresholds, the outcome model.
 - Blocks M4, M5, M6 from freezing anything.
 
 ### M2b. CPU budget (benchmark first, decide the ladder's top by it)
@@ -169,6 +169,14 @@ The open question that could reshape the ladder. Wide at 20..25 kbit/s is about 
 - Acquisition without a frequency search: sample-clock only. This is a physical property of the channel, not a narrowing by expected mode, so it does not break the "search must stay full" rule. It should cut detector CPU several times over (the HF note in `config.py` measured 5x between search widths).
 - Tolerance to a missing or damaged burst start (squelch opening, key-up transient): detect on later preamble repeats, or lean on the header copy.
 - Depends: M1.
+- Status (2026-11-15): draft PR #206. Measured with `scripts/fm_rx_study.py` on the FM simulator. It runs the live streaming receiver after open-squelch hiss, with 30 paired trials. Results, in dB of CNR against today's receiver:
+  - Per-symbol noise in the demapper: 0.9 / 1.8 / 2.25 dB better on mobile paths (QPSK, 16-QAM, 64-point), 0.1-0.5 on flutter, 0.2-0.35 on slow fading, never worse. On for FM, in Python and native.
+  - +-12.5 Hz search (FM audio has no frequency offset): the same loss within 0.05 dB, the detector's CPU 6.7x less. FM default.
+  - Preamble threshold 28.7 for FM, from 1200 s noise peaks of what an idle FM receiver delivers. The worst source is mic-path hiss with the squelch open: 33.8 at +-150 Hz, 26.1 at +-12.5 Hz. Loss is the same anywhere from 26.7 to 37.2, because FM's cliff puts preamble detection far below where data fails. No false burst events on about 17 h of hiss: noise crossings die at the header.
+  - The Blanker is neutral on FM. Without it, an idle carrier's clicks drive the detector to 35-38, but the receiver blanks before detecting.
+  - Coloured noise: per-carrier noise (`equalizer.PER_CARRIER_NOISE`) is already on, and the demapper uses it.
+  - Method note: `modem.demodulate` on a buffer known to hold the burst cannot see receiver-state changes. Thresholds and the blanker measured identical through it. Judge M3-type changes by the streamed harness.
+- Open: the damaged burst start (above). Per-symbol noise on HF, which needs a paired HF loss study first.
 
 ### M4. Narrow ladder (mic/speaker, FS 8000)
 
@@ -313,6 +321,7 @@ Measurements that decide design:
 
 ## Revisions
 
+- 2026-11-15, M3 (PR #206): per-symbol noise up to 2.25 dB on mobile paths; +-12.5 Hz search at no cost, 6.7x less detector CPU; FM threshold 28.7.
 - 2026-11-15, Q19 measured (PR #205): keep 50 Hz; FM's 8-repeat preamble threshold needs about 26.7.
 - 2026-11-15, Q1 decided and M1/M2 begun (PRs #203, #204): bands 144-450 MHz primary; borderline fixed paths' slow fadeouts (TN 88) in the channel differences and the simulator; first simulator numbers; FM re-measurement list; Q19 (carrier spacing).
 - 2026-11-15, from the first comments: host scope is every client, with Pat and Winlink Express as yardsticks; CPU budget moved up front as M2b (incremental decoding, rate capability); "Data2G, not a clone" section; hardware and volunteers in M0; wider-than-audio out of scope, microwave FM rung as Q18.
