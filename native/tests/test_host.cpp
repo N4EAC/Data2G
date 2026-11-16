@@ -8,6 +8,7 @@
 #include <random>
 
 #include "check.hpp"
+#include "arq/modes.hpp"
 #include "host/host.hpp"
 
 using namespace data2g;
@@ -98,7 +99,7 @@ void session() {
     for (const char* line : {"MYCALL K2XYZ", "LISTEN ON"}) p.b.command(line);
     p.a.command("CONNECT W1AW K2XYZ");
     p.take();
-    check::is_true(p.run(60, [&] { return has(p.seen_a, "CONNECTED W1AW K2XYZ 2300") && has(p.seen_b, "CONNECTED W1AW K2XYZ 2300"); }),
+    check::is_true(p.run(60, [&] { return has(p.seen_a, ("CONNECTED W1AW K2XYZ " + arq::bw_name(2))) && has(p.seen_b, ("CONNECTED W1AW K2XYZ " + arq::bw_name(2))); }),
                    "CONNECTED on both");
     check::is_true(has(p.seen_a, "PTT ON") && has(p.seen_b, "BUSY ON"), "PTT and BUSY");
     check::is_true(std::any_of(p.seen_a.begin(), p.seen_a.end(), [](const std::string& s) { return s.starts_with("MODE "); }), "MODE");
@@ -146,10 +147,10 @@ void accept() {
     p.take();
     check::is_true(p.run(60, [&] { return has(p.seen_a, "DISCONNECTED"); }), "no connection: refused");
     check::equal(p.ea.session().close_reason, std::string("REFUSED"), "the NAK's reason");
-    check::is_true(dialed == std::vector<int>{8400} && !has(p.seen_b, "CONNECTED W1AW K2XYZ 2300"), "dialed once, never connected");
+    check::is_true(dialed == std::vector<int>{8400} && !has(p.seen_b, ("CONNECTED W1AW K2XYZ " + arq::bw_name(2))), "dialed once, never connected");
     up = true;
     p.a.command("CONNECT W1AW K2XYZ");
-    check::is_true(p.run(60, [&] { return has(p.seen_a, "CONNECTED W1AW K2XYZ 2300"); }), "connected once dialed");
+    check::is_true(p.run(60, [&] { return has(p.seen_a, ("CONNECTED W1AW K2XYZ " + arq::bw_name(2))); }), "connected once dialed");
     p.b.command("LISTEN ON");
     check::is_true(!p.b.accept_addr, "LISTEN ON ends ACCEPT");
 }
@@ -162,7 +163,7 @@ void operator_abort() {
     check::is_true(!p.b.abort_session() && p.b.out_cmd.empty(), "only listening: nothing to abort, nothing sent");
     p.a.command("CONNECT W1AW K2XYZ");
     p.take();
-    check::is_true(p.run(60, [&] { return has(p.seen_a, "CONNECTED W1AW K2XYZ 2300") && has(p.seen_b, "CONNECTED W1AW K2XYZ 2300"); }),
+    check::is_true(p.run(60, [&] { return has(p.seen_a, ("CONNECTED W1AW K2XYZ " + arq::bw_name(2))) && has(p.seen_b, ("CONNECTED W1AW K2XYZ " + arq::bw_name(2))); }),
                    "connected");
     check::is_true(p.b.abort_session(), "aborted");
     check::is_true(p.b.out_cmd == std::vector<std::string>{"DISCONNECTED"}, "the client told DISCONNECTED (no OK: not its command)");

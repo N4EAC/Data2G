@@ -65,6 +65,8 @@ def test_mask_value(native, pure):
 
 def test_tx_audio(native, pure):
     for name, n in (("qpsk-r1/2", 3), ("w48-16qam-r1/2", 5), ("n4-qpsk-r1/3", 2), ("ack-4f", 1)):
+        if name not in SUBMODES:  # FM has no n4
+            continue
         b, _ = ofdm_burst(name, n, rv=1)
         close(native.phy.tx_audio(b), PHY.tx_audio(b))
     for name in ("fsk8r50-r1/2", "fsk32r62-r1/3"):
@@ -283,7 +285,7 @@ def test_kiss_dup_links_match(native, pure):
     fails alone: Python and native send and hear the same."""
     from data2g.receiver import receive_any
 
-    for mode, snrs in (("qpsk-r1/5", (-6.0, -8.0, -9.0)), ("fsk8r50-r1/2", (-6.0, -8.0))):
+    for mode, snrs in (("qpsk-r1/5", (-6.0, -8.0, -9.0)), ("fsk8r50-r1/2", (-6.0, -8.0)))[:1 if config.PROFILE == "fm" else 2]:  # FM: no CPM
         links = []
         for make in (KL.KissLink, native.kisslink.KissLink):
             a, b = make(), make()

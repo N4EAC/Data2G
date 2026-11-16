@@ -74,6 +74,7 @@ int main() {
 
     check::current_step = "loopback";
     for (const char* name : {"ack-1f", "qpsk-r1/2", "n4-ack-2f", "n10-qpsk-r1/3", "w48-16qam-r1/2", "w48-64l-r1/2"}) {
+        if (!config::submode(name)) continue;  // FM has no n4
         const auto& s = *config::submode(name);
         const auto sent = payloads(s, 2, 7);
         const auto y = on_air(modem::modulate(sent, s), 3000, 0.05, 3);

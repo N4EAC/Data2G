@@ -24,7 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..config import SUBMODES
+from ..config import PROFILE, SUBMODES, data_path
 
 DATA = Path(__file__).parent.parent / "codes_data"
 BANDS = ("w", "n10", "n4", "w48")
@@ -346,7 +346,32 @@ class OutcomeEnsemble:
         return out
 
 
+# FM, provisional (plan M6): no outcome model has seen an FM channel, so the
+# FM gear shifter predicts from each mode's threshold alone (policy's table,
+# codes_data/fm/mode_thresholds.json, scripts/fm_threshold_table.py): its
+# static 10% knee in snr_est is P = 0.9, rising FM_SLOPE logits per dB (a
+# codeword waterfall: 10% to 1% in about 1 dB). Burst length, history and
+# fading do not enter. A measurement from another band than the mode's
+# reads FM_BAND_MARGIN_DB lower: a w-band CONNECT read about 5 dB above the
+# f108 bursts that followed on the same AWGN channel, and the first data
+# burst, sent on it, failed. Replaced by an FM outcome model.
+FM_THRESHOLD = PROFILE == "fm"
+FM_SLOPE = 2.0
+FM_BAND_MARGIN_DB = 6.0
+_FM_THR = ({m: v[0] for m, v in json.loads(data_path("mode_thresholds.json").read_text())["modes"].items()}
+           if FM_THRESHOLD else {})
+
+
+def fm_outcome(snr_est: float, submode: str, measured_band: str | None = None) -> float:
+    if measured_band is not None and SUBMODES[submode].band != measured_band:
+        snr_est -= FM_BAND_MARGIN_DB
+    z = np.log(9.0) + FM_SLOPE * (snr_est - _FM_THR[submode])
+    return float(1 / (1 + np.exp(-np.clip(z, -40, 40))))
+
+
 def outcome_knows(submode: str) -> bool:
+    if FM_THRESHOLD:
+        return submode in _FM_THR
     m = outcome_model()
     return m is not None and submode in m.modes
 
@@ -420,6 +445,9 @@ def predict_outcome(measured: dict, band: str, gap: float, seconds: float, submo
     next burst `seconds` long. `model`: another than the installed one (a gate's).
     `extra`: {mode: logit} added to P(usable) on top of LOGIT_OFFSETS (the
     shifter's conditional offsets, policy.COND_OFFSETS)."""
+    if FM_THRESHOLD:  # the provisional threshold predictor (fm_outcome)
+        return {s.name: (fm_outcome(measured["snr_est"], s.name, band),) * 2
+                for s in (submodes or SUBMODES.values()) if s.name in _FM_THR}
     model = model or outcome_model()
     z = model(outcome_inputs(measured, band, gap, seconds, prev, model.bands, model.noise, model.link,
                              model.energy, model.hist))

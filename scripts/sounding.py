@@ -72,11 +72,12 @@ def order(modes=None) -> list[str]:
     """One round: each family's modes floor first (mode_thresholds' AWGN
     column), families interleaved by their modes' fractional position, so
     each family is spread over the round and one fade takes one of each."""
-    names = [n for n in MODES if modes is None or n in modes]
+    # the modes the ARQ may name (FM: no w48 or CPM, and only its thresholds' modes)
+    names = [n for n in MODES if n in MODE_THRESHOLDS and (modes is None or n in modes)]
     fams = {}
     for n in sorted(names, key=lambda n: MODE_THRESHOLDS[n][0]):
         fams.setdefault(family(MODES[n]), []).append(n)
-    fam_rank = {f: i for i, f in enumerate(("n10", "w", "cpm", "w48", "n4"))}
+    fam_rank = {f: i for i, f in enumerate(("n10", "w", "cpm", "w48", "n4", "f55", "f108"))}
     key = [((i + 0.5) / len(v), fam_rank[f], n) for f, v in fams.items() for i, n in enumerate(v)]
     return [n for *_, n in sorted(key)]
 

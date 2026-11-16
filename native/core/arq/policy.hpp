@@ -49,9 +49,10 @@ inline constexpr double UNMEASURED_SPREAD_HZ = config::DEFAULT_SPREAD_HZ;  // wh
 // per mode, its 10% codeword failure SNR on awgn, mpg, mpp, mpd; throws for an unknown mode
 const std::array<double, 4>& mode_thresholds(std::string_view submode);
 inline constexpr int CTL_BYTES = 12;
-inline constexpr std::string_view ALT_POLL = "n4-ack-8f";  // escalation 2's mode
+// FM has no n4 and no CPM (plan Q2): its 500 Hz rungs stand in (policy.py)
+inline constexpr std::string_view ALT_POLL = config::PROFILE == "fm" ? "n10-ack-4f" : "n4-ack-8f";  // escalation 2's mode
 inline constexpr int ROBUST_ESCALATION = 4;  // from here on ROBUST_CONNECT
-inline constexpr std::string_view ROBUST_CONNECT = "fsk16r25-r1/2";
+inline constexpr std::string_view ROBUST_CONNECT = config::PROFILE == "fm" ? "n10-qpsk-r1/5" : "fsk16r25-r1/2";
 
 std::string_view fallback(int cap);
 std::string_view connect_mode(int cap, int tries = 0);

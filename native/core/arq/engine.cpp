@@ -43,6 +43,7 @@ Heard heard_of(receiver::Rx&& rx) {
 
 std::vector<std::string_view> all_grids() {
     std::vector<std::string_view> out;
+    if (config::PROFILE == "fm") return out;  // FM has no CPM modes (plan Q2): no CPM lock search either
     for (const auto& g : tables::CPM_GRIDS) out.push_back(g.name);
     return out;
 }
@@ -313,7 +314,13 @@ std::string Recorder::rx(double t, std::span<const double> audio, const receiver
 // --- engine ----------------------------------------------------------------------------
 
 modem::Accept receive_accept(double min_header_score) {
-    auto a = modem::Accept::of({}, MAX_BURST_S, min_header_score);
+    // FM: only the sync bands its ARQ uses (frames BANDS_CODE): no detector runs for w48
+    std::vector<std::string_view> names;
+    if (config::PROFILE == "fm")
+        for (const auto& s : config::SUBMODES)
+            if (std::any_of(modes().begin(), modes().end(), [&](const Mode& m) { return m.ofdm && selectable(m) && m.ofdm->sync_band == s.sync_band; }))
+                names.push_back(s.name);
+    auto a = modem::Accept::of(names, MAX_BURST_S, min_header_score);
     for (auto& [s, cw] : a.max_cw) {
         if (s->name.find("ack") != std::string_view::npos) continue;
         // a full control, each codeword twice (DUP), and the frame framed as a burst's first (a zero before it)
@@ -935,12 +942,12 @@ void Engine::hear(std::vector<receiver::Receiver::Item>& items, double t) {
             span_ = m ? std::optional(Span{start, start + burst_seconds(*m, h->header.n_cw()), std::string(m->name)})
                       : std::nullopt;
             pending_resolve();  // a superseded header's
-            if (m && !pend_ && h->header.n_cw() == 1 && session_->state == SessionState::LISTEN && pending != "off") {
+            if (m && !pend_ && h->header.n_cw() <= (m->name == ROBUST_CONNECT ? max_ctl(mode_at(ROBUST_CONNECT)) : 1) && session_->state == SessionState::LISTEN && pending != "off") {
                 const std::string_view n = m->name;
                 bool hit = pending != "ofdm" && n == ROBUST_CONNECT;
                 for (int cap = 0; cap <= 2; ++cap) hit = hit || (pending != "fsk" && n == connect_mode(cap));
                 if (hit) {
-                    pend_ = Pend{start + burst_seconds(*m, 1) + PENDING_SLACK_S, false};
+                    pend_ = Pend{start + burst_seconds(*m, h->header.n_cw()) + PENDING_SLACK_S, false};
                     events_.emplace_back("PENDING");
                 }
             }

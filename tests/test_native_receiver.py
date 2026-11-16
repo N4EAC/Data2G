@@ -58,6 +58,8 @@ def _mixed(seed=0, seconds=60):
     at = 4 * FS
     for name, n in (("qpsk-r1/2", 3), ("n10-qpsk-r1/3", 2), ("fsk8r50-r1/2", 2), ("w48-qpsk-r1/2", 3),
                     ("ack-4f", 1), ("qpsk-r1/5", 2), ("fsk16r25-r1/3", 2), ("n4-qpsk-r1/5", 1)):
+        if name not in O.MODES:  # FM has no n4
+            continue
         x = PHY.tx_audio(O.burst(name, n, rng))
         if name == "qpsk-r1/5":  # its preamble and header faded
             head = LEADIN_SAMPLES + BANDS["w"].preamble_samples + modem.header_samples("w")

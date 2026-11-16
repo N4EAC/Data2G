@@ -35,7 +35,7 @@ inline constexpr double DEFAULT_SPREAD_HZ = 0.2;
 inline constexpr int FIRST_PATH_SEARCH = 32;
 inline constexpr double FIRST_PATH_FRAC = 0.5;
 inline constexpr int PROFILE_TAG = 32;
-inline constexpr int PROTOCOL_VERSION = 4;
+inline constexpr int PROTOCOL_VERSION = 5;
 inline constexpr std::array<std::string_view, 4> HEADER_COPY_BANDS = {"w", "w48", "f55", "f108"};
 inline constexpr int HEADER_COPY_AFTER = 2;
 inline constexpr int MAX_CODEWORDS = 64;
@@ -100,11 +100,11 @@ struct Submode {
     std::span<const double> ace;
 };
 
-inline constexpr std::array<double, 1> ACE_35 = {1.0};
-inline constexpr std::array<double, 1> ACE_36 = {1.0};
-inline constexpr std::array<double, 1> ACE_38 = {1.0};
+inline constexpr std::array<double, 1> ACE_28 = {1.0};
+inline constexpr std::array<double, 1> ACE_29 = {1.0};
+inline constexpr std::array<double, 1> ACE_31 = {1.0};
 
-inline constexpr std::array<Submode, 72> SUBMODES = {{
+inline constexpr std::array<Submode, 65> SUBMODES = {{
     {0, "ack-4f", "polar", "gray-qam4", "w", "w", 4, 56, 2, 960, 24, 4, 0.0, {}},
     {1, "polar-k96-f8", "polar", "gray-qam4", "w", "w", 8, 104, 2, 1920, 24, 10, 0.0, {}},
     {2, "polar-k96-f4", "polar", "gray-qam4", "w", "w", 4, 104, 2, 960, 24, 10, 0.0, {}},
@@ -116,15 +116,8 @@ inline constexpr std::array<Submode, 72> SUBMODES = {{
     {8, "16qam-r1/3", "ldpc", "gray-qam16", "w", "w", 4, 640, 4, 1920, 32, 76, 0.0, {}},
     {9, "qpsk-r3/4", "ldpc", "gray-qam4", "w", "w", 8, 1440, 2, 1920, 32, 176, 0.0, {}},
     {10, "16qam-r1/2", "ldpc", "gray-qam16", "w", "w", 8, 1920, 4, 3840, 32, 236, 0.0, {}},
-    {0, "n4-ack-8f", "polar", "gray-qam4", "n4", "n10", 8, 56, 2, 320, 24, 4, 0.0, {}},
-    {1, "n4-qpsk-r1/5", "ldpc", "gray-qam4", "n4", "n10", 24, 192, 2, 960, 16, 22, 0.0, {}},
     {2, "n10-ack-4f", "polar", "gray-qam4", "n10", "n10", 4, 56, 2, 400, 24, 4, 0.0, {}},
-    {3, "n4-qpsk-r1/3", "ldpc", "gray-qam4", "n4", "n10", 24, 320, 2, 960, 16, 38, 0.0, {}},
-    {4, "n4-ack-2f", "polar", "gray-qam4", "n4", "n10", 2, 56, 2, 80, 24, 4, 0.0, {}},
     {5, "n10-qpsk-r1/5", "ldpc", "gray-qam4", "n10", "n10", 10, 200, 2, 1000, 16, 23, 0.0, {}},
-    {6, "n4-qpsk-r1/2", "ldpc", "gray-qam4", "n4", "n10", 24, 480, 2, 960, 16, 58, 0.0, {}},
-    {7, "n4-qpsk-r2/3", "ldpc", "gray-qam4", "n4", "n10", 24, 640, 2, 960, 32, 76, 0.0, {}},
-    {8, "n4-16qam-r1/3", "ldpc", "gray-qam16", "n4", "n10", 24, 640, 4, 1920, 32, 76, 0.0, {}},
     {9, "n10-qpsk-r1/3", "ldpc", "gray-qam4", "n10", "n10", 10, 336, 2, 1000, 16, 40, 0.0, {}},
     {10, "n10-qpsk-r1/2", "ldpc", "gray-qam4", "n10", "n10", 10, 496, 2, 1000, 16, 60, 0.0, {}},
     {11, "n10-16qam-r1/3", "ldpc", "gray-qam16", "n10", "n10", 10, 664, 4, 2000, 32, 79, 0.0, {}},
@@ -140,10 +133,10 @@ inline constexpr std::array<Submode, 72> SUBMODES = {{
     {3, "w48-qpsk-r2/3", "ldpc", "gray-qam4", "w48", "w48", 4, 1280, 2, 1920, 32, 156, 0.0, {}},
     {4, "w48-16qam-r1/3", "ldpc", "gray-qam16", "w48", "w48", 4, 1280, 4, 3840, 32, 156, 1.0, {}},
     {5, "w48-qpsk-r3/4", "ldpc", "gray-qam4", "w48", "w48", 4, 1440, 2, 1920, 32, 176, 0.0, {}},
-    {6, "w48-16qam-r1/2", "ldpc", "gray-qam16", "w48", "w48", 4, 1920, 4, 3840, 32, 236, 1.0, ACE_35},
-    {7, "w48-16qam-r2/3", "ldpc", "gray-qam16", "w48", "w48", 4, 2560, 4, 3840, 32, 316, 1.0, ACE_36},
+    {6, "w48-16qam-r1/2", "ldpc", "gray-qam16", "w48", "w48", 4, 1920, 4, 3840, 32, 236, 1.0, ACE_28},
+    {7, "w48-16qam-r2/3", "ldpc", "gray-qam16", "w48", "w48", 4, 2560, 4, 3840, 32, 316, 1.0, ACE_29},
     {8, "w48-64l-r1/2", "ldpc", "c64-w48-r12", "w48", "w48", 2, 1440, 6, 2880, 32, 176, 4.0, {}},
-    {9, "w48-16qam-r3/4", "ldpc", "gray-qam16", "w48", "w48", 4, 2880, 4, 3840, 32, 356, 3.0, ACE_38},
+    {9, "w48-16qam-r3/4", "ldpc", "gray-qam16", "w48", "w48", 4, 2880, 4, 3840, 32, 356, 3.0, ACE_31},
     {10, "w48-16qam-r5/6", "ldpc", "gray-qam16", "w48", "w48", 4, 3200, 4, 3840, 32, 396, 5.0, {}},
     {11, "w48-64l-r7/12", "ldpc", "c64-w48-r712", "w48", "w48", 2, 1680, 6, 2880, 32, 206, 5.0, {}},
     {12, "w48-64l-r2/3", "ldpc", "c64-w48-r23", "w48", "w48", 2, 1920, 6, 2880, 32, 236, 6.0, {}},

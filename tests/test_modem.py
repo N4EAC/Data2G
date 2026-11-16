@@ -20,7 +20,7 @@ def _payloads(spec, n, seed):
 # f108 at 36: SNR here is in 2500 Hz and f108 spreads over 5350, 3.3 dB less per
 # carrier, near its top rung's (256-point r0.874) threshold at 30
 LOOPBACK = [(s, "awgn", 36 if SUBMODES[s].band == "f108" else 30) for s in SUBMODES] + [
-    (s, "mpp", 20) for s in ("ack-1f", "polar-k96-f4", "qpsk-r1/2", "n4-ack-2f")  # n4: n10's sync and header
+    (s, "mpp", 20) for s in ("ack-1f", "polar-k96-f4", "qpsk-r1/2", "n4-ack-2f") if s in SUBMODES  # n4: n10's sync and header (HF)
 ]
 
 
@@ -182,7 +182,7 @@ def test_no_burst_from_a_tone():
                 modem.demodulate(y)
 
 
-@pytest.mark.parametrize("band", ["w", "w48", "n10", "n4"])
+@pytest.mark.parametrize("band", ["w", "w48", "n10"] + (["n4"] if any(s.band == "n4" for s in SUBMODES.values()) else []))
 def test_a_steady_tone_does_not_read_as_pilots(band):
     """A steady narrowband signal repeats from frame to frame, so the
     coherence alone read it as a burst's frame pilots (a tone's leakage turns

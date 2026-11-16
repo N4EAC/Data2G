@@ -224,6 +224,7 @@ def test_hand_crc_binds_the_channel():
         assert [r["payload"] for r in hand.decode_window(y, tag, [3], hand.SEARCH_SAMPLES)] == want, c
 
 
+@pytest.mark.hf_only("channel counts for HF's caps (FM's are 2700 and 5350 Hz)")
 def test_hand_channels_fit_the_width():
     """Channels count from the centre out (1470, 1530, 1410 Hz, ...), and the
     host's width keeps a prefix: 8 at 500 Hz, 20 at 1200, all 40 at 2400,

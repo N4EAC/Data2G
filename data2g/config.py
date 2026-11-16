@@ -183,8 +183,10 @@ PROFILE_TAG = {"hf": 0, "fm": 0x20}[PROFILE]
 # FM counts its own versions from 1 (no FM format is frozen yet); 2: codewords
 # interleaved in 8-frame windows (SPREAD_WINDOW); 3: FM's own bands f55 and f108 (new
 # preambles, headers and submode indices; the FM plan's M4/M5 bands); 4: f55's and
-# f108's measured ladders (14 modes each, runs/fm_ladder/final_proposal.md).
-PROTOCOL_VERSION = {"hf": 15, "fm": 4}[PROFILE]  # HF: 10: first frozen submode table; n4 on n10 sync (2026-09-23); 11: header copy;
+# f108's measured ladders (14 modes each, runs/fm_ladder/final_proposal.md); 5: no n4 (its
+# header indices on n10's sync band unused) and FM's ARQ band codes w, n10, f55, f108 (no w48,
+# no CPM). FM's ARQ session VERSION is HF's: PROFILE_TAG and this keep the profiles apart.
+PROTOCOL_VERSION = {"hf": 15, "fm": 5}[PROFILE]  # HF: 10: first frozen submode table; n4 on n10 sync (2026-09-23); 11: header copy;
 # 12: polar codewords carry CRC-24 (k + 8, payloads kept); n10's header 5 | 5 (CW_BITS, 2026-10-06,
 # in place: development, one operator); 13: a non-periodic c8r50 front (2026-10-24: the tiled
 # Costas array matched one period off, sync 0.76, and its header read as another word); 14: the CPM
@@ -560,6 +562,9 @@ if PROFILE == "fm":
         _m(12, "f108-256l-r80", "ldpc", "c256-w48-r58", 1, 3456, band="f108", headroom=6),  # 22956; 21.25
         _m(13, "f108-256l-r87", "ldpc", "c256-w48-r58", 1, 3776, band="f108", headroom=6),  # 25102; 23.75
     ]))
+    # FM has no n4 (plan Q2): its header indices on n10's sync band stay unused,
+    # n10's keep their numbers and its 5 | 5 header split (no format re-freeze)
+    SUBMODES = {n: s for n, s in SUBMODES.items() if s.band != "n4"}
 # (sync band, header index) -> submode: what a header's index means
 # (native config::by_index)
 BY_INDEX = {(s.sync_band, s.index): s for s in SUBMODES.values()}

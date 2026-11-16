@@ -15,6 +15,7 @@
 #include <fstream>
 #include <random>
 #include <cstdlib>
+#include <vector>
 
 #include "arq/engine.hpp"
 #include "constellation/constellation.hpp"
@@ -475,7 +476,10 @@ void worker_session() {
 // them by its end. OFDM: each frame equalized on its own, close to the points on a clean channel;
 // CPM: the same tone shares the decode reads. Off: no previews.
 void live_preview() {
-    for (const char* name : {"qpsk-r1/5", "fsk8r50-r1/2"}) {
+    // FM's engine listens for no CPM grid (no CPM modes, plan Q2)
+    const std::vector<const char*> names =
+        config::PROFILE == "fm" ? std::vector<const char*>{"qpsk-r1/5"} : std::vector<const char*>{"qpsk-r1/5", "fsk8r50-r1/2"};
+    for (const char* name : names) {
         check::current_step = "live preview";
         TxBurst burst;
         burst.submode = name;

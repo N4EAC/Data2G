@@ -86,7 +86,8 @@ def test_header_tables(native, py):
             if b == band:
                 for n in (1, 7, modem.max_codewords(band)):
                     np.testing.assert_array_equal(N.header_bits(sub, n, band), py.header_bits(sub, n, band))
-    acc = modem.Accept.of(["qpsk-r1/2", "ack-1f", "w48-qpsk-r1/2", "n10-256l-r3/4", "n4-ack-2f"], max_secs=2.5,
+    acc = modem.Accept.of([n for n in ("qpsk-r1/2", "ack-1f", "w48-qpsk-r1/2", "n10-256l-r3/4", "n4-ack-2f")
+                           if n in SUBMODES], max_secs=2.5,  # FM has no n4
                           min_score=0.2)
     for band in modem.SYNC_BANDS:
         np.testing.assert_array_equal(N.valid_words(band, acc), py._valid_words(band, acc))
@@ -155,6 +156,8 @@ def test_modulate_tx_path_matches(native, py, tx_path):
 def test_burst_waveform_matches(native, py):
     rng = np.random.default_rng(2)
     for name in ("ack-1f", "qpsk-r1/2", "n4-ack-2f", "n10-qpsk-r1/5", "w48-16qam-r1/2"):
+        if name not in SUBMODES:  # FM has no n4
+            continue
         spec = SUBMODES[name]
         nc = BANDS[spec.band].nc
         data = np.exp(2j * np.pi * rng.random((3 * spec.frames_per_cw, 5, nc)))
@@ -166,6 +169,7 @@ def test_burst_waveform_matches(native, py):
 RX_CASES = [("ack-1f", 1, 10.0, None), ("qpsk-r1/2", 2, 6.0, "mpp"), ("n4-ack-2f", 2, 0.0, None),
             ("n10-qpsk-r1/3", 1, 4.0, "mpp"), ("w48-16qam-r1/2", 3, 14.0, None), ("w48-64l-r1/2", 2, 20.0, "mpd"),
             ("polar-k96-f4", 3, -3.0, "mpd")]
+RX_CASES = [c for c in RX_CASES if c[0] in SUBMODES]  # FM has no n4
 if "f55" in BANDS:  # FM's own bands (FM profile)
     RX_CASES += [("f55-16qam-r47", 3, 16.0, None), ("f55-qpsk-r40", 2, 4.0, "mpp"), ("f108-64l-r67", 2, 22.0, None),
                  ("f108-qpsk-r21", 3, 0.0, "mpd")]

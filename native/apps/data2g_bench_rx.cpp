@@ -3,6 +3,8 @@
 //
 //   data2g-bench-rx [--threads N] [--reps R] [--dd-budget S] BURST.d2gb ...
 //   data2g-bench-rx --listen SECONDS [--cpm-only]   (the streaming Receiver on noise, per 20 ms feed)
+//   data2g-bench-rx --listen S --engine             (... listening as the ARQ engine does: its accept list and
+//                                                    CPM grids; FM's, its own bands and no CPM)
 //   data2g-bench-rx --shifter N                     (GearShifter::recommend on random observations)
 //   data2g-bench-rx --listen S --expect             (... an expected slot 1 s ahead every 8 s, all CPM grids: #135)
 //   data2g-bench-rx --primed BURST.d2gb ...         (+ cpm::prime_lock on the true start's window and PRIME_TRIES
@@ -48,6 +50,7 @@
 #include "modem/modem.hpp"
 #include "receiver/receiver.hpp"
 #include "util/pool.hpp"
+#include "arq/engine.hpp"
 #include "arq/modes.hpp"
 
 // measurement-only feature tests: #135 (primed reception), #134 (CW ID)
@@ -375,12 +378,14 @@ StreamRun run_stream(const Burst& b, bool early, std::optional<double> dd_budget
 }
 
 // The streaming Receiver on Gaussian noise, 20 ms feeds: CPU per feed (the listening load per audio feed).
+bool engine_rx = false;  // --engine: arq::receive_accept() and arq::all_grids(), not every band and grid
 bool cwsense_on = BENCH_CWID;  // --no-cwsense: #134's tree without its detector (#135's listening load alone)
 
 void listen(double seconds, bool cpm_only, int expect) {
     std::vector<std::string_view> grids;
     for (const auto& g : tables::CPM_GRIDS) grids.push_back(g.name);
-    receiver::Receiver rx(cpm_only ? modem::Accept{} : modem::Accept::of(), grids);
+    if (engine_rx) grids = arq::all_grids();
+    receiver::Receiver rx(cpm_only ? modem::Accept{} : engine_rx ? arq::receive_accept() : modem::Accept::of(), grids);
 #if BENCH_CWID
     cwid::CwSense cw;
 #endif
@@ -535,6 +540,7 @@ int main(int argc, char** argv) {
         else if (a == "--threads" && more) threads = std::atoi(argv[++i]);
         else if (a == "--reps" && more) reps = std::max(1, std::atoi(argv[++i]));
         else if (a == "--listen" && more) listen_s = std::atof(argv[++i]);
+        else if (a == "--engine") engine_rx = true;
         else if (a == "--cpm-only") cpm_only = true;
         else if (a == "--expect" && more) expect = std::atoi(argv[++i]);
         else if (a == "--primed") primed_on = true;

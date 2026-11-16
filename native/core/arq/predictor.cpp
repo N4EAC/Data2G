@@ -4,8 +4,10 @@
 #include <array>
 #include <cmath>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
+#include "arq/modes.hpp"
 #include "cpm/cpm.hpp"
 #include "dsp/dsp.hpp"
 #include "waveform/ofdm.hpp"
@@ -247,7 +249,30 @@ std::vector<double> outcome_logits(std::span<const double> x, int model) {
     return outcome_logits_batch({std::vector<double>(x.begin(), x.end())}, model)[0];
 }
 
+// FM, provisional (predictor.py FM_THRESHOLD): no outcome model has seen an FM
+// channel; a mode's static 10% knee in snr_est (MODE_THRESHOLDS, FM's own
+// table) is P = 0.9, rising FM_SLOPE logits per dB. Modes are rows of
+// MODE_THRESHOLDS; burst length, history and fading do not enter.
+namespace {
+constexpr bool FM_THRESHOLD = config::PROFILE == "fm";
+constexpr double FM_SLOPE = 2.0;
+constexpr double FM_BAND_MARGIN_DB = 6.0;  // a measurement from another band than the mode's (predictor.py)
+
+Outcome fm_outcome(double snr_est, int mode, std::string_view measured_band) {
+    const auto& row = tables::MODE_THRESHOLDS[static_cast<std::size_t>(mode)];
+    const Mode* m = arq::mode(row.name);
+    if (m && !measured_band.empty() && m->band != measured_band) snr_est -= FM_BAND_MARGIN_DB;
+    const double p = sigmoid(std::clamp(std::log(9.0) + FM_SLOPE * (snr_est - row.db[0]), -40.0, 40.0));
+    return {p, p};
+}
+}  // namespace
+
 int outcome_index(std::string_view submode) {
+    if constexpr (FM_THRESHOLD) {
+        const auto& t = tables::MODE_THRESHOLDS;
+        const auto it = std::find_if(t.begin(), t.end(), [&](const auto& r) { return r.name == submode; });
+        return it == t.end() ? -1 : static_cast<int>(it - t.begin());
+    }
     const auto& names = tables::OUTCOME_MODES;
     const auto it = std::find(names.begin(), names.end(), submode);
     return it == names.end() ? -1 : static_cast<int>(it - names.begin());
@@ -257,6 +282,15 @@ bool outcome_knows(std::string_view submode) { return outcome_index(submode) >= 
 
 std::vector<std::vector<Outcome>> predict_outcomes(const std::vector<OutcomeQuery>& qs, std::string_view band,
                                                    double gap, const Prev* prev, int model) {
+    if constexpr (FM_THRESHOLD) {
+        std::vector<std::vector<Outcome>> out;
+        for (const auto& q : qs) {
+            std::vector<Outcome> row;
+            for (std::size_t i = 0; i < tables::MODE_THRESHOLDS.size(); ++i) row.push_back(fm_outcome(q.m.snr_est, static_cast<int>(i), band));
+            out.push_back(std::move(row));
+        }
+        return out;
+    }
     const bool energy = model == 1   ? tables::OUTCOME_GATE_ENERGY
                         : model == 2 ? tables::OUTCOME_FAST_ENERGY
                                      : tables::OUTCOME_ENERGY;
@@ -279,6 +313,10 @@ std::vector<std::vector<Outcome>> predict_outcomes(const std::vector<OutcomeQuer
 std::vector<Outcome> predict_queries(const Measured& m, std::string_view band, double gap, const Prev* prev, int model,
                                      const std::vector<ModeQuery>& qs) {
     std::vector<Outcome> out(qs.size());
+    if constexpr (FM_THRESHOLD) {
+        for (std::size_t i = 0; i < qs.size(); ++i) out[i] = fm_outcome(m.snr_est, qs[i].mode, band);
+        return out;
+    }
     auto offset = [](int mode) {
         double off = 0.0;
         for (const auto& [name, o] : LOGIT_OFFSETS)

@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 
 from .. import codes, cpm, cwid, hand, modem
-from ..config import FS, LEADIN_SAMPLES, SPREAD_WINDOW, max_codewords
+from ..config import FS, LEADIN_SAMPLES, PROFILE, SPREAD_WINDOW, max_codewords
 from ..receiver import NoiseProfile, Receiver, ReplySlot
 from ..waveform import dsp
 from . import burst as B
@@ -36,7 +36,7 @@ from . import link as LK
 from . import nod as N
 from . import phy as PHY
 from . import session as S
-from .modes import MODES, burst_seconds
+from .modes import MODES, burst_seconds, max_ctl
 from .policy import CONNECT, ROBUST_CONNECT, GearShifter
 
 log = logging.getLogger("data2g.engine")
@@ -82,6 +82,13 @@ ID_INTERVAL_S = 600.0
 PENDING_MODES = {"off": frozenset(), "fsk": frozenset({ROBUST_CONNECT}), "ofdm": frozenset(CONNECT.values()),
                  "all": frozenset({ROBUST_CONNECT, *CONNECT.values()})}
 PENDING_SLACK_S = 3.0
+
+
+def _connect_cw(submode: str) -> int:
+    """Codewords a CONNECT burst in `submode` carries: one, but a robust
+    retry its control's copies (FM's ROBUST_CONNECT is OFDM, control twice;
+    HF's is CPM, once)."""
+    return max_ctl(MODES[ROBUST_CONNECT]) if submode == ROBUST_CONNECT else 1
 ID_GUARD_S = S.REPLY_START_S
 # CW ID (docs/arq.md §7b), Engine.cw_id: "off", ID frames only; "add", a CW
 # ID with each (ahead of a turn: CW, ID frame, burst; after a session: ID
@@ -155,7 +162,9 @@ def receive_accept(min_header_score: float = 0.0) -> modem.Accept:
     KISS_FRAME_BYTES frame where that is longer."""
     from ..kisslink import framed_len
 
-    a = modem.Accept.of(None, MAX_BURST_S, min_header_score)
+    # FM: only the bands its ARQ uses (frames.BANDS_CODE): no detector runs for w48
+    names = [n for n, s in modem.SUBMODES.items() if s.sync_band in F.BANDS_CODE] if PROFILE == "fm" else None
+    a = modem.Accept.of(names, MAX_BURST_S, min_header_score)
     out = []
     for n, cw in a.max_cw:
         s = modem.SUBMODES[n]
@@ -178,7 +187,8 @@ class Engine:
         self.policy_factory = policy or GearShifter
         self.rng = random.Random(seed)
         self.accept = receive_accept(min_header_score)
-        self.receiver = Receiver(self.accept, cpm_grids=tuple(cpm.GRIDS))
+        # FM has no CPM modes (plan Q2): no CPM lock search either
+        self.receiver = Receiver(self.accept, cpm_grids=() if PROFILE == "fm" else tuple(cpm.GRIDS))
         self.noise = NoiseProfile()  # the passband's noise between bursts (recorded with each burst heard)
         self.ptt_delay = int(ptt_delay_s * FS)
         # seconds from this engine's sample clock to RF for my own audio: keying, the TX lead, the
@@ -741,9 +751,9 @@ class Engine:
                 self.noise.mark(start, start + (burst_seconds(spec, ev["n_cw"]) if spec else MAX_BURST_S))
                 self._span = (start, start + burst_seconds(spec, ev["n_cw"]), spec.name) if spec else None
                 self._pending_resolve()  # a superseded header's
-                if (self._pend is None and ev["n_cw"] == 1 and self.session.state == S.LISTEN
+                if (self._pend is None and ev["n_cw"] <= _connect_cw(ev["spec"].name) and self.session.state == S.LISTEN
                         and ev["spec"].name in PENDING_MODES[self.pending]):
-                    self._pend = [start + burst_seconds(spec, 1) + PENDING_SLACK_S, False]
+                    self._pend = [start + burst_seconds(spec, ev["n_cw"]) + PENDING_SLACK_S, False]
                     self._events.append("PENDING")
                 continue
             if kind == "partial":
