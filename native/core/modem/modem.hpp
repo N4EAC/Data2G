@@ -9,6 +9,7 @@
 // the only shared state is const tables built once (thread-safe statics).
 #pragma once
 
+#include <algorithm>
 #include <complex>
 #include <cstdint>
 #include <memory>
