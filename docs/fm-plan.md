@@ -328,7 +328,8 @@ Measurements that decide design:
 - Q8. How much do prefix and pilot thinning really buy once clock drift and flutter are in the simulator?
   - Prefix, measured 2026-11-16 (`scripts/fm_cp_study.py`, `runs/fm_cp/report.txt`; w48 QPSK r1/2, 16-QAM r1/2, 64-point r3/4, mic and flat, every condition, streamed, 30 paired trials, mixer at 2000 Hz, which alone changed nothing): on fixed and flutter paths QPSK and 16-QAM are within 0.15 dB of the 2 ms prefix down to 0.5 ms. 64-point costs 0.1-0.2 dB at 1 ms and 0.2-0.4 dB at 0.5 ms. Mobile and slow-fading cells are noise (intervals of 1-4 dB: a shorter burst sees different fading, so those are not paired); 64-point on mobile reads +1.1 dB at 1 ms, interval +0.02..+2.2.
   - Decided 2026-11-16: keep 2 ms; the payoff is too small. 1 ms (16 samples, +4.5% rate) would cost about 0.1-0.2 dB on the top mode. 0.5 ms (+6.8%) is borderline on 64-point. Real radios' filter delay may be longer than M1's: confirm on air (M0) before choosing. Shipping a shorter prefix needs FCENTER moved (2000 Hz fits 8-32 samples) and is a wire change.
-  - Pilot thinning: not yet measured (needs a layout change, not an override).
+  - Pilot thinning, measured 2026-11-16 (`scripts/fm_pilot_study.py`, `runs/fm_pilot/report.txt`; same setup): one pilot in eleven (one frame of 10 data symbols, +9.1% rate) against today's one in six. With a 0.2 Hz spread prior: QPSK and 16-QAM within 0.05 dB on fixed and flutter paths, 64-point +0.2-0.4 dB; mobile and slow cells unpaired and noisy (+0.3..+1.9 dB, mobile leaning worse). With today's 2 Hz prior (HF's, for bursts under 8 pilots) 64-point fails outright: 242 ms between pilots looks uncorrelated at 2 Hz.
+  - The spread prior alone (0.2 Hz, today's layout, receiver-only): 0.06-0.16 dB better on flutter and mobile for QPSK and 16-QAM, never worse. FM audio's channel is the radios' fixed response; RF Doppler reaches it as clicks, not as fading of the tones.
 - Q9. Fixed tilt or bit loading on wide (M5 step 3)?
 - Q10. Does symbol erasure plus the existing interleaver hold a mobile link at 20..50 Hz flutter, or do the codewords need to be longer in time?
 - Q11. Wide at FS 16000 or 24000? 16000 keeps every sample count and reaches 6 kHz with a 2 kHz transition band. 24000 only matters if radios pass more than 6 kHz, which Q7 answers.
@@ -346,6 +347,7 @@ Measurements that decide design:
 
 ## Revisions
 
+- 2026-11-16, Q8's pilot half measured (one in eleven: 64-point +0.2-0.4 dB for +9.1% rate, needs an FM spread prior; the prior alone 0.06-0.16 dB better).
 - 2026-11-16, Q8: the prefix stays at 2 ms.
 - 2026-11-16, Q8's prefix half measured (1 ms costs 0.1-0.2 dB on 64-point for +4.5% rate); Q19's 1 ms note corrected (a mixer bug).
 - 2026-11-16, Q16: 12.5 kHz channels a soft goal; measured on M1 (limiter-bound drive; QPSK/16-QAM a mild SNR loss, 64-point 1.5-4.5 dB).
