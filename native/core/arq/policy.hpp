@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "arq/link.hpp"
+#include "generated/config.hpp"
 #include "arq/modes.hpp"
 #include "arq/predictor.hpp"
 #include "arq/session.hpp"  // LINK_LOST_S
@@ -44,7 +45,7 @@ inline constexpr std::size_t ENERGY_HIST = 4;  // the energy inputs' window: the
 inline constexpr std::size_t CPM_FLOOR_HIST = 3;
 inline constexpr double CPM_FLOOR_SNR_DB = -4.0;
 inline constexpr double CPM_FLOOR_SPREAD_HZ = 1.0;
-inline constexpr double UNMEASURED_SPREAD_HZ = 2.0;  // equalizer::DEFAULT_SPREAD_HZ (policy.py)
+inline constexpr double UNMEASURED_SPREAD_HZ = config::DEFAULT_SPREAD_HZ;  // what the equalizer reports unmeasured (policy.py)
 // per mode, its 10% codeword failure SNR on awgn, mpg, mpp, mpd; throws for an unknown mode
 const std::array<double, 4>& mode_thresholds(std::string_view submode);
 inline constexpr int CTL_BYTES = 12;

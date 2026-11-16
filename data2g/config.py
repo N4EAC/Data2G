@@ -141,6 +141,13 @@ EST_WINDOW = int(os.environ.get("DATA2G_EST_WINDOW", {"hf": 0, "fm": 8}[PROFILE]
 # Decoding while the burst arrives (receiver.Receiver "partial" events, ModemRx.advance):
 # FM on (its windows let codeword groups complete early); HF has no windows. DATA2G_DECODE_EARLY: studies.
 DECODE_EARLY = bool(int(os.environ.get("DATA2G_DECODE_EARLY", {"hf": 0, "fm": 1}[PROFILE])))
+# The Doppler spread the equalizer assumes for a burst too short to measure one
+# (equalizer.measure_spread: under 8 pilots). HF: 2.0, what MPD measures. FM:
+# the audio channel is the radios' fixed response, RF Doppler reaching it as
+# clicks, not fading of the tones; 0.2 Hz measured 0.06-0.16 dB better on
+# flutter and mobile paths for QPSK and 16-QAM, never worse (scripts/fm_pilot_study.py
+# spf6p, 2026-11-16). arq.policy reads a spread equal to it as unmeasured.
+DEFAULT_SPREAD_HZ = float(os.environ.get("DATA2G_DEFAULT_SPREAD_HZ", {"hf": 2.0, "fm": 0.2}[PROFILE]))
 FIRST_PATH_SEARCH = NCP
 FIRST_PATH_FRAC = 0.5
 

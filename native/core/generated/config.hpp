@@ -28,6 +28,7 @@ inline constexpr bool SYMBOL_NOISE = false;
 inline constexpr int SPREAD_WINDOW = 0;
 inline constexpr int EST_WINDOW = 0;
 inline constexpr bool DECODE_EARLY = false;
+inline constexpr double DEFAULT_SPREAD_HZ = 2.0;
 inline constexpr int FIRST_PATH_SEARCH = 32;
 inline constexpr double FIRST_PATH_FRAC = 0.5;
 inline constexpr int PROFILE_TAG = 0;

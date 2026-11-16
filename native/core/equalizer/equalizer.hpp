@@ -25,7 +25,7 @@ inline constexpr double FRAME_S = static_cast<double>(config::FRAME_SAMPLES) / c
 inline constexpr int DELAY_MIN = -2 * config::NCP, DELAY_MAX = 2 * config::NCP;  // _DELAYS
 inline constexpr int TIME_TAPS = 4;
 inline constexpr int DD_TAPS = 2;
-inline constexpr double DEFAULT_SPREAD_HZ = 2.0;
+inline constexpr double DEFAULT_SPREAD_HZ = config::DEFAULT_SPREAD_HZ;  // per profile
 inline constexpr bool LOO_SPREAD = true;  // equalizer.filter_spread's, see equalizer.py
 inline constexpr int LOO_MIN_PILOTS = 8;
 inline constexpr double LOO_TOL = 0.1;

@@ -26,7 +26,7 @@ import numpy as np
 
 from .. import codes, modem
 from .. import cpm
-from ..config import max_codewords
+from ..config import DEFAULT_SPREAD_HZ, max_codewords
 # the bandwidth and recommendation-code helpers are modes'; named here too,
 # where the shifter and its callers (and tests/native_subs/gear.py) find them
 from .modes import (CAP_HZ, MODES, burst_seconds, ctl_payload_bytes, decode, encode, is_cpm, max_ctl, min_cw,
@@ -115,7 +115,7 @@ ROBUST_CONNECT = "fsk16r25-r1/2"  # session-frame retries: 500 Hz, within every 
 # On since v12; DATA2G_BIAS_FIX=0 is the old bound.
 BIAS_FIX = os.environ.get("DATA2G_BIAS_FIX", "1") == "1"
 # A burst too short or weak for a Doppler estimate reports
-# equalizer.DEFAULT_SPREAD_HZ (2.0, what MPD measures), so on AWGN 20-50% of
+# config.DEFAULT_SPREAD_HZ (HF 2.0, what MPD measures), so on AWGN 20-50% of
 # w-band readings looked like fast fading and every outcome model blended the
 # two (P(usable) low on AWGN, high on fading). Such a reading takes the peer's
 # last measured spread instead (none yet: as is); the installed model is
@@ -127,7 +127,7 @@ SPREAD_CARRY = os.environ.get("DATA2G_SPREAD_CARRY", "1") == "1"
 # e.g. QPSK overrated at the CPM floor's edge on fast fading).
 COND_OFFSETS = [(float(a), float(b), m, float(o)) for a, b, m, o in
                 (e.split(":") for e in os.environ.get("DATA2G_COND_OFFSETS", "").split(";") if e)]
-UNMEASURED_SPREAD_HZ = 2.0  # equalizer.DEFAULT_SPREAD_HZ (arq doesn't import the modem)
+UNMEASURED_SPREAD_HZ = DEFAULT_SPREAD_HZ  # what the equalizer reports unmeasured (config, per profile)
 BIAS_MAX = 6.0 if BIAS_FIX else 3.0
 # The noise rule (recommend(): candidates whose band is noisier in the
 # receiver's profile than the measured one predicted at a lower SNR), its
