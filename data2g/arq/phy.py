@@ -313,6 +313,10 @@ class ModemRx:
         burst's budget). A failed slot is tried again on the next advance,
         with more of the burst's pilots. -> the slots decoded this time."""
         self._adopt(r)
+        # the slots decoded already need no soft bits: the rest's as asked, a
+        # whole burst's included (its burst-wide soft_bits was ~95 ms of a Pi's
+        # end-of-burst on a 256l x39 burst, docs/pi-bench-fm.md)
+        self.soft = _SlotSoft(r)
         self._memo, self._pin, self._pairs = {}, {}, {}
         self._raw = {s: v for s, v in self._raw.items() if v[1].any()}
         self._est, self._soft_dd = None, {}
