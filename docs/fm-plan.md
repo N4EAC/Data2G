@@ -327,7 +327,7 @@ Measurements that decide design:
 - Q7. Usable band and SNR ceiling of real radios, per path: mic/speaker, 9600 port, handheld speaker-mic jack. Sets M4 and M5 band edges and top rungs.
 - Q8. How much do prefix and pilot thinning really buy once clock drift and flutter are in the simulator?
   - Prefix, measured 2026-11-16 (`scripts/fm_cp_study.py`, `runs/fm_cp/report.txt`; w48 QPSK r1/2, 16-QAM r1/2, 64-point r3/4, mic and flat, every condition, streamed, 30 paired trials, mixer at 2000 Hz, which alone changed nothing): on fixed and flutter paths QPSK and 16-QAM are within 0.15 dB of the 2 ms prefix down to 0.5 ms. 64-point costs 0.1-0.2 dB at 1 ms and 0.2-0.4 dB at 0.5 ms. Mobile and slow-fading cells are noise (intervals of 1-4 dB: a shorter burst sees different fading, so those are not paired); 64-point on mobile reads +1.1 dB at 1 ms, interval +0.02..+2.2.
-  - So 1 ms (16 samples, +4.5% rate) costs about 0.1-0.2 dB on the top mode, less than the rate it buys. 0.5 ms (+6.8%) is borderline on 64-point. Real radios' filter delay may be longer than M1's: confirm on air (M0) before choosing. Shipping a shorter prefix needs FCENTER moved (2000 Hz fits 8-32 samples) and is a wire change.
+  - Decided 2026-11-16: keep 2 ms; the payoff is too small. 1 ms (16 samples, +4.5% rate) would cost about 0.1-0.2 dB on the top mode. 0.5 ms (+6.8%) is borderline on 64-point. Real radios' filter delay may be longer than M1's: confirm on air (M0) before choosing. Shipping a shorter prefix needs FCENTER moved (2000 Hz fits 8-32 samples) and is a wire change.
   - Pilot thinning: not yet measured (needs a layout change, not an override).
 - Q9. Fixed tilt or bit loading on wide (M5 step 3)?
 - Q10. Does symbol erasure plus the existing interleaver hold a mobile link at 20..50 Hz flutter, or do the codewords need to be longer in time?
@@ -346,6 +346,7 @@ Measurements that decide design:
 
 ## Revisions
 
+- 2026-11-16, Q8: the prefix stays at 2 ms.
 - 2026-11-16, Q8's prefix half measured (1 ms costs 0.1-0.2 dB on 64-point for +4.5% rate); Q19's 1 ms note corrected (a mixer bug).
 - 2026-11-16, Q16: 12.5 kHz channels a soft goal; measured on M1 (limiter-bound drive; QPSK/16-QAM a mild SNR loss, 64-point 1.5-4.5 dB).
 - 2026-11-16, Q15 decided (15 kHz, 26 dB down) with the rules and existing modes' measured widths; capability per direction (TX and RX separately) from the discussion; PR #214's windows and decoding while the burst arrives.
