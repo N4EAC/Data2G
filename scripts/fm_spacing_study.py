@@ -24,6 +24,7 @@ acquired at all. Writes runs/fm_spacing/<variant>.csv.
 
 import argparse
 import csv
+import functools
 import os
 import subprocess
 import sys
@@ -70,6 +71,7 @@ def radio_of(r):
 N_CW = 3
 
 
+@functools.cache  # once per process: it registers (and, for DATA2G_SYMS_PER_FRAME, rescales) the modes in place
 def specs():
     """The three modes in this process's numerology, registered so headers resolve."""
     from data2g import config
