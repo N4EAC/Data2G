@@ -61,7 +61,11 @@ M = FS // RS  # useful symbol length, samples (160)
 NCP = int(os.environ.get("DATA2G_NCP", 32))  # cyclic prefix, samples (4 ms)
 NSYM = M + NCP  # 192 samples, 24 ms
 CARRIER0 = int(os.environ.get("DATA2G_CARRIER0", 950))  # Hz; occupied ~925..2125 Hz
-FCENTER = 1500  # Hz; baseband conversion frequency
+FCENTER = int(os.environ.get("DATA2G_FCENTER", 1500))  # Hz; baseband conversion frequency (env: studies only)
+# The mixer's phase must repeat every symbol (whole cycles per NSYM), or each
+# symbol reaches baseband with its own common phase, which the pilots cannot
+# follow: a shorter cyclic prefix on FM (scripts/fm_cp_study.py) needs another FCENTER.
+assert FCENTER * NSYM % FS == 0, "FCENTER * NSYM must be a multiple of FS"
 # The demodulator's M-sample correlation nulls the heterodyne image at
 # -(f + FCENTER) only if that lands on the grid (waveform.dsp.to_baseband).
 assert (CARRIER0 + FCENTER) % RS == 0, "CARRIER0 + FCENTER must be a multiple of RS"
