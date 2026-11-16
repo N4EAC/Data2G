@@ -13,7 +13,8 @@ Status: draft for discussion, 2026-11-13. Nothing here is built.
 - The biggest risk is CPU, not the channel: whether a Raspberry Pi can decode 20+ kbit/s with Data2G's codes inside an FM turnaround. Benchmark it first (M2b), on today's code. If the answer is no, nodes advertise the fastest rate they can decode.
 - Decided: digipeating and repeaters are after the first release. The host works with any client; Pat and Winlink Express are the yardsticks for existing VARA FM clients. I/Q receive is an investigation (M10).
 - Scope is what fits an audio passband (or a discriminator tap). Wider-than-audio and channel bonding are out; a microwave FM rung or two is an open question (Q18).
-- Still the user's: Q2 (how low the floor goes), Q15 (which bandwidth definition). The rest are measurements.
+- Still the user's: Q2 (how low the floor goes). The rest are measurements.
+- Decided: the limit is 15 kHz measured 26 dB down (Part 97's definition, Q15).
 
 ## What the others do
 
@@ -107,7 +108,11 @@ Where FM's channel argues against one of these (for example HARQ round trips aga
 
 ## Constraint: 15 kHz occupied
 
-The RF signal's measured occupied bandwidth is at most 15 kHz, standard amateur FM practice. Measured, not Carson's estimate.
+The RF signal's measured bandwidth is at most 15 kHz, 26 dB down (Q15, decided 2026-11-16). Measured, not Carson's estimate.
+
+- Definition: the outermost points 26 dB under the spectrum's peak, at 100 Hz resolution (M1's `db26`; 300 Hz gives the same within 0.4 kHz). Part 97's own wording (97.3(a)(8)) can also be read as a power ratio, 99.75% of the power inside; our signals are 0-2 kHz narrower by that reading, so meeting `db26` meets both.
+- The rules leave room: 97.307(f)(5) authorizes 20 kHz for data on 2 m (and 19.6 kilobauds; ours are about 45 baud per carrier), and (f)(2) caps it at a communications quality FM phone emission (conventionally 16K0F3E). 1.25 m and 70 cm get 100 kHz under (f)(6). The FCC's proposal to drop the VHF/UHF baud limits (WT Docket 16-239 FNPRM, 2023) had no final order by 2026-11; none is expected to affect us.
+- 15 kHz keeps us among existing 2 m modes and inside 15 kHz channel plans. Measured on M1 (`scripts/fm_reference_widths.py`), 26 dB down: FM voice 7.9 kHz at normal level and up to about 21 kHz driven hard into the limiter; 1200 AFSK 9.2 kHz at 3 kHz peak deviation, 13.7 at 4; 9600 G3RUH 12.3 kHz at 3 kHz peak, 18.0 at 4. VARA FM not yet measured.
 
 - Carson's rule is written for peaks: 2 x (3 kHz + 5.7 kHz) says 17.4 kHz for a VARA-like wide mode. The measured width of an OFDM-modulated carrier is set mostly by rms deviation and the top audio frequency, and OFDM's rms sits 6..9 dB under its peak, so the real figure is lower. How much lower is the first thing M1 has to report.
 - First-order sidebands reach the top audio frequency each side (11.4 kHz total at 5.7 kHz). Second-order sidebands reach twice that and grow with the square of the modulation index. They are what the limit actually bounds.
@@ -166,7 +171,7 @@ The open question that could reshape the ladder. Wide at 20..25 kbit/s is about 
   - A converging 256l-r5/8 x39 burst (92 kbit, close to one 4 s burst at 25 kbit/s) delivers its payload 0.38-0.44 s after the burst ends on FM, against 0.27-0.31 s on HF. That is near a 0.3 s turnaround.
   - Failing bursts spend the whole 1 s DD budget on both profiles. That is the risk.
   - Per-symbol noise costs about 55 ms of soft bits on 256-point; a cheaper nearest-point search is wanted.
-  - Next: the DD budget, or decoding while the burst arrives (the interleave change), measured for loss on the simulator. Then bench again once a wide band exists. No rate-capability field is called for yet.
+  - Done (PR #214): 8-frame interleaving and channel-estimate windows (FM protocol 2; at most +0.12 dB, up to 1.24 dB better on slow fading), and decoding while the burst arrives. Pi 4: clean bursts end 2-4x sooner (256l x39 at 30 dB 191 ms, 64l x30 at 24 dB 138 ms); failing ones within 1.57 s, against up to 4.1 s. Bench again once a wide band exists. No rate-capability field is called for yet.
 
 ### M3. Receiver changes for FM (receiver-only, testable on today's waveform)
 
@@ -219,7 +224,7 @@ The open question that could reshape the ladder. Wide at 20..25 kbit/s is about 
 
 - Timing constants per profile: `TURN_S`, `TIMEOUT_S`, `MAX_BURST_S`, burst-length policy, PTT lead (already `--ptt-on-delay-ms`). FM wants turnarounds near 0.2..0.3 s and bursts of a few seconds.
 - Gear shifter: start with a threshold table per mode on M1 (as `mode_thresholds.json`), then train the outcome model on FM data. The HF model's inputs (spread, fading regime) mean nothing here. Likely inputs: per-carrier SNR profile, click or erasure rate, SNR ceiling.
-- The connect exchange carries each node's rate capability (M2b) and the gear shifter caps its recommendations by it.
+- Capability per direction (from the discussion): each station sets its TX capability and its RX capability separately (narrow or wide, and M2b's rate cap). A half-link's cap is the narrower of the sender's TX and the receiver's RX, so the two directions of a link can differ. Unlike HF's `BW`, which takes the lower of the two ends for the whole channel. Cases: a data cable rigged for 1200-style mic TX but a flat RX tap; an IC-9700 receiving wide over I/Q (M10) but transmitting narrow. The connect exchange carries both, and the gear shifter caps each direction's recommendations by its own.
 - Cliff behaviour: fast fall-back on the first lost codewords, fast climb when quieting returns. Judge by paired sessions on M1 with fading and with a CNR ramp through threshold, in dB of CNR where a rate is reached.
 - Depends: M4 and M5 ladders frozen, M2.
 
@@ -230,7 +235,7 @@ The open question that could reshape the ladder. Wide at 20..25 kbit/s is about 
 - TX delay per station, with guidance for handhelds (squelch-tail elimination off). Measure the radio's key-up time against the far end (M3: 0.2 s of slack past the TX delay before high-rate bursts fail).
 - A station receiving I/Q (M10) can measure the far end's deviation and occupied bandwidth in Hz, which turns Autotune from "sounds right" into a check of the 15 kHz limit.
 - Overdrive diagnostic: the signature seen on 2026-10-31 (OFDM SNR pinned near the PAPR while FSK reads 25 dB or more) as a plain warning to the operator.
-- Radio path setting: mic or flat, which picks narrow or wide and the TX tilt.
+- Radio path settings, TX and RX separately (M6's capability per direction): mic or flat each way, which picks narrow or wide and the TX tilt.
 - PTT: `native/core/rig` has no CM108/CM119 GPIO keying that I could find. Most FM sound-card interfaces (AIOC, DigiRig Lite, DRA, Masters Communications) use it or serial RTS. Confirm and add.
 - Depends: M2 for the UI. Otherwise independent, and useful to today's users on FM.
 
@@ -290,11 +295,12 @@ First pieces of work: M1, the Pi measurement in M2b, the on-air half of M0 (need
 Decisions for the user:
 
 - Q2. How low does the FM floor go? VARA FM stops at 549 bps (4PSK on 14 carriers). The CPM floor reaches SNRs FM audio never delivers with a usable carrier, and squelch hides them anyway. Recommendation: keep the w and n10 QPSK rungs (down to 128 bps), no CPM, no n4.
-- Q15. Which bandwidth definition does "15 kHz occupied" mean: 99% power (ITU) or the -26 dB width (US Part 97)? M1 reports both. Until told otherwise the target is the stricter of the two per mode.
 - Q18. Is there a microwave FM rung or two worth having? Wider channels there allow more deviation and a wider audio or discriminator band than 15 kHz permits on 2 m and 70 cm. Only if it stays inside what a sound card or discriminator tap carries, and costs 2 m and 70 cm nothing.
 - Q16. Are 12.5 kHz channels (2.5 kHz deviation, about 11 kHz occupied) a case to support, or is 15 kHz the only target?
 
-Decided (2026-11-13, Q1 2026-11-15):
+Decided (2026-11-13, Q1 2026-11-15, Q15 2026-11-16):
+
+- Q15. 15 kHz measured 26 dB down, US Part 97's definition (see the constraint section for the rules and the reference modes' widths).
 
 - Q1. One codebase, profile fixed at process start, native built once per profile (PR #204).
 - Q19 (measured, PR #205). Keep 50 Hz spacing. 50 Hz (48 carriers) against 100 Hz (24 carriers, 2 ms CP), same band, modes matched in code and coded bits, every simulator condition, 30 paired trials, each at a measured preamble threshold:
@@ -332,6 +338,7 @@ Measurements that decide design:
 
 ## Revisions
 
+- 2026-11-16, Q15 decided (15 kHz, 26 dB down) with the rules and existing modes' measured widths; capability per direction (TX and RX separately) from the discussion; PR #214's windows and decoding while the burst arrives.
 - 2026-11-15, M2b first Pi bench and M3's damaged burst start (PR #206); HF per-symbol noise is issue #207.
 - 2026-11-15, M3 (PR #206): per-symbol noise up to 2.25 dB on mobile paths; +-12.5 Hz search at no cost, 6.7x less detector CPU; FM threshold 28.7.
 - 2026-11-15, Q19 measured (PR #205): keep 50 Hz; FM's 8-repeat preamble threshold needs about 26.7.
