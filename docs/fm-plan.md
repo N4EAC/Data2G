@@ -194,7 +194,9 @@ The open question that could reshape the ladder. Wide at 20..25 kbit/s is about 
   - So the TX delay must cover the radio's key-up time (M7).
 - Open: per-symbol noise on HF, issue #207.
 
-### M4. Narrow ladder (mic/speaker, FS 8000)
+### M4. Narrow ladder (mic/speaker, FS 16000)
+
+Status 2026-11-16: frozen as band f55 (55 carriers, 450..3150 Hz, FS 16000: one FM profile for narrow and wide), 14 rungs, 730..12712 bps, shared by mic and flat radios (FM protocol 4, PR #214; tables in `runs/fm_ladder/final_proposal.md`, re-measured through the shipping code in `runs/fm_ladder/shipped.csv`). Approved subject to on-air testing. 10% static knees: mic 1.25..27.25 dB, flat 0.25..15.75 dB; the top three rungs (256-point r.80..r.88) are flat-radio rungs (19-27 dB on mic, the radio's limiter). Decided along the way: prefix stays 2 ms and pilots one in six (Q8); the existing learned constellations, one per family (per-rung training on the FM channel gained under 0.2 dB, `runs/fm_const/`); the TX path setting (below). The bullets below are the original brief.
 
 - Start from w48. Decide by measurement on M1 and real radios:
   - Band edges. VARA FM moved up to about 470..3140 Hz to avoid poor low-frequency response; VardeFM stops at 2672 Hz. Candidate: 55 carriers, 450..3150 Hz. A band that some radios cannot pass is worse than a narrower one, so the top modes may need a width fallback like VARA's wide 98/116 split.
@@ -211,6 +213,13 @@ The open question that could reshape the ladder. Wide at 20..25 kbit/s is about 
 
 ### M5. Wide ladder (9600 port or direct taps)
 
+Status 2026-11-16: frozen as band f108 (108 carriers, 300..5650 Hz; 55 carriers in step 2 below predates Q19's 50 Hz decision), 14 rungs, 1475..25102 bps at 2.25..23.75 dB static (VARA FM's top: 25210). New LDPC lifting sizes for the high rates (bg1 z80, z88, z112, z120, z128, z176; the 2n IR screen point not yet run). What limits the top: the flat radio's filters cap the highest carriers near 19 dB. Step 3 answered (Q9): a fixed +3 dB/octave TX tilt gains 1.4-2.9 dB on f108; bit loading adds under 0.3 dB on top, not built.
+
+TX path setting (station, FM only, default mic; data2g-host / native --tx-path, Qt GUI, web UI):
+- flat: 16-QAM and up sent unclipped (the modem's SSB-style clipper buys no deviation on FM: the 15 kHz width is set by rms; no clipping saves 1.2-1.4 dB on 64/256-point), and the +3 dB/octave tilt.
+- mic: 64-point at 0.70 and 256-point at 0.55 of the level, so the radio's 5 kHz limiter acts on under 1% of samples (at full drive it acts on 9%, and 64/256-point lose bits as CNR rises). The tune procedure (M7) should aim for that.
+- The ping / level tool (M7) is to validate it on air.
+
 - Step 1: the FM profile runs at FS 16000 on the 50 Hz grid (M2), so a wide band is just more carriers, as VARA FM does. 100 Hz spacing was measured and lost (Q19).
 - Step 2: a wider band on the same grid, about 300..5700 Hz (55 carriers, the count M4's narrow band uses, so its pilot and header layout are shared). Arithmetic: about 19 kbit/s with today's top code, 25.5 kbit/s with 256-point r5/6, 30.6 with M4's prefix and pilot savings. VARA FM's top is 25210.
 - A narrower wide band (about 4.6 kHz, as VARA's 98 carriers) for ports that roll off early: on this grid it is just fewer carriers.
@@ -226,7 +235,8 @@ The open question that could reshape the ladder. Wide at 20..25 kbit/s is about 
 - Gear shifter: start with a threshold table per mode on M1 (as `mode_thresholds.json`), then train the outcome model on FM data. The HF model's inputs (spread, fading regime) mean nothing here. Likely inputs: per-carrier SNR profile, click or erasure rate, SNR ceiling.
 - Capability per direction (from the discussion): each station sets its TX capability and its RX capability separately (narrow or wide, and M2b's rate cap). A half-link's cap is the narrower of the sender's TX and the receiver's RX, so the two directions of a link can differ. Unlike HF's `BW`, which takes the lower of the two ends for the whole channel. Cases: a data cable rigged for 1200-style mic TX but a flat RX tap; an IC-9700 receiving wide over I/Q (M10) but transmitting narrow. The connect exchange carries both, and the gear shifter caps each direction's recommendations by its own.
 - Cliff behaviour: fast fall-back on the first lost codewords, fast climb when quieting returns. Judge by paired sessions on M1 with fading and with a CNR ramp through threshold, in dB of CNR where a rate is reached.
-- Depends: M4 and M5 ladders frozen, M2.
+- From the ladder measurements: mobile 10% knees run 7.5-44 dB and do not follow static (16-QAM r.47 beats QPSK r.60 on mobile on both radios), so mobile needs its own thresholds; f55 needs thresholds per TX path; f55 and f108 need band codes in the ARQ (none free while FM keeps CPM: drop CPM from FM per Q2). Mean BMI does not predict mobile knees (fade outage); judge mobile streamed.
+- Depends: M4 and M5 ladders frozen (done, 2026-11-16), M2.
 
 ### M7. Station setup tools
 
@@ -330,7 +340,7 @@ Measurements that decide design:
   - Decided 2026-11-16: keep 2 ms; the payoff is too small. 1 ms (16 samples, +4.5% rate) would cost about 0.1-0.2 dB on the top mode. 0.5 ms (+6.8%) is borderline on 64-point. Real radios' filter delay may be longer than M1's: confirm on air (M0) before choosing. Shipping a shorter prefix needs FCENTER moved (2000 Hz fits 8-32 samples) and is a wire change.
   - Pilot thinning, measured 2026-11-16 (`scripts/fm_pilot_study.py`, `runs/fm_pilot/report.txt`; same setup): one pilot in eleven (one frame of 10 data symbols, +9.1% rate) against today's one in six. With a 0.2 Hz spread prior: QPSK and 16-QAM within 0.05 dB on fixed and flutter paths, 64-point +0.2-0.4 dB; mobile and slow cells unpaired and noisy (+0.3..+1.9 dB, mobile leaning worse). With today's 2 Hz prior (HF's, for bursts under 8 pilots) 64-point fails outright: 242 ms between pilots looks uncorrelated at 2 Hz.
   - The spread prior alone (0.2 Hz, today's layout, receiver-only): 0.06-0.16 dB better on flutter and mobile for QPSK and 16-QAM, never worse. FM audio's channel is the radios' fixed response; RF Doppler reaches it as clicks, not as fading of the tones.
-- Q9. Fixed tilt or bit loading on wide (M5 step 3)?
+- Q9. Fixed tilt or bit loading on wide (M5 step 3)? Answered 2026-11-16: fixed +3 dB/octave TX tilt (`scripts/fm_tilt_study.py`); bit loading under 0.3 dB more.
 - Q10. Does symbol erasure plus the existing interleaver hold a mobile link at 20..50 Hz flutter, or do the codewords need to be longer in time?
 - Q11. Wide at FS 16000 or 24000? 16000 keeps every sample count and reaches 6 kHz with a 2 kHz transition band. 24000 only matters if radios pass more than 6 kHz, which Q7 answers.
 - Q12. Pi 4 decode budget at 20..25 kbit/s with a 0.3 s turnaround, and how much incremental decoding and cheaper decoding recover (M2b).
@@ -347,6 +357,7 @@ Measurements that decide design:
 
 ## Revisions
 
+- 2026-11-16, M4/M5 ladders frozen (f55, f108; protocol 4), TX path setting, Q9 (tilt), TX clipping and mic drive measured, constellations kept, new LDPC sizes, FM spread prior 0.2 Hz.
 - 2026-11-16, Q8's pilot half measured (one in eleven: 64-point +0.2-0.4 dB for +9.1% rate, needs an FM spread prior; the prior alone 0.06-0.16 dB better).
 - 2026-11-16, Q8: the prefix stays at 2 ms.
 - 2026-11-16, Q8's prefix half measured (1 ms costs 0.1-0.2 dB on 64-point for +4.5% rate); Q19's 1 ms note corrected (a mixer bug).
