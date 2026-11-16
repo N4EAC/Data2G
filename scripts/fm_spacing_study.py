@@ -59,7 +59,14 @@ ROUNDS = {
 }
 CNRS = (4, 6, 8, 10, 13, 16, 20, 25, 30, 36)
 MODES = ("qpsk-r1/2", "16qam-r1/2", "64l-r3/4")
-RADIOS = ("mic", "flat")
+RADIOS = tuple(os.environ.get("FM_RADIOS", "mic,flat").split(","))
+# FM_MIC_RADIO: the fmchannel radio the "mic" rows use (scripts/fm_narrow_study.py: "mic-narrow",
+# a 12.5 kHz channel radio), labelled "mic" so report_db pairs it; FM_OBW_HZ: the drive's bandwidth target
+OBW_HZ = float(os.environ.get("FM_OBW_HZ", 15_000.0))
+
+
+def radio_of(r):
+    return os.environ.get("FM_MIC_RADIO", "mic") if r == "mic" else r
 N_CW = 3
 
 
@@ -151,7 +158,7 @@ def job(args):
     rows = []
     for cnr in CNRS:
         stream = bool(os.environ.get("FM_RX_STREAM"))  # its audio is 2 s longer (the processes depend on the span)
-        ch = F.FmChannel(c, radio, cnr, seed=trial, duration_s=len(x) / FS + (4 if stream else 2), carrier_mhz=mhz,
+        ch = F.FmChannel(c, radio_of(radio), cnr, seed=trial, duration_s=len(x) / FS + (4 if stream else 2), carrier_mhz=mhz,
                          drive_dev_hz=drive, ppm=ppm)
         if stream:
             lost, nosync, false = stream_receive(spec, sent, x, ch)
@@ -180,7 +187,10 @@ def run_variant(out: Path, variant, trials, workers):
     for m in MODES:
         _, x = burst(sp[m], 0)
         for r in RADIOS:
-            drives[(m, r)] = F.drive_for_bandwidth(x[np.abs(x) > 0], r, 15_000.0)[0]
+            # FM_DRIVE_RADIO / FM_DRIVE_SCALE: the drive another radio's bandwidth target gives, scaled
+            # (a 12.5 kHz radio's 2.5 kHz limiter holds it under 12.5 kHz at any drive)
+            dr = os.environ.get("FM_DRIVE_RADIO", radio_of(r))
+            drives[(m, r)] = F.drive_for_bandwidth(x[np.abs(x) > 0], dr, OBW_HZ)[0] * float(os.environ.get("FM_DRIVE_SCALE", 1))
     secs = {m: np.round(len(burst(sp[m], 0)[1]) / config.FS - 1.0, 3) for m in MODES}
     print(f"{variant}: RS {config.RS} NCP {config.NCP} M {config.M}; burst seconds {secs}; drives "
           + ", ".join(f"{k[0]}/{k[1]} {v:.0f}" for k, v in drives.items()), flush=True)
