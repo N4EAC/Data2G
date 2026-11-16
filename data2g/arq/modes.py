@@ -9,7 +9,9 @@ from .. import codes, cpm, modem
 from ..config import SUBMODES
 from .frames import BANDS_CODE, MAX_CTL
 
-MODES = {**SUBMODES, **cpm.SPECS}
+# Bands with a recommendation code (frames.BANDS_CODE) only: FM's f55 and f108
+# join with the FM gear shifter (plan M6: thresholds, predictor inputs, codes).
+MODES = {**{n: s for n, s in SUBMODES.items() if s.sync_band in BANDS_CODE}, **cpm.SPECS}
 
 
 def is_cpm(spec) -> bool:

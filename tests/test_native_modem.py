@@ -143,6 +143,9 @@ def test_burst_waveform_matches(native, py):
 RX_CASES = [("ack-1f", 1, 10.0, None), ("qpsk-r1/2", 2, 6.0, "mpp"), ("n4-ack-2f", 2, 0.0, None),
             ("n10-qpsk-r1/3", 1, 4.0, "mpp"), ("w48-16qam-r1/2", 3, 14.0, None), ("w48-64l-r1/2", 2, 20.0, "mpd"),
             ("polar-k96-f4", 3, -3.0, "mpd")]
+if "f55" in BANDS:  # FM's own bands (FM profile)
+    RX_CASES += [("f55-16qam-r1/2", 3, 16.0, None), ("f55-qpsk-r1/2", 2, 4.0, "mpp"), ("f108-64l-r2/3", 2, 22.0, None),
+                 ("f108-qpsk-r1/5", 3, 0.0, "mpd")]
 
 
 def same_received(n, r):

@@ -106,6 +106,9 @@ PREAMBLE_THRESHOLDS = {8: 24.1}
 # below where data fails), so the threshold buys idle CPU, not range.
 if PROFILE == "fm":
     PREAMBLE_THRESHOLDS = {8: 28.7}
+# FM's f55 and f108 under it too (scripts/mf_detect_study.py noise, 600 s per source,
+# blanked, 2026-11-17): largest peaks f55 17.7 white, 23.6 mic hiss, 21.5 / 24.1 idle
+# carrier at 8 dB (mic / flat); f108 21.8, 25.8, 20.6, 21.3. 1.1 x 25.8 = 28.4.
 # Frequency-offset search, +-Hz. SSTVAE searched +-625 Hz because it cost
 # nothing there; here it cost ~5x the detector's CPU against +-150 Hz, and
 # noise-only peaks ran 5-10% higher (2026-09-24). A mode up to 2400 Hz
@@ -167,8 +170,9 @@ FIRST_PATH_FRAC = 0.5
 # Header symbols per band: BandSpec.header_syms.
 PROFILE_TAG = {"hf": 0, "fm": 0x20}[PROFILE]
 # FM counts its own versions from 1 (no FM format is frozen yet); 2: codewords
-# interleaved in 8-frame windows (SPREAD_WINDOW).
-PROTOCOL_VERSION = {"hf": 15, "fm": 2}[PROFILE]  # HF: 10: first frozen submode table; n4 on n10 sync (2026-09-23); 11: header copy;
+# interleaved in 8-frame windows (SPREAD_WINDOW); 3: FM's own bands f55 and f108 (new
+# preambles, headers and submode indices; the FM plan's M4/M5 bands).
+PROTOCOL_VERSION = {"hf": 15, "fm": 3}[PROFILE]  # HF: 10: first frozen submode table; n4 on n10 sync (2026-09-23); 11: header copy;
 # 12: polar codewords carry CRC-24 (k + 8, payloads kept); n10's header 5 | 5 (CW_BITS, 2026-10-06,
 # in place: development, one operator); 13: a non-periodic c8r50 front (2026-10-24: the tiled
 # Costas array matched one period off, sync 0.76, and its header read as another word); 14: the CPM
@@ -182,7 +186,7 @@ PROTOCOL_VERSION = {"hf": 15, "fm": 2}[PROFILE]  # HF: 10: first frozen submode 
 # bursts a cell): w48 MPP -1 dB header loss 8.5% -> 2.4%, MPD -1 14.5% ->
 # 3.8%; w wrong headers accepted at MPD -3 dB 10.2% -> 4.0%. Spaced beat
 # contiguous (an 8-symbol header: w48 MPP -1 4.8%); 1-4 frames later alike.
-HEADER_COPY_BANDS = ("w", "w48")
+HEADER_COPY_BANDS = ("w", "w48") + (("f55", "f108") if PROFILE == "fm" else ())  # FM's bands: 4-symbol headers too
 HEADER_COPY_AFTER = 2
 MAX_CODEWORDS = 64  # the header carries n_cw - 1 in 6 bits (CW_BITS: fewer on n10)
 # The header word's 10 bits split per sync band: submode | n_cw - 1, 6 bits
@@ -366,6 +370,16 @@ BANDS = {
     # the whole of its 3 dB worse sync floor; runs/w48_sync_diag.log)
     "w48": BandSpec("w48", -12, 48, PILOT_W48, 4),
 }
+# FM's narrow and wide bands (FM plan M4, M5; FM profile only): 450..3150 Hz
+# and 300..5650 Hz on the same 50 Hz grid. Band edges are the plan's, from
+# VARA FM and VardeFM, until real radios are measured (M0, Q7). 4 header
+# symbols each, no longer in time than w48's (the code is longer, its rate
+# lower). Pilots: scripts/design_pilot.py.
+if PROFILE == "fm":
+    PILOT_F55 = (520, 990, 205, 328, 843, 26, 497, 464, 602, 400, 937, 155, 864, 270, 513, 550, 246, 421, 718, 656, 973, 727, 144, 460, 694, 547, 717, 342, 845, 108, 670, 823, 696, 928, 898, 290, 0, 661, 363, 73, 569, 917, 541, 544, 530, 557, 789, 535, 422, 332, 121, 875, 418, 162, 17)  # 0.98 dB
+    PILOT_F108 = (162, 22, 839, 645, 743, 304, 220, 961, 911, 679, 404, 272, 796, 1019, 730, 913, 783, 992, 1, 16, 210, 1002, 204, 399, 392, 192, 528, 55, 474, 746, 859, 976, 178, 325, 664, 161, 871, 422, 895, 404, 151, 644, 35, 403, 324, 391, 686, 209, 552, 81, 756, 989, 405, 425, 555, 647, 562, 839, 55, 221, 614, 282, 88, 320, 803, 882, 1, 1023, 606, 488, 309, 697, 76, 193, 558, 68, 373, 663, 499, 185, 159, 666, 232, 918, 717, 718, 263, 730, 564, 426, 820, 207, 438, 698, 318, 964, 619, 309, 172, 551, 366, 232, 273, 44, 103, 301, 999, 1021)  # 1.45 dB: best of ~500 starts (1.45-1.51); 108 carriers sit higher than 55's 0.98
+    BANDS["f55"] = BandSpec("f55", -10, 55, PILOT_F55, 4)
+    BANDS["f108"] = BandSpec("f108", -13, 108, PILOT_F108, 4)
 
 
 # What the clipper does to data symbols, as seen by a receiver whose
@@ -496,6 +510,27 @@ SUBMODES = dict([
     _m(13, "w48-64l-r3/4", "ldpc", "c64-w48-r34", 2, 2160, band="w48", headroom=5),  # 7389 bps
     _m(14, "w48-256l-r5/8", "ldpc", "c256-w48-r58", 2, 2400, band="w48", headroom=6),  # 8222 bps
 ])
+# FM's narrow (f55) and wide (f108) bands: a provisional ladder, w48's kinds of
+# mode at its kinds of rate, k picked so each code lands on an existing LDPC
+# shift table (ldpc.layout), headrooms w48's. Not the FM ladder: that is
+# measured on FM channels (plan M4, M5). Not in the ARQ's modes yet
+# (arq.modes.MODES: no thresholds, predictor inputs or recommendation codes
+# for them until M6).
+if PROFILE == "fm":
+    SUBMODES.update(dict([
+        _m(0, "f55-qpsk-r1/5", "ldpc", "gray-qam4", 4, 480, band="f55", headroom=0),
+        _m(1, "f55-qpsk-r1/2", "ldpc", "gray-qam4", 4, 1040, band="f55", headroom=0),
+        _m(2, "f55-16qam-r1/2", "ldpc", "gray-qam16", 2, 1040, band="f55", headroom=1),
+        _m(3, "f55-16qam-r3/4", "ldpc", "gray-qam16", 2, 1584, band="f55", headroom=3),
+        _m(4, "f55-64l-r2/3", "ldpc", "c64-w48-r23", 2, 2288, band="f55", headroom=6),
+        _m(5, "f55-256l-r5/8", "ldpc", "c256-w48-r58", 1, 1376, band="f55", headroom=6),
+        _m(0, "f108-qpsk-r1/5", "ldpc", "gray-qam4", 2, 480, band="f108", headroom=0),
+        _m(1, "f108-qpsk-r1/2", "ldpc", "gray-qam4", 2, 1040, band="f108", headroom=0),
+        _m(2, "f108-16qam-r1/2", "ldpc", "gray-qam16", 1, 1040, band="f108", headroom=1),
+        _m(3, "f108-16qam-r3/4", "ldpc", "gray-qam16", 1, 1584, band="f108", headroom=3),
+        _m(4, "f108-64l-r2/3", "ldpc", "c64-w48-r23", 1, 2288, band="f108", headroom=6),
+        _m(5, "f108-256l-r3/5", "ldpc", "c256-w48-r58", 1, 2560, band="f108", headroom=6),
+    ]))
 # (sync band, header index) -> submode: what a header's index means
 # (native config::by_index)
 BY_INDEX = {(s.sync_band, s.index): s for s in SUBMODES.values()}

@@ -120,6 +120,7 @@ COPY_COMMIT_SCORE = 0.45
 # top out at 0.248 (3000 measured), its reads off w bursts at 0.243 (-8..+30
 # dB); true w48 headers score 0.35 median at -6 dB (0.30 had cut ~20% there).
 HEADER_MIN_SCORE = {"w": 0.33, "n10": 0.30, "w48": 0.26}
+# FM's f55 and f108 (FM profile): set below with the pilot constants
 # Handicap on the header score of every hypothesis but acquisition's own
 # (its runner-ups, and the +-1, +-2 repeat alignments): near -8 dB wide a
 # true header scores ~0.26 and noise read at some other hypothesis beat
@@ -809,6 +810,16 @@ def find_burst(x: np.ndarray, bands=None, accept: Accept | None = None, stats: d
 PILOT_PAIRS = 4
 PILOT_NOISE = {"w": 0.24, "n10": 0.38, "n4": 0.59, "w48": 0.18}
 PILOT_PATTERN = {"w": 0.318, "n10": 0.504, "n4": 0.876, "w48": 0.226}
+# FM's bands, measured as the others were (scripts/band_consts.py, 3000 reads each,
+# 2026-11-17): pilot pattern 90% / coherence 99% on white noise f55 0.208 / 0.191,
+# f108 0.148 / 0.142; header reads on noise top out at 0.222 (f55) and 0.153 (f108),
+# off other bands' bursts 0.218 and 0.153 (the longer codes read lower), so the
+# floors sit just over them as w48's does. Not yet checked against true
+# headers at low CNR (w48's 0.26 was).
+if "f55" in BANDS:
+    HEADER_MIN_SCORE.update({"f55": 0.23, "f108": 0.16})
+    PILOT_NOISE.update({"f55": 0.19, "f108": 0.14})
+    PILOT_PATTERN.update({"f55": 0.208, "f108": 0.148})
 
 
 def pilot_coherence(x: np.ndarray, lock: Lock, n_max: int = 8, latest: bool = False, pattern: bool = False):

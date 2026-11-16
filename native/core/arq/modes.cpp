@@ -1,5 +1,6 @@
 #include "arq/modes.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <stdexcept>
@@ -29,7 +30,10 @@ int band_code(std::string_view sync_band) {
 std::span<const Mode> modes() {
     static const std::vector<Mode> all = [] {
         std::vector<Mode> v;
-        for (const auto& s : config::SUBMODES) v.push_back({s.name, s.band, &s, nullptr});
+        // modes.py MODES: bands with a recommendation code only (FM's f55, f108 join with M6)
+        for (const auto& s : config::SUBMODES)
+            if (std::any_of(std::begin(BANDS_CODE), std::end(BANDS_CODE), [&](const auto& b) { return b.first == s.sync_band; }))
+                v.push_back({s.name, s.band, &s, nullptr});
         for (const auto& s : tables::CPM_SPECS) v.push_back({s.name, s.grid, nullptr, &s});
         return v;
     }();

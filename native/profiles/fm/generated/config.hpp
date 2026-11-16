@@ -32,8 +32,8 @@ inline constexpr double DEFAULT_SPREAD_HZ = 0.2;
 inline constexpr int FIRST_PATH_SEARCH = 32;
 inline constexpr double FIRST_PATH_FRAC = 0.5;
 inline constexpr int PROFILE_TAG = 32;
-inline constexpr int PROTOCOL_VERSION = 2;
-inline constexpr std::array<std::string_view, 2> HEADER_COPY_BANDS = {"w", "w48"};
+inline constexpr int PROTOCOL_VERSION = 3;
+inline constexpr std::array<std::string_view, 4> HEADER_COPY_BANDS = {"w", "w48", "f55", "f108"};
 inline constexpr int HEADER_COPY_AFTER = 2;
 inline constexpr int MAX_CODEWORDS = 64;
 inline constexpr int LEADIN_SAMPLES = 320;
@@ -49,6 +49,8 @@ inline constexpr std::array<int, 24> PILOT_PHASE_NUM = {725, 497, 359, 322, 193,
 inline constexpr std::array<int, 4> PILOT_N4 = {518, 821, 829, 542};
 inline constexpr std::array<int, 10> PILOT_N10 = {480, 471, 862, 780, 503, 490, 593, 127, 601, 62};
 inline constexpr std::array<int, 48> PILOT_W48 = {1021, 910, 952, 927, 968, 883, 915, 730, 618, 666, 431, 53, 996, 1022, 815, 278, 77, 519, 263, 311, 918, 546, 399, 690, 927, 609, 100, 34, 390, 663, 873, 422, 1004, 904, 229, 366, 529, 880, 1012, 422, 611, 98, 709, 78, 423, 772, 293, 849};
+inline constexpr std::array<int, 55> PILOT_F55 = {520, 990, 205, 328, 843, 26, 497, 464, 602, 400, 937, 155, 864, 270, 513, 550, 246, 421, 718, 656, 973, 727, 144, 460, 694, 547, 717, 342, 845, 108, 670, 823, 696, 928, 898, 290, 0, 661, 363, 73, 569, 917, 541, 544, 530, 557, 789, 535, 422, 332, 121, 875, 418, 162, 17};
+inline constexpr std::array<int, 108> PILOT_F108 = {162, 22, 839, 645, 743, 304, 220, 961, 911, 679, 404, 272, 796, 1019, 730, 913, 783, 992, 1, 16, 210, 1002, 204, 399, 392, 192, 528, 55, 474, 746, 859, 976, 178, 325, 664, 161, 871, 422, 895, 404, 151, 644, 35, 403, 324, 391, 686, 209, 552, 81, 756, 989, 405, 425, 555, 647, 562, 839, 55, 221, 614, 282, 88, 320, 803, 882, 1, 1023, 606, 488, 309, 697, 76, 193, 558, 68, 373, 663, 499, 185, 159, 666, 232, 918, 717, 718, 263, 730, 564, 426, 820, 207, 438, 698, 318, 964, 619, 309, 172, 551, 366, 232, 273, 44, 103, 301, 999, 1021};
 inline constexpr double PREAMBLE_THRESHOLD = 28.7;
 inline constexpr int cw_bits(std::string_view sync_band) { return sync_band == "n10" ? 5 : 6; }
 inline constexpr int max_codewords(std::string_view sync_band) { return 1 << cw_bits(sync_band); }
@@ -71,12 +73,18 @@ inline constexpr std::array<int, 4> PILOT_n4 = {518, 821, 829, 542};
 inline constexpr std::array<double, 3> CLIP_OVERSHOOT_n4 = {1.0, 1.5, 2.0};
 inline constexpr std::array<int, 48> PILOT_w48 = {1021, 910, 952, 927, 968, 883, 915, 730, 618, 666, 431, 53, 996, 1022, 815, 278, 77, 519, 263, 311, 918, 546, 399, 690, 927, 609, 100, 34, 390, 663, 873, 422, 1004, 904, 229, 366, 529, 880, 1012, 422, 611, 98, 709, 78, 423, 772, 293, 849};
 inline constexpr std::array<double, 3> CLIP_OVERSHOOT_w48 = {1.0, 1.5, 2.0};
+inline constexpr std::array<int, 55> PILOT_f55 = {520, 990, 205, 328, 843, 26, 497, 464, 602, 400, 937, 155, 864, 270, 513, 550, 246, 421, 718, 656, 973, 727, 144, 460, 694, 547, 717, 342, 845, 108, 670, 823, 696, 928, 898, 290, 0, 661, 363, 73, 569, 917, 541, 544, 530, 557, 789, 535, 422, 332, 121, 875, 418, 162, 17};
+inline constexpr std::array<double, 3> CLIP_OVERSHOOT_f55 = {1.0, 1.5, 2.0};
+inline constexpr std::array<int, 108> PILOT_f108 = {162, 22, 839, 645, 743, 304, 220, 961, 911, 679, 404, 272, 796, 1019, 730, 913, 783, 992, 1, 16, 210, 1002, 204, 399, 392, 192, 528, 55, 474, 746, 859, 976, 178, 325, 664, 161, 871, 422, 895, 404, 151, 644, 35, 403, 324, 391, 686, 209, 552, 81, 756, 989, 405, 425, 555, 647, 562, 839, 55, 221, 614, 282, 88, 320, 803, 882, 1, 1023, 606, 488, 309, 697, 76, 193, 558, 68, 373, 663, 499, 185, 159, 666, 232, 918, 717, 718, 263, 730, 564, 426, 820, 207, 438, 698, 318, 964, 619, 309, 172, 551, 366, 232, 273, 44, 103, 301, 999, 1021};
+inline constexpr std::array<double, 3> CLIP_OVERSHOOT_f108 = {1.0, 1.5, 2.0};
 
-inline constexpr std::array<Band, 4> BANDS = {{
+inline constexpr std::array<Band, 6> BANDS = {{
     {"w", 0, 24, PILOT_w, 4, 8, 1.0, CLIP_OVERSHOOT_w, "w"},
     {"n10", 7, 10, PILOT_n10, 10, 8, 1.0, CLIP_OVERSHOOT_n10, "n10"},
     {"n4", 10, 4, PILOT_n4, 24, 8, 1.0, CLIP_OVERSHOOT_n4, "n10"},
     {"w48", -12, 48, PILOT_w48, 4, 8, 1.0, CLIP_OVERSHOOT_w48, "w48"},
+    {"f55", -10, 55, PILOT_f55, 4, 8, 1.0, CLIP_OVERSHOOT_f55, "f55"},
+    {"f108", -13, 108, PILOT_f108, 4, 8, 1.0, CLIP_OVERSHOOT_f108, "f108"},
 }};
 
 // Per submode: the spec plus what Python derives from it, so the two
@@ -93,7 +101,7 @@ inline constexpr std::array<double, 1> ACE_35 = {1.0};
 inline constexpr std::array<double, 1> ACE_36 = {1.0};
 inline constexpr std::array<double, 1> ACE_38 = {1.0};
 
-inline constexpr std::array<Submode, 44> SUBMODES = {{
+inline constexpr std::array<Submode, 56> SUBMODES = {{
     {0, "ack-4f", "polar", "gray-qam4", "w", "w", 4, 56, 2, 960, 24, 4, 0.0, {}},
     {1, "polar-k96-f8", "polar", "gray-qam4", "w", "w", 8, 104, 2, 1920, 24, 10, 0.0, {}},
     {2, "polar-k96-f4", "polar", "gray-qam4", "w", "w", 4, 104, 2, 960, 24, 10, 0.0, {}},
@@ -138,6 +146,18 @@ inline constexpr std::array<Submode, 44> SUBMODES = {{
     {12, "w48-64l-r2/3", "ldpc", "c64-w48-r23", "w48", "w48", 2, 1920, 6, 2880, 32, 236, 6.0, {}},
     {13, "w48-64l-r3/4", "ldpc", "c64-w48-r34", "w48", "w48", 2, 2160, 6, 2880, 32, 266, 5.0, {}},
     {14, "w48-256l-r5/8", "ldpc", "c256-w48-r58", "w48", "w48", 2, 2400, 8, 3840, 32, 296, 6.0, {}},
+    {0, "f55-qpsk-r1/5", "ldpc", "gray-qam4", "f55", "f55", 4, 480, 2, 2200, 16, 58, 0.0, {}},
+    {1, "f55-qpsk-r1/2", "ldpc", "gray-qam4", "f55", "f55", 4, 1040, 2, 2200, 32, 126, 0.0, {}},
+    {2, "f55-16qam-r1/2", "ldpc", "gray-qam16", "f55", "f55", 2, 1040, 4, 2200, 32, 126, 1.0, {}},
+    {3, "f55-16qam-r3/4", "ldpc", "gray-qam16", "f55", "f55", 2, 1584, 4, 2200, 32, 194, 3.0, {}},
+    {4, "f55-64l-r2/3", "ldpc", "c64-w48-r23", "f55", "f55", 2, 2288, 6, 3300, 32, 282, 6.0, {}},
+    {5, "f55-256l-r5/8", "ldpc", "c256-w48-r58", "f55", "f55", 1, 1376, 8, 2200, 32, 168, 6.0, {}},
+    {0, "f108-qpsk-r1/5", "ldpc", "gray-qam4", "f108", "f108", 2, 480, 2, 2160, 16, 58, 0.0, {}},
+    {1, "f108-qpsk-r1/2", "ldpc", "gray-qam4", "f108", "f108", 2, 1040, 2, 2160, 32, 126, 0.0, {}},
+    {2, "f108-16qam-r1/2", "ldpc", "gray-qam16", "f108", "f108", 1, 1040, 4, 2160, 32, 126, 1.0, {}},
+    {3, "f108-16qam-r3/4", "ldpc", "gray-qam16", "f108", "f108", 1, 1584, 4, 2160, 32, 194, 3.0, {}},
+    {4, "f108-64l-r2/3", "ldpc", "c64-w48-r23", "f108", "f108", 1, 2288, 6, 3240, 32, 282, 6.0, {}},
+    {5, "f108-256l-r3/5", "ldpc", "c256-w48-r58", "f108", "f108", 1, 2560, 8, 4320, 32, 316, 6.0, {}},
 }};
 
 }  // namespace data2g::config

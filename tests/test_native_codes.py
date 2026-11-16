@@ -111,7 +111,7 @@ def test_decode(native, py, spec):
     _same(n.decode_many(spec.name, soft, masks, index), py.decode_many(spec, soft, masks, index))
     _same(n.decode_many(spec.name, soft), py.decode_many(spec, soft))
     bits, ok = n.decode_llrs(spec.name, soft, 40, masks, index)
-    pbits, pok = py.decode_llrs(spec, soft, crc_mask=masks, index=index)
+    pbits, pok = py.decode_llrs(spec, soft, 40, crc_mask=masks, index=index)  # the same cap as native's
     np.testing.assert_array_equal(ok, pok)
     np.testing.assert_array_equal(bits[ok], pbits[pok])
     np.testing.assert_array_equal(n.crc_ok(spec.name, pbits, masks, index), py.crc_ok(spec, pbits, masks, index))
