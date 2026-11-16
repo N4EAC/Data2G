@@ -316,8 +316,8 @@ bool nod_default() {
     return on;
 }
 
-// DATA2G_NOD_ALWAYS=1 (testing): any mode, even when the control-only burst would be shorter (link.NOD_ALWAYS)
-static bool nod_always() {
+// DATA2G_NOD_ALWAYS=1 (testing): any mode, any number of control codewords, even when the control-only burst would be shorter (link.NOD_ALWAYS)
+bool nod_always() {
     static const bool on = [] {
         const char* v = std::getenv("DATA2G_NOD_ALWAYS");
         return v && std::strcmp(v, "1") == 0;
@@ -469,7 +469,7 @@ TxBurstPtr Station::build(bool fresh, bool nod_ok) {
     if (inl) carried.push_back(inl);
     std::optional<std::int64_t> new_end;
     for (const auto* c : carried) new_end = std::max(new_end.value_or(c->seq + 1), c->seq + 1);
-    if (nod_ok && fresh && resend.empty() && !new_end && dup == 1 && ctl.size() == 1) burst->nod = nod_of(bn, submode, core, ext);
+    if (nod_ok && fresh && resend.empty() && !new_end && dup == 1 && (ctl.size() == 1 || nod_always())) burst->nod = nod_of(bn, submode, core, ext);
     if (!burst->nod && ext.count(T_NODS)) nods_in_.insert(bn);
     sent_ctl_[bn] = {rx.cum, core.recommend, core.acted_on, new_end, kept(core, ext)};
     record(bn, burst, std::move(conveyed), resend, carried);

@@ -772,7 +772,7 @@ class Engine:
             if ours:
                 self.session_snr = meas["snr_est"]
                 # its start from my burst's end (the receiver was reset there): the expected slot learns
-                if r.get("family") == "cpm":
+                if r.get("family") == "cpm" or LK.NOD_ALWAYS:  # OFDM-only links: the nod search needs a slot
                     self.slot.heard(h["start"] / FS, r["cfo"])
             if self.kiss is not None and not ours:
                 frames = self.kiss.on_burst(r, rx)

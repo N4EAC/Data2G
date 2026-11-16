@@ -69,7 +69,8 @@ REPEAT = os.environ.get("DATA2G_REPEAT", "1") != "0"
 # them (T_NODS); nods are listened for always (docs/arq.md §3b)
 NOD = os.environ.get("DATA2G_NOD", "1") != "0"
 # DATA2G_NOD_ALWAYS=1 (testing): a reply the codebook can express goes as a nod
-# whatever its mode (OFDM too), even when the control-only burst would be shorter
+# whatever its mode (OFDM, ack-*f too) and however many control codewords it
+# takes, even when the control-only burst would be shorter
 NOD_ALWAYS = os.environ.get("DATA2G_NOD_ALWAYS", "0") == "1"
 NOD_MODE = "fsk16r25-r1/3"  # the mode a nod's control is packed and named in (its grid's control codeword)
 # soft-bit store keys of controls kept for that (RxBurst.decode_repeat): the link's, the session's connect frames
@@ -634,7 +635,7 @@ class Station:
 
         burst = TxBurst(submode, self._slots(ctl, dup, resend, rvs, new), self.bursts_sent, self.cap)
         news = [c.seq for c in new] + ([inline.seq] if inline else [])
-        if nod and fresh and not (resend or news) and dup == 1 and len(ctl) == 1:
+        if nod and fresh and not (resend or news) and dup == 1 and (len(ctl) == 1 or NOD_ALWAYS):
             burst.nod = self._nod_of(bn, submode, core, ext)
         if burst.nod is None and F.T_NODS in ext:
             self._nods_in.add(bn)

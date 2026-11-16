@@ -4,6 +4,7 @@ only to a peer that sent it, and every nod a listener takes expands to the
 control it stands for, both streams arriving whole through lost bursts and
 lost nods."""
 
+import dataclasses
 import random
 
 import numpy as np
@@ -117,7 +118,7 @@ def _reply(ext):
 
 
 def _ctl(burst):
-    return F.Control.unpack([burst.slots[0].payload])
+    return F.Control.unpack([s.payload for s in burst.slots if s.mask_id[2] >= 128 and not s.rv])
 
 
 def run(seed, a_nods=True, b_nods=True, max_turns=3000, modes=tuple(NOD_MODES)):
@@ -128,7 +129,7 @@ def run(seed, a_nods=True, b_nods=True, max_turns=3000, modes=tuple(NOD_MODES)):
     b = L.Station(1, AskingPolicy(random.Random(seed + 2), modes=modes), nod=b_nods)
     a.write(data_a)
     b.write(data_b)
-    got_a, got_b, nods = bytearray(), bytearray(), [0, 0]
+    got_a, got_b, nods = bytearray(), bytearray(), [0, 0, 0]  # expanded, taken, from >1 control codeword
     burst, sender = a.build(nod=True), a
     for _ in range(max_turns):
         receiver = b if sender is a else a
@@ -140,11 +141,13 @@ def run(seed, a_nods=True, b_nods=True, max_turns=3000, modes=tuple(NOD_MODES)):
                 p = receiver.nod_payload(meaning)
                 assert p is not None
                 want, have = _ctl(burst), F.Control.unpack([p])
-                assert want.core == have.core, (want.core, have.core)
+                # n_ctl: the wire control's codewords; a nod's is packed in NOD_MODE (one)
+                assert dataclasses.replace(want.core, n_ctl=0) == dataclasses.replace(have.core, n_ctl=0), (want.core, have.core)
                 for t in (F.T_DUPCTL, F.T_CHAT):
                     assert (t in want.ext) == (t in have.ext)
                 assert _reply(want.ext) == _reply(have.ext)
                 nods[0] += 1
+                nods[2] += sum(s.mask_id[2] >= 128 for s in burst.slots) > 1
                 ok = receiver.handle(receiver.nod_rx(meaning))
                 nods[1] += ok
             else:
@@ -173,11 +176,13 @@ def test_nods_stand_for_their_controls(nodding, seed):
 
 @pytest.mark.parametrize("seed", range(3))
 def test_nod_always_nods_in_ofdm(nodding, monkeypatch, seed):
-    """DATA2G_NOD_ALWAYS: an OFDM-only link nods too (none without it)."""
-    assert run(seed, modes=("qpsk-r1/2",))[2] == [0, 0]
+    """DATA2G_NOD_ALWAYS: an OFDM-only link nods too (none without it), its
+    control 4 B a codeword (ack-1f's) so most take more than one."""
+    monkeypatch.setattr(AskingPolicy, "ctl_payload_bytes", lambda self, m: CTL_BYTES if m in CPM else 4)
+    assert run(seed, modes=("qpsk-r1/2",))[2][0] == 0
     monkeypatch.setattr(L, "NOD_ALWAYS", True)
     nods = run(seed, modes=("qpsk-r1/2",))[2]
-    assert nods[1] >= 3 and nods[1] == nods[0], nods
+    assert nods[1] >= 3 and nods[1] == nods[0] and nods[2] >= 1, nods
 
 
 @pytest.mark.parametrize("seed", range(3))
@@ -186,7 +191,7 @@ def test_no_nods_to_a_peer_that_never_said(nodding, seed):
     never nods to it (it stops telling once b acted on it, as with any
     peer); b's own replies stay full."""
     a, b, nods = run(seed, b_nods=False)
-    assert nods == [0, 0] and not a.nod_peer and a._nods_told and b.nod_peer
+    assert nods[:2] == [0, 0] and not a.nod_peer and a._nods_told and b.nod_peer
 
 
 def test_t_nods_until_acted_on(nodding):

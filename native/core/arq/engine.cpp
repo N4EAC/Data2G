@@ -1268,6 +1268,8 @@ void Engine::hear_burst(receiver::BurstEvent& ev, double t) {
         session_snr_ = meas->snr_est;
         // its start from my burst's end (the receiver was reset there): the expected slot learns
         if (r->cpm) slot_.heard(static_cast<double>(ev.header.start()) / config::FS, r->cpm->cfo);
+        else if (nod_always() && r->ofdm)  // OFDM-only links: the nod search needs a slot (link.NOD_ALWAYS)
+            slot_.heard(static_cast<double>(ev.header.start()) / config::FS, r->ofdm->cfo);
     }
     if (cfg_.kiss && !ours) {
         if (auto frames = cfg_.kiss->on_burst(*r, rx)) {  // a broadcast burst: not the session's

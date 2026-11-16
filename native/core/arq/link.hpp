@@ -42,6 +42,8 @@ bool prime_default();
 bool repeat_default();
 // link.NOD: DATA2G_NOD=0 turns nods off (docs/arq.md §3b; read once).
 bool nod_default();
+// DATA2G_NOD_ALWAYS=1 (testing): nod any expressible reply, any mode; the reply slot learns from OFDM too
+bool nod_always();
 inline constexpr const char* NOD_MODE = "fsk16r25-r1/3";  // the mode a nod's control is packed and named in
 
 // Python's logging, by logger name ("data2g.link", "data2g.session") and

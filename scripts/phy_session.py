@@ -31,6 +31,7 @@ import numpy as np
 from data2g import hfchannel, modem
 from data2g import interference as INTF
 from data2g.arq import phy as PHY
+from data2g.arq import link as LK
 from data2g.config import BANDS, FS, LEADIN_SAMPLES, SNR_REF_BW_HZ, SUBMODES
 from data2g.receiver import NoiseProfile, ReplySlot, receive_any
 
@@ -292,7 +293,7 @@ class RealPhy:
         if rx is not None:
             if r is not None:
                 end = self.tx_end.get(rx)
-                self.slots[rx].heard(None if end is None else t0 - end, r.get("cfo") if r.get("family") == "cpm" else None)
+                self.slots[rx].heard(None if end is None else t0 - end, r.get("cfo") if r.get("family") == "cpm" or LK.NOD_ALWAYS else None)
         return r
 
     def primed(self, y, t0, rx):
