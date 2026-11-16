@@ -70,7 +70,7 @@ assert FCENTER * NSYM % FS == 0, "FCENTER * NSYM must be a multiple of FS"
 # -(f + FCENTER) only if that lands on the grid (waveform.dsp.to_baseband).
 assert (CARRIER0 + FCENTER) % RS == 0, "CARRIER0 + FCENTER must be a multiple of RS"
 
-SYMS_PER_FRAME = 6  # 1 pilot + 5 data
+SYMS_PER_FRAME = int(os.environ.get("DATA2G_SYMS_PER_FRAME", 6))  # 1 pilot + 5 data (env: studies only, scripts/fm_pilot_study.py)
 DATA_SYMS_PER_FRAME = SYMS_PER_FRAME - 1
 FRAME_SAMPLES = SYMS_PER_FRAME * NSYM  # 1152 = 144 ms
 

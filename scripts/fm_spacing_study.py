@@ -83,6 +83,11 @@ def specs():
         out = {"qpsk-r1/2": SUBMODES["qpsk-r1/2"],
                "16qam-r1/2": replace(SUBMODES["16qam-r1/2"], clip_headroom_db=1),
                "64l-r3/4": SubmodeSpec(11, "w-64l-r3/4", "ldpc", "c64-w48-r34", 4, 2160, band="w", clip_headroom_db=5)}
+    if config.DATA_SYMS_PER_FRAME != 5:  # DATA2G_SYMS_PER_FRAME (fm_pilot_study): the same codewords in fewer, longer frames
+        for k, s in out.items():
+            f = s.frames_per_cw * 5
+            assert f % config.DATA_SYMS_PER_FRAME == 0, (s.name, config.DATA_SYMS_PER_FRAME)
+            out[k] = replace(s, frames_per_cw=f // config.DATA_SYMS_PER_FRAME)
     for s in out.values():
         config.SUBMODES[s.name] = s
         config.BY_INDEX[(s.sync_band, s.index)] = s

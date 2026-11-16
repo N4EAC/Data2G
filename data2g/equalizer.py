@@ -23,6 +23,7 @@ substituted (tests/native_subs/base.py's EQUALIZER_NATIVE, private
 _doppler_corr included).
 """
 
+import os
 from functools import lru_cache
 from typing import TypedDict
 
@@ -44,7 +45,7 @@ TIME_TAPS = 4
 # The same for equalizer.refine, whose data rows are 6 times denser.
 DD_TAPS = 2
 # Doppler spread assumed when the burst is too short to measure one.
-DEFAULT_SPREAD_HZ = 2.0
+DEFAULT_SPREAD_HZ = float(os.environ.get("DATA2G_DEFAULT_SPREAD_HZ", 2.0))  # env: studies only (fm_pilot_study)
 # The Wiener filters' spread, picked per burst by leave-one-out pilot
 # prediction (filter_spread): measure_spread's lag-1 estimate scatters low
 # in 6-16 frame bursts (mpp, 6 frames: p10 0.34 Hz of 1), which over-

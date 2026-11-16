@@ -504,7 +504,7 @@ def burst_waveform(data: np.ndarray, spec: SubmodeSpec) -> np.ndarray:
     kc = copy_frame(spec.sync_band, n_f)
     if kc is not None:  # the header copy: a frame of its own (data band = sync band here)
         h = hdr.reshape(sb.spec.header_syms, sb.nc)
-        row = np.concatenate([h, h[:DATA_SYMS_PER_FRAME - len(h)]])
+        row = np.resize(h, (DATA_SYMS_PER_FRAME, sb.nc))  # the header, repeated to fill the frame
         data = np.insert(data, kc, row, axis=0)
         n_f += 1
     syms = np.empty((n_f * SYMS_PER_FRAME + 1, b.nc), dtype=np.complex128)
@@ -709,7 +709,7 @@ def _copy_llr(z: np.ndarray, p: int, band: str, n_hdr: int) -> np.ndarray | None
     llr = constellation.llr(ys, hs, np.ones(ys.shape), QPSK).reshape(DATA_SYMS_PER_FRAME, -1)
     out = llr[:n_hdr].copy()
     for i in range(n_hdr, DATA_SYMS_PER_FRAME):
-        out[i - n_hdr] += llr[i]
+        out[i % n_hdr] += llr[i]  # row i repeats header symbol i mod n_hdr (burst_waveform's np.resize)
     return out.reshape(-1)
 
 
@@ -1051,7 +1051,7 @@ def receive(x: np.ndarray, bands=None, accept: Accept | None = None, head: int |
         pc = p0 + kc * FRAME_SAMPLES
         ys = [b.demod_window(z, pc + s * NSYM + NCP, HEADER_BACKOFF) for s in range(SYMS_PER_FRAME + 1)]
         h = ref_syms[~layout]
-        ref2 = [b.pilot, *np.concatenate([h, h[:DATA_SYMS_PER_FRAME - len(h)]]), b.pilot]
+        ref2 = [b.pilot, *np.resize(h, (DATA_SYMS_PER_FRAME, b.nc)), b.pilot]
         runs.append([y * np.conj(r) for y, r in zip(ys, ref2)])
     d = sum(np.sum(run[i + 1] * np.conj(run[i])) for run in runs for i in range(len(run) - 1))
     coarse = float(np.angle(d) / (2 * np.pi * NSYM / FS))
