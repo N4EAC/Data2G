@@ -72,6 +72,7 @@ from .config import (
     SNR_REF_BW_HZ,
     SUBMODES,
     SYMBOL_NOISE,
+    SYMBOL_NOISE_GATE,
     SYMS_PER_FRAME,
     SubmodeSpec,
 )
@@ -1117,7 +1118,8 @@ def symbol_noise_scale(y: np.ndarray, h: np.ndarray, var: np.ndarray, points: np
     no window and moves nothing)."""
     d = np.abs(y[..., None] - h[..., None] * points).min(axis=-1)  # (n_f, 5, nc)
     r = np.mean(d**2 / var, axis=-1, keepdims=True)
-    return np.maximum(1.0, r / max(float(np.median(r)), 1e-12))
+    ratio = r / max(float(np.median(r)), 1e-12)
+    return np.where(ratio > SYMBOL_NOISE_GATE, np.maximum(1.0, ratio), 1.0)
 
 
 def soft_bits(raw: np.ndarray, h: np.ndarray, var: np.ndarray, spec: SubmodeSpec) -> np.ndarray:

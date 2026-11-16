@@ -121,6 +121,8 @@ ACQUIRE_REACH_HZ = float(os.environ.get("DATA2G_ACQUIRE_REACH_HZ", {"hf": 150.0,
 # 0.2-0.35, never worse. Not tried on HF yet. DATA2G_SYMBOL_NOISE (0/1):
 # studies only.
 SYMBOL_NOISE = bool(int(os.environ.get("DATA2G_SYMBOL_NOISE", int(PROFILE == "fm"))))
+# Issue #207 study knob: scale only symbols this many times the median.
+SYMBOL_NOISE_GATE = float(os.environ.get("DATA2G_SYMBOL_NOISE_GATE", 1.0))
 FIRST_PATH_SEARCH = NCP
 FIRST_PATH_FRAC = 0.5
 
