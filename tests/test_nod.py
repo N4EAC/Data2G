@@ -4,7 +4,6 @@ only to a peer that sent it, and every nod a listener takes expands to the
 control it stands for, both streams arriving whole through lost bursts and
 lost nods."""
 
-import dataclasses
 import random
 
 import numpy as np
@@ -142,7 +141,8 @@ def run(seed, a_nods=True, b_nods=True, max_turns=3000, modes=tuple(NOD_MODES)):
                 assert p is not None
                 want, have = _ctl(burst), F.Control.unpack([p])
                 # n_ctl: the wire control's codewords; a nod's is packed in NOD_MODE (one)
-                assert dataclasses.replace(want.core, n_ctl=0) == dataclasses.replace(have.core, n_ctl=0), (want.core, have.core)
+                fields = ("ftype", "burst_seq", "acted_on", "cum", "reply_lost", "k", "recommend", "size_hint")
+                assert [getattr(want.core, f) for f in fields] == [getattr(have.core, f) for f in fields], (want.core, have.core)
                 for t in (F.T_DUPCTL, F.T_CHAT):
                     assert (t in want.ext) == (t in have.ext)
                 assert _reply(want.ext) == _reply(have.ext)
@@ -175,9 +175,11 @@ def test_nods_stand_for_their_controls(nodding, seed):
 
 
 @pytest.mark.parametrize("seed", range(3))
-def test_nod_always_nods_in_ofdm(nodding, monkeypatch, seed):
+def test_nod_always_nods_in_ofdm(nodding, monkeypatch, request, seed):
     """DATA2G_NOD_ALWAYS: an OFDM-only link nods too (none without it), its
     control 4 B a codeword (ack-1f's) so most take more than one."""
+    if request.config.getoption("--native"):
+        pytest.skip("native reads DATA2G_NOD_ALWAYS once per process (covered by with_native loss_study)")
     monkeypatch.setattr(AskingPolicy, "ctl_payload_bytes", lambda self, m: CTL_BYTES if m in CPM else 4)
     assert run(seed, modes=("qpsk-r1/2",))[2][0] == 0
     monkeypatch.setattr(L, "NOD_ALWAYS", True)
