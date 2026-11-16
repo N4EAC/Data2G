@@ -135,8 +135,8 @@ SYMBOL_NOISE = bool(int(os.environ.get("DATA2G_SYMBOL_NOISE", int(PROFILE == "fm
 SPREAD_WINDOW = int(os.environ.get("DATA2G_SPREAD_WINDOW", {"hf": 0, "fm": 8}[PROFILE]))
 EST_WINDOW = int(os.environ.get("DATA2G_EST_WINDOW", {"hf": 0, "fm": 8}[PROFILE]))
 # Decoding while the burst arrives (receiver.Receiver "partial" events, ModemRx.advance):
-# Python only so far, off until native has it. DATA2G_DECODE_EARLY=1: studies.
-DECODE_EARLY = bool(int(os.environ.get("DATA2G_DECODE_EARLY", 0)))
+# FM on (its windows let codeword groups complete early); HF has no windows. DATA2G_DECODE_EARLY: studies.
+DECODE_EARLY = bool(int(os.environ.get("DATA2G_DECODE_EARLY", {"hf": 0, "fm": 1}[PROFILE])))
 FIRST_PATH_SEARCH = NCP
 FIRST_PATH_FRAC = 0.5
 

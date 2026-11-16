@@ -920,6 +920,10 @@ void Engine::hear(std::vector<receiver::Receiver::Item>& items, double t) {
             receiver::run(*f);
             continue;
         }
+        if (auto* q = std::get_if<receiver::PartialRequest>(&it)) {  // an OFDM burst's, while it arrives
+            hear_partial(*q);
+            continue;
+        }
         if (auto* h = std::get_if<receiver::HeaderEvent>(&it)) {
             session_->on_header(spec_name(h->header), h->header.n_cw(), t);
             // the burst's span: its lead-in (the header's start, stream_end
@@ -1168,6 +1172,19 @@ void Engine::nod_collect(std::span<const double> x, double t) {
     session_->on_rx(rx, t);
 }
 
+// Decoding while the burst arrives (config::SPREAD_WINDOW, engine.py's "partial"): the codeword groups complete
+// so far, DD on this window's share of the burst's budget; hear_burst finishes the same ModemRx.
+void Engine::hear_partial(const receiver::PartialRequest& q) {
+    auto r = receiver::receive_partial(q, accept_);
+    if (!r) return;
+    const double share = std::min(1.0, static_cast<double>(config::SPREAD_WINDOW) / r->n_frames());
+    Heard h;
+    h.ofdm = std::make_shared<const modem::Received>(std::move(*r));
+    if (!inc_ || inc_->start != q.header.start())
+        inc_ = Inc{q.header.start(), std::make_shared<ModemRx>(h, &store_, cfg_.dd_budget_s, nullptr, cfg_.dd)};
+    inc_->rx->advance(std::move(h), cfg_.dd_budget_s ? std::optional(*cfg_.dd_budget_s * share) : std::nullopt);
+}
+
 void Engine::hear_burst(receiver::BurstEvent& ev, double t) {
     // on_read: the burst's decoder handed over last, on every return (after Tally and Timing below are done with it)
     struct Handoff {
@@ -1217,10 +1234,14 @@ void Engine::hear_burst(receiver::BurstEvent& ev, double t) {
     std::optional<Heard> r;
     std::optional<Measured> meas;
     std::shared_ptr<const SlotSoft> soft;
+    std::shared_ptr<ModemRx> inc;  // this burst's decoder, decoding since its first groups arrived
+    if (inc_ && inc_->start == ev.header.start() && ev.rx && std::holds_alternative<modem::Received>(*ev.rx))
+        inc = std::move(inc_->rx);
+    inc_.reset();
     if (ev.rx) {
         r = heard_of(std::move(*ev.rx));
         meas = measure(*r);
-        soft = soft_bits(*r);
+        if (!inc) soft = soft_bits(*r);  // advance() makes the slots' still undecoded as asked
     }
     const std::optional<Span> span = std::move(heard_span_);
     heard_span_.reset();
@@ -1249,7 +1270,8 @@ void Engine::hear_burst(receiver::BurstEvent& ev, double t) {
         if (hand_refs_.size() > HAND_REFS_KEPT) hand_refs_.erase(hand_refs_.begin());
         hand_event(format("REF %d %.2f %.1f %.1f", hand_ref_n_, end, cfo, meas->snr_est));
     }
-    const auto rxp = std::make_shared<ModemRx>(*r, &store_, cfg_.dd_budget_s, soft, cfg_.dd);
+    const auto rxp = inc ? inc : std::make_shared<ModemRx>(*r, &store_, cfg_.dd_budget_s, soft, cfg_.dd);
+    if (inc) inc->advance(*r);  // the rest: the last groups, and DD on what the burst's budget has left
     ModemRx& rx = *rxp;
     if (on_read_) handoff.rx = rxp;
     timing.rx = &rx;

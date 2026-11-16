@@ -1021,7 +1021,7 @@ double resolve_alias(double fine, double coarse) {
 }
 
 Received receive(std::span<const double> x, std::span<const std::string_view> bands, const Accept* accept,
-                 std::optional<int64_t> head, const Lock* copy) {
+                 std::optional<int64_t> head, const Lock* copy, bool partial) {
     const auto z0 = waveform::to_baseband(x);
     const auto len = static_cast<int64_t>(z0.size());
     HeaderRead hd;
@@ -1042,7 +1042,7 @@ Received receive(std::span<const double> x, std::span<const std::string_view> ba
         hd = std::move(b.hd);
         acq = std::move(b.acq);
         z = waveform::freq_correct(z0, acq.freq_offset);
-        if (burst_end(hd.p0, *hd.hdr.spec, hd.hdr.n_cw) > len) throw SyncError("burst runs past the buffer");
+        if (!partial && burst_end(hd.p0, *hd.hdr.spec, hd.hdr.n_cw) > len) throw SyncError("burst runs past the buffer");
     }
     const std::string_view sband = hd.band;  // the sync band; frames are on spec.band's carriers
     const auto& b = waveform::band(sband);
@@ -1051,8 +1051,14 @@ Received receive(std::span<const double> x, std::span<const std::string_view> ba
     const int n_cw = hd.hdr.n_cw;
     const std::string_view db = spec.band;
     const int n_f = n_cw * spec.frames_per_cw;
-    const auto kc = copy_frame(sband, n_f);
-    const int n_air = n_f + kc.has_value();
+    auto kc = copy_frame(sband, n_f);
+    int n_air = n_f + kc.has_value();
+    if (partial) {  // the frames in so far, each with its closing pilot (and room for the window's shift)
+        n_air = static_cast<int>(std::min<int64_t>(n_air, std::max<int64_t>(0, (len - hd.p0 - NSYM - 2 * NCP) / FRAME_SAMPLES)));
+        if (n_air < 1) throw SyncError("no whole frame yet");
+        if (kc && *kc >= n_air) kc.reset();  // its copy not in yet
+    }
+    const int n_in = n_air - kc.has_value();  // data frames in
     const double phi_ref = bin_phase_step(hd.h_pre);
 
     // Residual CFO's alias from the known header symbols (modem.py's notes)
@@ -1145,6 +1151,7 @@ Received receive(std::span<const double> x, std::span<const std::string_view> ba
     out.seen_support = seen;
     out.preamble_start = hd.start;
     out.score = hd.hdr.score;
+    out.frames_in = n_in;
     return out;
 }
 
@@ -1210,25 +1217,44 @@ Mat<double> burst_soft(const Received& r, const DataEstimate& est) {
     return out;
 }
 
-std::vector<double> slot_soft(const Received& r, const DataEstimate& est, int slot) {
-    const size_t nc = r.raw.cols, total = est.h.data.size(), n = static_cast<size_t>(r.n_cw);
+std::vector<size_t> slot_cells(const Received& r, int slot) {
+    const size_t n = static_cast<size_t>(r.n_cw), syms = n * static_cast<size_t>(r.spec->coded_bits / r.spec->bits_per_cu);
+    std::vector<size_t> idx(syms);
+    std::iota(idx.begin(), idx.end(), size_t{0});
+    const auto cells = codes::despread<size_t>(idx, r.n_cw, 1, spread_group(*r.spec));
+    const auto at = cells.begin() + static_cast<std::ptrdiff_t>(static_cast<size_t>(slot) * (syms / n));
+    return {at, at + static_cast<std::ptrdiff_t>(syms / n)};
+}
+
+std::vector<int> ready_slots(const Received& r, int margin) {
+    const int frames = r.partial() ? r.frames_in - margin : r.n_frames();
+    const auto have = static_cast<int64_t>(frames) * DATA_SYMS_PER_FRAME * waveform::band(r.spec->band).nc();
+    const size_t n = static_cast<size_t>(r.n_cw), syms = n * static_cast<size_t>(r.spec->coded_bits / r.spec->bits_per_cu);
+    std::vector<size_t> idx(syms);
+    std::iota(idx.begin(), idx.end(), size_t{0});
+    const auto cells = codes::despread<size_t>(idx, r.n_cw, 1, spread_group(*r.spec));  // slot by slot, as slot_cells
+    std::vector<int> out;
+    for (size_t s = 0; s < n; ++s) {
+        const auto at = cells.begin() + static_cast<std::ptrdiff_t>(s * (syms / n));
+        if (static_cast<int64_t>(*std::max_element(at, at + static_cast<std::ptrdiff_t>(syms / n))) < have)
+            out.push_back(static_cast<int>(s));
+    }
+    return out;
+}
+
+std::vector<double> soft_scale(const Received& r, const DataEstimate& est) {
+    if constexpr (!config::SYMBOL_NOISE) return {};
+    auto full = noise_var(est.h, est);
+    for (size_t i = 0; i < full.data.size(); ++i) full.data[i] += est.mse.data[i];
+    return symbol_noise_scale(r, est.h, full);
+}
+
+std::vector<double> slot_soft(const Received& r, const DataEstimate& est, int slot, std::span<const double> scale) {
+    const size_t nc = r.raw.cols;
     std::vector<cd> y, h;
     std::vector<double> var;
-    // ponytail: SYMBOL_NOISE's per-symbol factors are recomputed per slot (every row's, a slot's cells span them all);
-    // cache them with the estimate if FM's slot-at-a-time decoding shows on the Pi.
-    std::vector<double> scale;
-    if constexpr (config::SYMBOL_NOISE) {
-        auto full = noise_var(est.h, est);
-        for (size_t i = 0; i < full.data.size(); ++i) full.data[i] += est.mse.data[i];
-        scale = symbol_noise_scale(r, est.h, full);
-    }
-    // the slot's cells in its order: codes::despread of the cell indices (round-robin, or by spread_group's windows)
-    std::vector<size_t> idx(total);
-    std::iota(idx.begin(), idx.end(), size_t{0});
-    const auto cells = codes::despread<size_t>(idx, static_cast<int>(n), 1, spread_group(*r.spec));
-    const size_t per = total / n;
-    for (size_t i = 0; i < per; ++i) {
-        const size_t j = cells[static_cast<size_t>(slot) * per + i];
+    // the slot's cells in its order (within what is in, on a partial burst)
+    for (const size_t j : slot_cells(r, slot)) {
         const size_t row = j / nc, c = j % nc;
         const cd hj = est.h.data[j];
         y.push_back(data_row(r.raw, row)[c]);

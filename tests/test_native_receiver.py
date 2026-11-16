@@ -113,9 +113,9 @@ def test_receiver_chunking_independent(native, reference, mixed):
         return d and {k: v for k, v in d.items()
                       if k != "stream_end" and not (cpm_ and k in ("header_end", "preamble_start"))}
 
-    def run(R, chunk):
+    def run(R, chunk):  # (not "partial" events: they come a window's audio apart, as it was fed)
         return [(k, drop(ev)) if k == "header" else (k, dict(ev, header=drop(ev["header"]), rx=drop(ev["rx"])))
-                for k, ev in _events(R(acc, cpm_grids=tuple(cpm.GRIDS)), mixed, chunk)]
+                for k, ev in _events(R(acc, cpm_grids=tuple(cpm.GRIDS)), mixed, chunk) if k != "partial"]
 
     R, P = _wrapper(native), reference(receiver, "Receiver")
     k = FS // 8000  # chunks of the blanker's block (FS / 100) that divide HOP (FS / 4)
@@ -172,3 +172,22 @@ def test_receive_any_matches(native, reference):
 def test_search_span_matches(native, reference):
     for bands, grids in ((["w"], []), (["w", "n10", "w48"], list(cpm.GRIDS)), ([], ["c8r50"])):
         assert native.receiver.search_span(bands, grids) == reference(receiver, "search_span")(bands, grids)
+
+
+@pytest.mark.skipif(not (receiver.DECODE_EARLY and receiver.SPREAD_WINDOW),
+                    reason="decoding while the burst arrives is FM's (config.DECODE_EARLY, SPREAD_WINDOW)")
+@pytest.mark.parametrize("chunk", [FS // 4, 333])
+def test_receiver_partial_events_match(native, reference, chunk):
+    """A 28-frame burst: "partial" events as codeword groups complete, then
+    its "burst" event; native as Python, rx included."""
+    spec = SUBMODES["w48-16qam-r1/2"]
+    rng = np.random.default_rng(6)
+    sent = [rng.bytes(codes.payload_bytes(spec)) for _ in range(7)]
+    x = np.concatenate([np.zeros(FS), modem.modulate(sent, spec), np.zeros(FS)])
+    y = hfchannel.apply_channel(x, snr_db=22, seed=2)
+    acc = modem.Accept.of([spec.name])
+    want = _events(reference(receiver, "Receiver")(acc), y, chunk)
+    got = _events(_wrapper(native)(acc), y, chunk)
+    kinds = [k for k, _ in want]
+    assert kinds.count("partial") >= 2 and kinds[-1] == "burst", kinds
+    same(got, want)

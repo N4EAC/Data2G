@@ -184,6 +184,7 @@ modem::Received received_of(const py::dict& r) {
     if (r.contains("kc") && !r["kc"].is_none()) rx.kc = r["kc"].cast<int>();
     rx.cfo = get<double>(r, "cfo", 0.0);
     rx.preamble_start = get<std::int64_t>(r, "preamble_start", 0);
+    rx.frames_in = get<int>(r, "frames_in", rx.n_cw * rx.spec->frames_per_cw);
     return rx;
 }
 
@@ -197,7 +198,7 @@ py::dict received_dict(const modem::Received& r) {
     d["band"] = std::string(r.band);
     d["hp"] = np(r.hp);
     d["kc"] = r.kc ? py::object(py::int_(*r.kc)) : py::object(py::none());
-    d["frames_in"] = r.n_cw * r.spec->frames_per_cw;  // native receives whole bursts (Python's partial: data2g.modem)
+    d["frames_in"] = r.partial() ? r.frames_in : r.n_frames();
     d["cfo"] = r.cfo;
     d["p0"] = r.p0;
     d["shift"] = r.shift;
@@ -370,7 +371,7 @@ void bind_modem(py::module_& m) {
         return header_dict(mo::copy_header(view(z), lock_of(lock)));
     });
     d.def("receive", [](const In<double>& x, const OptBands& bands, const py::object& accept,
-                        std::optional<std::int64_t> head, const std::optional<py::dict>& copy) {
+                        std::optional<std::int64_t> head, const std::optional<py::dict>& copy, bool partial) {
         const auto a = accept_of(accept);
         const auto bs = bands_of(bands);
         std::optional<mo::Lock> c;
@@ -378,11 +379,11 @@ void bind_modem(py::module_& m) {
         mo::Received r;
         {
             py::gil_scoped_release nogil;
-            r = mo::receive(view(x), bs, a ? &*a : nullptr, head, c ? &*c : nullptr);
+            r = mo::receive(view(x), bs, a ? &*a : nullptr, head, c ? &*c : nullptr, partial);
         }
         return received_dict(r);
     }, py::arg("x"), py::arg("bands") = py::none(), py::arg("accept") = py::none(), py::arg("head") = py::none(),
-       py::arg("copy") = py::none());
+       py::arg("copy") = py::none(), py::arg("partial") = false);
     d.def("resolve_alias", &mo::resolve_alias);
     d.def("data_channel", [](const In<cd>& h_pilot, equalizer::Support support, const std::string& band, double n0_pre,
                              const std::optional<py::tuple>& clip, const std::optional<In<double>>& n0_pre_k,
@@ -419,6 +420,9 @@ void bind_modem(py::module_& m) {
     d.def("slot_soft", [](const py::dict& r, const py::dict& est, int slot) {
         return np(mo::slot_soft(received_of(r), est_of(est), slot));
     });
+    d.def("slot_cells", [](const py::dict& r, int slot) { return np(mo::slot_cells(received_of(r), slot)); });
+    d.def("ready_slots", [](const py::dict& r, int margin) { return mo::ready_slots(received_of(r), margin); },
+          py::arg("r"), py::arg("margin") = 1);
     d.def("snr_db", [](const py::dict& est, const std::string& band) { return mo::snr_db(est_of(est), band); });
     d.def("symbol_times", [](const py::dict& r) {
         const auto t = mo::symbol_times(received_of(r));

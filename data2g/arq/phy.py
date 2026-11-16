@@ -290,6 +290,7 @@ class ModemRx:
         self._est, self._soft_dd = None, {}
         self.dd_total = dd_budget  # advance(): the whole burst's DD budget, shared out per window
         self._dd_spent = 0.0
+        self._early = set()  # slots advance() decoded: a keyed read at RV 0 checks that decode first
 
     def _adopt(self, r: dict) -> None:
         """r's soft bits: the whole burst's at once, or a partial burst's per
@@ -328,6 +329,7 @@ class ModemRx:
         new = [s for s in modem.ready_slots(r) if s not in self._raw]
         for s in new:
             self._decoded(s, self._spec(s))
+        self._early.update(new)
         self._dd_spent += time.monotonic() - t0
         return new
 
@@ -358,6 +360,12 @@ class ModemRx:
                     got = self._check_pinned(slot, spec, m, _ctl_index(mask_id))
                 self._memo[(slot, m)] = got
             return self._memo[(slot, m)]
+        if rv == 0 and slot in self._early and slot in self._raw:
+            # decoded while the burst arrived (advance): its CRC under this mask, before decoding it again
+            got = codes.check(spec, *self._raw[slot], m)
+            if got is not None:
+                self._learn(slot, spec, got, rv, m)
+                return got
         buf0, top, name, where = self.store.get(key, (None, 0, self.submode, None))
         if name != self.submode:  # a resend in another mode: what was kept can't combine, so start over
             log.warning("soft bits of %s stored in %s (%s), resent in %s slot %d rv %d: dropped", key, name, where,

@@ -14,13 +14,15 @@ CFO_HZ = min(37.0, 0.8 * ACQUIRE_REACH_HZ)
 from data2g.kisslink import pack_frames, unpack_frames
 
 
-@pytest.mark.python_only("decoding while the burst arrives (config.DECODE_EARLY)")
-def test_a_burst_decodes_while_it_arrives(monkeypatch):
+def test_a_burst_decodes_while_it_arrives(monkeypatch, request):
     """config.SPREAD_WINDOW: the receiver reports codeword groups as they
     complete ("partial"), a ModemRx decodes them before the burst ends, and
     the "burst" event finishes it: every slot as the whole-burst decode."""
     from data2g import config
     from data2g.arq import phy as PHY
+
+    if request.config.getoption("--native") and not (config.DECODE_EARLY and config.SPREAD_WINDOW):
+        pytest.skip("native's windows are compiled in: FM's (config.SPREAD_WINDOW)")
 
     for mod in (config, receiver):
         monkeypatch.setattr(mod, "SPREAD_WINDOW", 8)
@@ -42,7 +44,7 @@ def test_a_burst_decodes_while_it_arrives(monkeypatch):
                 inc.advance(ev["rx"])
                 done = inc
     assert len(early) >= 4 and done is not None
-    got = [codes.check(spec, *done._decoded(s, spec), 0) for s in range(7)]
+    got = [done.decode(s, (0, 0, 0), 0, None) for s in range(7)]
     assert got == sent
 
 

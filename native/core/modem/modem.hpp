@@ -209,10 +209,16 @@ struct Received {
     equalizer::Support seen_support;  // ungated: the window shift's, the reported delay's
     std::int64_t preamble_start = 0;
     double score = 0.0;
+    int frames_in = -1;  // data frames received (receive's partial: fewer than the burst's); -1: all
+    int n_frames() const { return n_cw * spec->frames_per_cw; }
+    bool partial() const { return frames_in >= 0 && frames_in < n_frames(); }
 };
 // head: the preamble and header lie in x[:head]. copy: find_copy's lock. Throws SyncError.
+// partial: x holds the burst only so far (decoding while it arrives): the air frames whose closing pilot is in,
+// frames_in data frames of them; ready_slots names the slots to decode. Throws SyncError before a whole frame.
 Received receive(std::span<const double> x, std::span<const std::string_view> bands = {},
-                 const Accept* accept = nullptr, std::optional<std::int64_t> head = {}, const Lock* copy = nullptr);
+                 const Accept* accept = nullptr, std::optional<std::int64_t> head = {}, const Lock* copy = nullptr,
+                 bool partial = false);
 double resolve_alias(double fine, double coarse);
 
 // var (rows, nc): n0_k (n0 if empty) per carrier + clip_ratio |h|^2.
@@ -231,9 +237,20 @@ inline const cd* data_row(const Mat<cd>& raw, std::size_t row) {
 // estimate's mse, soft_bits, codes::despread.
 Mat<double> burst_soft(const Received& r, const DataEstimate& est);
 inline Mat<double> burst_soft(const Received& r) { return burst_soft(r, r.est); }
+// The data cells (flat index over the whole burst's (frames, 5, nc)) holding `slot`'s symbols, in its order.
+std::vector<std::size_t> slot_cells(const Received& r, int slot);
+// The slots whose every symbol is in the frames received (r.frames_in), `margin` frames short of the last so each
+// has a pilot after it; a complete burst's are all.
+std::vector<int> ready_slots(const Received& r, int margin = 1);
+// symbol_noise_scale on est (data_var's factors), empty without config::SYMBOL_NOISE: slot_soft's, made once per estimate.
+std::vector<double> soft_scale(const Received& r, const DataEstimate& est);
 // burst_soft(r, est)'s row `slot` alone: codes::spread deals codeword symbols round-robin, so the slot's are every
-// n_cw-th of the burst's.
-std::vector<double> slot_soft(const Received& r, const DataEstimate& est, int slot);
+// n_cw-th of the burst's (of its window's). On a partial burst, a ready_slots one. scale: soft_scale(r, est).
+std::vector<double> slot_soft(const Received& r, const DataEstimate& est, int slot, std::span<const double> scale);
+inline std::vector<double> slot_soft(const Received& r, const DataEstimate& est, int slot) {
+    const auto s = soft_scale(r, est);
+    return slot_soft(r, est, slot, s);
+}
 // Pilot SNR (dB) on `band`'s carriers, in the SNR_REF_BW_HZ convention.
 double snr_db(const equalizer::Estimate& est, std::string_view band);
 // On-air seconds from the first frame pilot, the header copy's frame accounted for.

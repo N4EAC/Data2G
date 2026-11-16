@@ -255,7 +255,9 @@ std::optional<Bytes> ModemRx::decode_known(int slot, const MaskId& mask, ByteVie
 
 ModemRx::ModemRx(Heard r, SoftStore* store, std::optional<double> dd_budget, std::shared_ptr<const SlotSoft> soft,
                  bool dd, Clock clock)
-    : r_(std::move(r)), store_(store), soft_(soft ? std::move(soft) : soft_bits(r_)), dd_(dd), clock_(std::move(clock)) {
+    : r_(std::move(r)), store_(store), soft_(std::move(soft)), dd_(dd), clock_(std::move(clock)), dd_total_(dd_budget) {
+    // a partial burst's soft bits are made per ready slot as asked
+    if (!soft_ && !(r_.ofdm && r_.ofdm->partial())) soft_ = soft_bits(r_);
     if (dd_budget) dd_until_ = clock_() + *dd_budget;
     const Mode& md = r_.mode();
     submode_ = std::string(md.name);
@@ -277,8 +279,59 @@ bool ModemRx::late() const { return dd_until_ && clock_() >= *dd_until_; }
 
 // The slot's soft bits on the estimate in use. A refined estimate's are
 // made per slot as asked (modem::slot_soft; CPM: its coherent metric, cpm::dd_metric).
+void ModemRx::make_soft(std::span<const int> slots) {
+    if (soft_) return;
+    std::vector<int> todo;
+    for (int s : slots)
+        if (!own_.count(s)) todo.push_back(s);
+    if (todo.empty()) return;
+    const auto& R = *r_.ofdm;
+    if (!scale_made_) {
+        scale_ = modem::soft_scale(R, R.est);
+        scale_made_ = true;
+    }
+    std::vector<std::vector<double>> got(todo.size());
+    pool::parallel_for(todo.size(), [&](std::size_t t) { got[t] = modem::slot_soft(R, R.est, todo[t], scale_); });
+    for (std::size_t t = 0; t < todo.size(); ++t) own_[todo[t]] = std::move(got[t]);
+}
+
+std::vector<int> ModemRx::advance(Heard r, std::optional<double> budget_s) {
+    if (!r.ofdm) throw std::invalid_argument("ModemRx::advance: an OFDM burst");
+    r_ = std::move(r);
+    // the slots decoded already need no soft bits: the rest's as asked, a whole burst's included
+    soft_.reset();
+    own_.clear();
+    scale_made_ = false;
+    memo_.clear();
+    pinned_.clear();
+    pairs_.clear();
+    prepared_.clear();
+    std::erase_if(raw_, [](const auto& kv) {
+        return std::none_of(kv.second.usable.begin(), kv.second.usable.end(), [](auto u) { return u != 0; });
+    });
+    cur_ = DdState{nullptr, std::make_shared<std::map<int, std::vector<double>>>(), nullptr};
+    sym_cache_ = {};  // its soft pilots were made on the last estimate's noise
+    if (dd_total_) {
+        const double left = std::max(0.0, *dd_total_ - dd_spent_);
+        budget_s = budget_s ? std::min(*budget_s, left) : left;
+    }
+    const double t0 = clock_();
+    dd_until_ = budget_s ? std::optional(t0 + *budget_s) : std::nullopt;
+    std::vector<int> fresh;
+    for (int s : modem::ready_slots(*r_.ofdm))
+        if (!raw_.count(s)) fresh.push_back(s);
+    for (int s : fresh) decoded(s, spec(s));
+    early_.insert(fresh.begin(), fresh.end());
+    dd_spent_ += clock_() - t0;
+    return fresh;
+}
+
 const std::vector<double>& ModemRx::slot_soft(int slot) {
-    if (!cur_.refined()) return (*soft_)[static_cast<std::size_t>(slot)];
+    if (!cur_.refined()) {
+        const int one[1] = {slot};
+        make_soft(one);
+        return made(slot);
+    }
     auto& cache = *cur_.soft;
     auto it = cache.find(slot);
     if (it != cache.end()) return it->second;
@@ -300,6 +353,13 @@ std::optional<Bytes> ModemRx::decode(int slot, const MaskId& mask, int rv, const
 
 void ModemRx::forget(const SoftKey& key) {
     if (store_) store_->erase(key);
+}
+
+std::optional<Bytes> ModemRx::early_read(int slot, std::uint32_t m, int rv) const {
+    if (rv != 0 || !early_.count(slot)) return std::nullopt;
+    const auto it = raw_.find(slot);
+    if (it == raw_.end()) return std::nullopt;
+    return codes::check(spec(slot), it->second.cands, it->second.usable, m);
 }
 
 std::optional<Bytes> ModemRx::plain_read(int slot, const MaskId& mask) {
@@ -591,6 +651,11 @@ std::optional<Bytes> ModemRx::stored_read(int slot, const MaskId& mask, int rv, 
     const std::uint32_t m = mask_value(mask);
     const auto& s = spec(slot);
     tried_.insert(slot);
+    if (auto p = early_read(slot, m, rv)) {  // decoded while the burst arrived
+        learn(slot, s, *p, rv, m);
+        ok_.insert(slot);
+        return p;
+    }
     if (stored && stored->submode != submode_) {  // a resend in another mode: what was kept can't combine
         log_write("data2g.arq.phy", 30,
                   format("soft bits stored in %s (slot %d rv %d), resent in %s slot %d rv %d: dropped",
@@ -660,10 +725,16 @@ void ModemRx::prepare(std::span<const DecodeRequest> reqs) {
     std::vector<const DecodeRequest*> todo;
     for (const auto& q : reqs) {
         if (q.slot >= n_cw_ || (n_ctl_slots_ && (q.mask.seq >= SEQ_MOD) != (q.slot < n_ctl_slots_))) continue;
+        if (early_read(q.slot, mask_value(q.mask), q.rv)) continue;  // answered by advance()'s decode
         if (!keys.insert(q.key).second) return;
         todo.push_back(&q);
     }
     if (todo.size() < 2) return;
+    {
+        std::vector<int> slots;
+        for (const auto* q : todo) slots.push_back(q->slot);
+        make_soft(slots);
+    }
     std::vector<Prepared> out(todo.size());
     try {
         pool::parallel_for(todo.size(), [&](std::size_t t) {
@@ -674,7 +745,7 @@ void ModemRx::prepare(std::span<const DecodeRequest> reqs) {
             int top = q.rv;
             if (kept) top = std::max(store_->find(q.key)->second.top, q.rv);
             out[t] = {q.rv, mask_value(q.mask), kept != nullptr,
-                      decode_pass(spec(q.slot), dd(spec(q.slot)), q.slot, q.rv, mask_value(q.mask), top, (*soft_)[static_cast<std::size_t>(q.slot)], kept)};
+                      decode_pass(spec(q.slot), dd(spec(q.slot)), q.slot, q.rv, mask_value(q.mask), top, made(q.slot), kept)};
         });
     } catch (...) {
         return;  // the sequential decodes will meet whatever it was themselves
@@ -719,11 +790,12 @@ void ModemRx::remake_estimate(const codes::Spec& s) {
             return;
         }
         std::vector<int> todo;
-        for (int i = n_ctl_slots_; i < n_cw_; ++i)
+        for (int i : modem::ready_slots(*r_.ofdm))  // a partial burst: the slots in so far
             if (!post_.count(i)) todo.push_back(i);
+        make_soft(todo);
         std::vector<std::vector<double>> got(todo.size());
         pool::parallel_for(todo.size(), [&](std::size_t t) {
-            const auto& v = (*soft_)[static_cast<std::size_t>(todo[t])];
+            const auto& v = made(todo[t]);
             Mat<float> llr(1, v.size());
             std::copy(v.begin(), v.end(), llr[0]);
             const auto info = codes::decode_llrs(s, llr);

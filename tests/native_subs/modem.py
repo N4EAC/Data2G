@@ -156,10 +156,10 @@ def substitutions(native):
         return hdr_dict(N.copy_header(z, lock))
 
     # `known` (data2g-bulk's receive at a known position) has no native port: Python's
-    @guarded("receive", lambda x, bands=None, accept=None, head=None, copy=None, known=None:
+    @guarded("receive", lambda x, bands=None, accept=None, head=None, copy=None, known=None, partial=False:
              known is None and (copy is None or lock_ok(copy)))
-    def receive(x, bands=None, accept=None, head=None, copy=None):
-        d = N.receive(f64(x), bands_arg(bands), accept, None if head is None else int(head), copy)
+    def receive(x, bands=None, accept=None, head=None, copy=None, partial=False):
+        d = N.receive(f64(x), bands_arg(bands), accept, None if head is None else int(head), copy, bool(partial))
         return dict(d, spec=config.SUBMODES[d["spec"]], acq=acq(d["acq"]))
 
     @guarded("data_channel", lambda h_pilot, support, band="w", *a, **k: band in config.BANDS)

@@ -72,6 +72,7 @@ Heard heard_of(const py::dict& r) {
     o->support = {sup[0].cast<int>(), sup[1].cast<int>()};
     const auto seen = (r.contains("seen_support") ? r["seen_support"] : r["support"]).cast<py::sequence>();
     o->seen_support = {seen[0].cast<int>(), seen[1].cast<int>()};
+    o->frames_in = r.contains("frames_in") ? r["frames_in"].cast<int>() : o->n_cw * o->spec->frames_per_cw;
     h.ofdm = std::move(o);
     return h;
 }
@@ -124,8 +125,14 @@ public:
     PyModemRx(py::dict r, py::object store, std::optional<double> dd_budget, bool dd, const py::object& clock)
         : store_(std::move(store)) {
         auto h = heard_of(r);
-        auto soft = cached_soft(r, h);
+        auto soft = h.ofdm && h.ofdm->partial() ? nullptr : cached_soft(r, h);  // a partial burst's: per slot
         rx_ = std::make_unique<ModemRx>(std::move(h), nullptr, dd_budget, std::move(soft), dd, clock_of(clock));
+    }
+
+    std::vector<int> advance(const py::dict& r, std::optional<double> budget_s) {
+        auto h = heard_of(r);
+        py::gil_scoped_release nogil;
+        return rx_->advance(std::move(h), budget_s);
     }
 
     py::object decode(int slot, const py::handle& mask, int rv, const py::object& key) {
@@ -246,6 +253,7 @@ void bind_arq_phy(py::module_& m) {
         .def(py::init<py::dict, py::object, std::optional<double>, bool, py::object>(), py::arg("r"), py::arg("store"),
              py::arg("dd_budget") = py::none(), py::arg("dd") = dd_default(), py::arg("clock") = py::none())
         .def("decode", &PyModemRx::decode)
+        .def("advance", &PyModemRx::advance, py::arg("r"), py::arg("budget_s") = py::none())
         .def("raw", &PyModemRx::raw)
         .def("raw_pair", &PyModemRx::raw_pair)
         .def("decode_pair", &PyModemRx::decode_pair)

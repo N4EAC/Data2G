@@ -451,6 +451,12 @@ private:
         std::string mode;
     };
     std::optional<Span> span_;  // the burst being heard
+    struct Inc {  // the burst being decoded as it arrives (receiver::PartialRequest): its header's start, its decoder
+        std::int64_t start;
+        std::shared_ptr<ModemRx> rx;
+    };
+    std::optional<Inc> inc_;
+    void hear_partial(const receiver::PartialRequest& q);
     std::optional<Span> heard_span_;  // ... being decoded: its energy once measured (hear_burst)
     std::optional<double> session_snr_;
     std::optional<double> tx_end_;  // when my last burst ended
