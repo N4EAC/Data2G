@@ -42,3 +42,32 @@ FM has twice the samples. The ±12.5 Hz search (3 CFO bins against 25) more than
 - **Failing bursts are not.** FM needs a shorter DD budget, or decoding that runs while the burst arrives. Today every codeword spans the whole burst, so nothing can be decoded before its end. The loss cost of either must be measured on the simulator.
 - **Per-symbol noise wants a cheaper nearest-point search.** On square QAM, slice per axis. On the learned sets, use a coarse grid lookup.
 - Nothing here yet calls for advertising a rate capability. Revisit once a wide band exists to bench.
+
+## Decoding while the burst arrives (fm-stream)
+
+TLDR: early decoding cuts a clean burst's end-to-payload on a Pi 4 by 2 to 4 times: 256l x39 at 30 dB 276 -> 191 ms, 64l x30 at 24 dB 553 -> 138 ms, 16qam x19 200-234 -> 104-109 ms. Failing bursts end no later than 1.57 s, against up to 4.1 s without it. Decode counts are within a few slots of whole-burst decoding.
+
+Setup:
+- `data2g-bench-rx --stream`: each burst fed through the native Receiver in 20 ms chunks, decoded as the engine does. Pool 2, DD budget 1 s, best of 3.
+- FM profile, protocol 2 (8-frame interleaving and estimate windows). Bursts: `runs/pi_gen_fm206.sh`'s set regenerated, plus seeds 1-4 of 256l at 20/22/24 dB and 64l at 18/20 dB, on mpp.
+- Driver: `runs/pi_fmstream_run.sh`. Raw output: `runs/pi-fmstream/run.txt` (first version, and no early decoding) and `run-once.txt` (as committed).
+- "end": last sample fed to every slot decoded. "during": CPU spent while the burst arrives. Decodes summed over seeds.
+
+| burst | early, as committed: ok, end ms, during s, max feed ms | no early decoding |
+|---|---|---|
+| 16qam-r2/3 x19, 12 dB | 9/19, 756, 1.2, 234 | 9/19, 1158, 0.1, 28 |
+| 16qam-r2/3 x19, 16 dB | 19/19, 109, 0.6, 109 | 19/19, 234, 0.1, 29 |
+| 16qam-r2/3 x19, 20 dB | 19/19, 104, 0.6, 95 | 19/19, 200, 0.1, 29 |
+| 256l-r5/8 x39, 20 dB | 30/156, 1301-1570, 1.9, 308 | 27/156, 1180-1293, 0.0, 20 |
+| 256l-r5/8 x39, 22 dB | 56/156, 837-1490, 1.9, 316 | 57/156, 1211-4120, 0.0, 20 |
+| 256l-r5/8 x39, 24 dB | 85/156, 602-1407, 1.8, 305 | 89/156, 1238-4008, 0.1, 29 |
+| 256l-r5/8 x39, 30 dB | 39/39, 191, 0.9, 158 | 39/39, 276, 0.0, 19 |
+| 64l-r3/4 x30, 18 dB | 24/120, 856-946, 1.3, 299 | 24/120, 1093-1126, 0.0, 20 |
+| 64l-r3/4 x30, 20 dB | 43/120, 920-982, 1.5, 304 | 45/120, 1116-1824, 0.0, 20 |
+| 64l-r3/4 x30, 24 dB | 30/30, 138, 0.5, 117 | 30/30, 553, 0.0, 20 |
+| 64l-r3/4 x30, 30 dB | 30/30, 108, 0.5, 90 | 30/30, 142, 0.0, 20 |
+
+Notes:
+- The first version retried every failed slot on each window: 110-128 LDPC tries for 39 slots of a failing 256l burst, 4.4 s of CPU during a 5.6 s burst and feeds up to 904 ms. A slot that fails mid-burst now waits for the whole burst (its window's estimate barely changes meanwhile). That halved the CPU during the burst and kept the decodes.
+- The partial receives run on the engine's worker, not the audio thread; the longest (about 300 ms) is under the 1.15 s window.
+- Open: a failing burst still ends 0.85-1.57 s late, the final pass retrying the failures and spending the DD budget left.

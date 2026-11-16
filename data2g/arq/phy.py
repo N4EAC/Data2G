@@ -326,7 +326,11 @@ class ModemRx:
             budget_s = left if budget_s is None else min(budget_s, left)
         t0 = time.monotonic()
         self.dd_until = None if budget_s is None else t0 + budget_s
-        new = [s for s in modem.ready_slots(r) if s not in self._raw]
+        # a slot that failed mid-burst waits for the whole burst: its window's estimate
+        # barely changes as later windows arrive, and retrying on each one was 110-128
+        # LDPC tries for 39 slots of a failing 256l burst on a Pi (runs/pi-fmstream)
+        whole = r.get("frames_in", -1) < 0 or r["frames_in"] >= r["n_cw"] * r["spec"].frames_per_cw
+        new = [s for s in modem.ready_slots(r) if s not in self._raw and (whole or s not in self._early)]
         for s in new:
             self._decoded(s, self._spec(s))
         self._early.update(new)

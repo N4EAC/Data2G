@@ -318,8 +318,12 @@ std::vector<int> ModemRx::advance(Heard r, std::optional<double> budget_s) {
     const double t0 = clock_();
     dd_until_ = budget_s ? std::optional(t0 + *budget_s) : std::nullopt;
     std::vector<int> fresh;
-    for (int s : modem::ready_slots(*r_.ofdm))
-        if (!raw_.count(s)) fresh.push_back(s);
+    // a slot that failed mid-burst waits for the whole burst (phy.py's advance: retried on each window,
+    // a failing 256l x39 burst was 110-128 LDPC tries on a Pi)
+    const auto& rx = *r_.ofdm;
+    const bool whole = !rx.partial();
+    for (int s : modem::ready_slots(rx))
+        if (!raw_.count(s) && (whole || !early_.count(s))) fresh.push_back(s);
     for (int s : fresh) decoded(s, spec(s));
     early_.insert(fresh.begin(), fresh.end());
     dd_spent_ += clock_() - t0;
