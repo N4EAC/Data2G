@@ -1,0 +1,157 @@
+"""FM ladder study: each mode's 10% and 1% codeword failure CNR through the
+live receiver (scripts/fm_spacing_study.stream_receive: receiver.Receiver fed
+0.25 s at a time after open-squelch hiss, key-up 0.2 s before the burst),
+drive by the 15 kHz occupied limit (26 dB down), by bisection to 0.25 dB.
+
+Common random numbers: trial t is the same payloads and the same channel
+seed at every CNR, so failure is near-monotone in CNR and the bisection
+compares like with like. A knee is the lowest CNR on the bisection's path
+whose failure (lost codewords / sent, over all trials) is at or under the
+level. 1% over N trials x 3 codewords is "at most one codeword in 100":
+30 trials (90 codewords) make it zero failures, so it reads as a
+no-failure knee there.
+
+    DATA2G_PROFILE=fm python scripts/fm_ladder_study.py run --modes f55-qpsk-r1/2 ... \
+        [--radios mic flat] [--conditions static flutter@440 mobile-rural] [--trials 30] [--workers 8] [--out NAME]
+    DATA2G_PROFILE=fm python scripts/fm_ladder_study.py report [--out NAME]
+
+Modes are config.SUBMODES names, or candidates registered by
+scripts/fm_ladder_screen.register (band:constellation:frames:k:headroom
+strings, e.g. f55:gray-qam16:2:1200:1). Writes runs/fm_ladder/<out>.csv.
+"""
+
+import argparse
+import csv
+import os
+import sys
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fm_spacing_study as S
+import fm_tx as T
+
+OUT = S.ROOT / "runs" / "fm_ladder"
+LO, HI, STEP = -2.0, 44.0, 0.25
+LEVELS = (0.1, 0.01)
+
+
+def spec_of(name: str):
+    from data2g.config import SUBMODES
+
+    if name in SUBMODES:
+        return SUBMODES[name]
+    import fm_ladder_screen as L
+
+    return L.register(name)
+
+
+def burst(spec, seed, radio):
+    """S.burst as transmitted under fm_tx's settings (unchanged with FM_TX off)."""
+    from data2g import constellation, modem
+
+    orig = modem.dsp.tx_condition
+    if T.noclip(radio, constellation.bits_per_symbol(constellation.load(spec.constellation))):
+        modem.dsp.tx_condition = lambda x, h, *a, **k: orig(x, T.NOCLIP_HEADROOM, *a, **k)
+    try:
+        payloads, x = S.burst(spec, seed)
+    finally:
+        modem.dsp.tx_condition = orig
+    return payloads, T.shape(x, spec.band, radio)
+
+
+def fail_at(spec, radio, cond, mhz, cnr, drive, trials) -> float:
+    """Lost codewords / sent over `trials` paired trials at one CNR."""
+    from data2g import fmchannel as F
+    from data2g.config import FS
+
+    lost = sent = 0
+    for t in range(trials):
+        payloads, x = burst(spec, 1000 + t, radio)
+        ch = F.FmChannel(cond, S.radio_of(radio), cnr, seed=t, duration_s=len(x) / FS + 4, carrier_mhz=mhz,
+                         drive_dev_hz=drive)
+        n_lost, _, _ = S.stream_receive(spec, payloads, x, ch)
+        lost, sent = lost + n_lost, sent + len(payloads)
+    return lost / sent
+
+
+def knees(args) -> dict:
+    """One mode x radio x condition: bisection for each level, sharing the
+    CNRs already measured."""
+    name, radio, cond, trials = args
+    from data2g import fmchannel as F
+
+    spec = spec_of(name)
+    c, mhz = (cond.split("@") + ["146"])[:2]
+    from data2g import constellation
+
+    _, x = burst(spec, 0, radio)
+    bits = constellation.bits_per_symbol(constellation.load(spec.constellation))
+    drive = F.drive_for_bandwidth(x[np.abs(x) > 0], S.radio_of(radio), S.OBW_HZ)[0] * T.drive_scale(radio, bits)
+    seen = {}
+
+    def f(cnr):
+        if cnr not in seen:
+            seen[cnr] = fail_at(spec, radio, c, float(mhz), cnr, drive, trials)
+        return seen[cnr]
+
+    out = {"mode": name, "radio": radio, "condition": cond, "drive": round(drive)}
+    for level in LEVELS:
+        lo, hi = LO, HI
+        if f(hi) > level:  # never reached within the range
+            out[f"k{level}"] = float("nan")
+            continue
+        while hi - lo > STEP:
+            mid = round((lo + hi) / 2 / STEP) * STEP
+            if mid in (lo, hi):
+                break
+            lo, hi = (lo, mid) if f(mid) <= level else (mid, hi)
+        out[f"k{level}"] = hi
+    out["evals"] = len(seen)
+    return out
+
+
+def run(a):
+    OUT.mkdir(parents=True, exist_ok=True)
+    jobs = [(m, r, c, a.trials) for m in a.modes for r in a.radios for c in a.conditions]
+    path = OUT / f"{a.out}.csv"
+    cols = ["mode", "radio", "condition", "drive", "k0.1", "k0.01", "evals"]
+    new = not path.exists()
+    with path.open("a", newline="") as fh, ProcessPoolExecutor(a.workers) as ex:
+        w = csv.DictWriter(fh, cols)
+        if new:
+            w.writeheader()
+        for row in ex.map(knees, jobs):
+            w.writerow(row)
+            fh.flush()
+            print(row, flush=True)
+
+
+def report(a):
+    with (OUT / f"{a.out}.csv").open() as fh:
+        rows = list(csv.DictReader(fh))
+    print("| mode | radio | condition | 10% CNR | 1% CNR |")
+    print("|---|---|---|---|---|")
+    for r in rows:
+        print(f"| {r['mode']} | {r['radio']} | {r['condition']} | {r['k0.1']} | {r['k0.01']} |")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("what", choices=["run", "report"])
+    ap.add_argument("--modes", nargs="+", default=[])
+    ap.add_argument("--radios", nargs="+", default=["mic"])
+    ap.add_argument("--conditions", nargs="+", default=["static", "flutter@440", "mobile-rural"])
+    ap.add_argument("--trials", type=int, default=30)
+    ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--out", default="knees")
+    a = ap.parse_args()
+    for v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+        os.environ.setdefault(v, "1")
+    run(a) if a.what == "run" else report(a)
+
+
+if __name__ == "__main__":
+    main()
