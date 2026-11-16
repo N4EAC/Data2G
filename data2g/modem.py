@@ -972,7 +972,7 @@ def _copy_header(z: np.ndarray, lock: Lock) -> HeaderRead:
 
 
 def receive(x: np.ndarray, bands=None, accept: Accept | None = None, head: int | None = None,
-            copy: Lock | None = None, known: dict | None = None) -> Received:
+            copy: Lock | None = None, known: dict | None = None, partial: bool = False) -> Received:
     """Everything up to soft bits for the first burst in `x`: the
     synchronisation state (so an analysis script can replay it on
     another signal) and the equalizer output. `bands`: the sync bands to
@@ -983,7 +983,10 @@ def receive(x: np.ndarray, bands=None, accept: Accept | None = None, head: int |
     origin as x): no preamble search, the header its copy read. `known`:
     {start, cfo, spec, n_cw} of a burst whose timing the receiver knows
     already (data2g.bulk): no search, the header neither read nor needed,
-    its known word the coarse CFO's reference."""
+    its known word the coarse CFO's reference. `partial`: `x` holds the
+    burst only so far (a streaming receiver decoding as it arrives): the
+    air frames whose closing pilot is in, `frames_in` data frames of them
+    (receive_partial's caller decodes the slots ready_slots names)."""
     z0 = dsp.to_baseband(np.asarray(x, dtype=np.float64))
     if known is not None:
         ks, kn = known["spec"], known["n_cw"]
@@ -1006,7 +1009,7 @@ def receive(x: np.ndarray, bands=None, accept: Accept | None = None, head: int |
         hd, acq, _ = _best_header(z0[:head], bands, complete=False, accept=accept, final=True)
         z = dsp.freq_correct(z0, acq.freq_offset)
         spec, n_cw = hd["hdr"]
-        if burst_end(hd["p0"], spec, n_cw) > len(z0):
+        if not partial and burst_end(hd["p0"], spec, n_cw) > len(z0):
             raise SyncError("burst runs past the buffer")
     band = hd["band"]  # the sync band; frames are on spec.band's carriers
     b = ofdm.band(band)
@@ -1017,6 +1020,13 @@ def receive(x: np.ndarray, bands=None, accept: Accept | None = None, head: int |
     n_f = n_cw * spec.frames_per_cw
     kc = copy_frame(band, n_f)
     n_air = n_f + (kc is not None)  # the header copy's frame among the data frames
+    if partial:  # the frames in so far, each with its closing pilot (and room for the window's shift)
+        n_air = min(n_air, max(0, (len(z0) - p0 - NSYM - 2 * NCP) // FRAME_SAMPLES))
+        if n_air < 1:
+            raise SyncError("no whole frame yet")
+        if kc is not None and kc >= n_air:
+            kc = None  # its copy not in yet
+    n_in = n_air - (kc is not None)  # data frames in
     phi_ref = _bin_phase_step(h_pre)
 
     # Residual CFO. The pilots measure it finely but only modulo the
@@ -1032,8 +1042,9 @@ def receive(x: np.ndarray, bands=None, accept: Accept | None = None, head: int |
     ref_syms = np.empty((len(layout), b.nc), dtype=np.complex128)
     ref_syms[layout] = b.pilot
     ref_syms[~layout] = constellation.modulate(_word_bits(word) @ header_code(band) % 2, QPSK).reshape(-1, b.nc)
-    known = list(hd["y_all"] * np.conj(ref_syms)) + ([h_first] if db == band else [])
-    runs = [known]
+    # (not `known`: that is the argument, a bulk burst's, and the alias choice below reads it)
+    ref = list(hd["y_all"] * np.conj(ref_syms)) + ([h_first] if db == band else [])
+    runs = [ref]
     if kc is not None:
         # the header copy's frame is known symbols too (pilot, copy, next
         # pilot): the estimate survives a fade on the first copy
@@ -1070,7 +1081,7 @@ def receive(x: np.ndarray, bands=None, accept: Accept | None = None, head: int |
         if np.ndim(est.get("n0_k")) == 3:  # per frame (config.EST_WINDOW)
             est["n0_k"] = np.delete(est["n0_k"], kc, axis=0)
     return dict(
-        spec=spec, n_cw=n_cw, raw=raw, est=est, acq=acq, band=db, hp=hp, kc=kc,
+        spec=spec, n_cw=n_cw, raw=raw, est=est, acq=acq, band=db, hp=hp, kc=kc, frames_in=n_in,
         cfo=acq.freq_offset + cfo_res, p0=p0, shift=shift, steps=steps, slips=slips, phi_ref=phi_ref, support=support, seen_support=seen,
         preamble_start=hd["start"], score=hd["score"],
     )
@@ -1173,12 +1184,32 @@ def _data_var(r: Received, est: DataEstimate) -> np.ndarray:
     return var
 
 
+def slot_cells(r: Received, slot: int) -> np.ndarray:
+    """The data cells (flat index over the whole burst's (frames, 5, nc))
+    holding `slot`'s symbols, in its order: codes.spread's layout, round-robin
+    over the burst or over the slot's window (config.SPREAD_WINDOW)."""
+    spec, n = r["spec"], r["n_cw"]
+    syms = n * spec.coded_bits // spec.bits_per_cu
+    return codes.despread(np.arange(syms), n, 1, codes.spread_group(spec))[slot]
+
+
+def ready_slots(r: Received, margin: int = 1) -> list[int]:
+    """The slots whose every symbol is in the frames received so far
+    (r["frames_in"]), `margin` frames short of the last, so each has a
+    pilot after it for the channel estimate; a complete burst's are all."""
+    spec, n = r["spec"], r["n_cw"]
+    n_f = n * spec.frames_per_cw
+    frames = r.get("frames_in", n_f)
+    have = (frames if frames >= n_f else frames - margin) * DATA_SYMS_PER_FRAME * BANDS[spec.band].nc
+    return [s for s in range(n) if slot_cells(r, s).max() < have]
+
+
 def slot_soft(r: Received, est: DataEstimate, slot: int) -> np.ndarray:
     """burst_soft(r, est)[slot] alone: codes.spread deals codeword symbols
-    round-robin, so the slot's are every n_cw-th of the burst's."""
-    n = r["n_cw"]
+    round-robin, so the slot's are every n_cw-th of the burst's (of its
+    window's: config.SPREAD_WINDOW). On a partial burst, a ready_slots one."""
     var = _data_var(r, est)
-    cells = codes.despread(np.arange(est["h"].size), n, 1, codes.spread_group(r["spec"]))[slot]  # the slot's, in its order
+    cells = slot_cells(r, slot)  # the slot's, in its order (within what is in, on a partial burst)
     pick = lambda a: a.reshape(-1)[cells]  # noqa: E731
     return constellation.llr(pick(data_symbols(r["raw"])), pick(est["h"]), pick(var),
                              constellation.load(r["spec"].constellation))

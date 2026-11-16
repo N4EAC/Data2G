@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 
 from .. import codes, cpm, cwid, hand, modem
-from ..config import FS, LEADIN_SAMPLES, max_codewords
+from ..config import FS, LEADIN_SAMPLES, SPREAD_WINDOW, max_codewords
 from ..receiver import NoiseProfile, Receiver, ReplySlot
 from ..waveform import dsp
 from . import burst as B
@@ -190,6 +190,7 @@ class Engine:
         self.tx = None  # [burst, audio, position]
         self.session = None
         self.store = {}  # soft bits per codeword key, across bursts (phy.ModemRx)
+        self._inc_rx = None  # (header start, its ModemRx): the burst being decoded as it arrives
         self.chat = False
         self._idle_close_s = None  # set_idle_close
         self._extra: list = []  # bursts outside any session (CQ frames), sent when the channel is free
@@ -739,6 +740,16 @@ class Engine:
                     self._pend = [start + burst_seconds(spec, 1) + PENDING_SLACK_S, False]
                     self._events.append("PENDING")
                 continue
+            if kind == "partial":
+                # decoding while the burst arrives (config.SPREAD_WINDOW): the
+                # codeword groups complete so far, DD on this window's share of
+                # the burst's budget; the "burst" event finishes the same ModemRx
+                h = ev["header"]
+                if self._inc_rx is None or self._inc_rx[0] != h["start"]:
+                    self._inc_rx = (h["start"], PHY.ModemRx(ev["rx"], self.store, PHY.DD_BUDGET_S))
+                n_f = h["n_cw"] * h["spec"].frames_per_cw
+                self._inc_rx[1].advance(ev["rx"], PHY.DD_BUDGET_S * min(1.0, SPREAD_WINDOW / n_f))
+                continue
             if self._pend is not None:
                 self._pend[1] = True  # resolved once the session has read it (events)
             span, self._span = self._span, None
@@ -763,7 +774,12 @@ class Engine:
                     # maybe an open port's: BCAST * MISSED
                     self.kiss.missed(h["spec"].name, h["n_cw"], self._span_snr(*span) if span else None)
                 continue
-            rx = PHY.ModemRx(r, self.store, PHY.DD_BUDGET_S)
+            inc, self._inc_rx = self._inc_rx, None
+            if inc is not None and inc[0] == h["start"]:
+                rx = inc[1]
+                rx.advance(r)  # the rest: the last groups, and DD on what the burst's budget has left
+            else:
+                rx = PHY.ModemRx(r, self.store, PHY.DD_BUDGET_S)
             # in a session, its peer's bursts are the likely ones: the session
             # claims the burst before KISS tries its keys on it (two failed
             # decodes per ARQ burst: ~10% of a Pat exchange's CPU). Asked

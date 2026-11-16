@@ -171,7 +171,8 @@ std::vector<double> tx_audio(const TxBurst& burst) {
                                      static_cast<int>(i));
         bits.insert(bits.end(), c.begin(), c.end());
     }
-    return modem::modulate_bits(codes::spread<std::uint8_t>(bits, static_cast<int>(n), md.ofdm->bits_per_cu), *md.ofdm);
+    return modem::modulate_bits(
+        codes::spread<std::uint8_t>(bits, static_cast<int>(n), md.ofdm->bits_per_cu, modem::spread_group(*md.ofdm)), *md.ofdm);
 }
 
 const Mode& Heard::mode() const { return mode_at(ofdm ? ofdm->spec->name : cpm->spec->name); }
@@ -759,8 +760,9 @@ ModemRx::Est ModemRx::dd_estimate() const {
         std::copy(v.begin(), v.end(), llr.begin() + static_cast<std::ptrdiff_t>(s * cb));
         std::fill_n(have.begin() + static_cast<std::ptrdiff_t>(s * cb), cb, 1);
     }
-    const auto L = codes::spread<double>(llr, n_cw_, m);
-    const auto K = codes::spread<std::uint8_t>(have, n_cw_, m);
+    const int grp = modem::spread_group(spec);
+    const auto L = codes::spread<double>(llr, n_cw_, m, grp);
+    const auto K = codes::spread<std::uint8_t>(have, n_cw_, m, grp);
     const std::size_t nc = R.raw.cols, rows = est.h.rows, n_sym = rows * nc;
     const double g = est.gain, p = est.p_sig;
     Mat<cd> z(rows, nc);
@@ -820,7 +822,7 @@ ModemRx::Est ModemRx::dd_estimate() const {
         if (!(std::abs(x) > 1e-3)) continue;
         cache.z[j] = modem::data_row(R.raw, row)[c] / (g * x);
         // modem::noise_var's with |h|^2 at its expectation g^2 p, plus the soft symbol's own variance
-        const double n0 = est.n0_k.empty() ? est.n0 : est.n0_k[c];
+        const double n0 = est.n0_at(row, c);
         cache.w[j] = g * g * std::norm(x) / (n0 + est.clip_ratio * (g * g) * p + g * g * p * v);
         z[row][c] = cache.z[j];
         w[row][c] = cache.w[j];

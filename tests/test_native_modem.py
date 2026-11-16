@@ -164,6 +164,22 @@ def same_received(n, r):
     assert n["est"]["band"] == r["est"]["band"]
 
 
+@pytest.mark.skipif(config.EST_WINDOW == 0, reason="per-window channel estimates are FM's (config.EST_WINDOW)")
+def test_windowed_data_channel_matches(native, py):
+    """config.EST_WINDOW: each window of frames from its own pilots and one
+    either side, stitched, the noise per frame; native as Python, on a
+    pilot grid longer than several windows (the last one short)."""
+    rng = np.random.default_rng(6)
+    n_air, nc = 3 * config.EST_WINDOW + 3, BANDS["w48"].nc
+    hp = (rng.normal(size=(n_air + 1, nc)) + 1j * rng.normal(size=(n_air + 1, nc))) * 0.05 + np.exp(
+        2j * np.pi * rng.uniform(size=nc))
+    est = py.data_channel(hp, (-3, 20), "w48", 0.1, None, None, n_air)
+    nest = native.modem.data_channel(hp, (-3, 20), "w48", 0.1, None, None, n_air)
+    assert est["n0_k"].shape == (n_air, 1, nc) and nest["n0_k"].shape == est["n0_k"].shape
+    for k in ("h", "mse", "n0_k", "n0", "gain", "clip_ratio"):
+        close(nest[k], est[k], 1e-8)
+
+
 @pytest.mark.parametrize("name,n_cw,snr,preset", RX_CASES)
 def test_receive_matches(native, py, name, n_cw, snr, preset):
     y = _burst(name, n_cw, snr, preset, seed=n_cw + 3)

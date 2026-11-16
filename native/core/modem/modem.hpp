@@ -30,6 +30,11 @@ using cd = std::complex<double>;
 using waveform::SyncError;
 using Spec = config::Submode;
 
+// Codewords per interleaving window (codes.spread_group): config::SPREAD_WINDOW frames, 0 the whole burst.
+inline int spread_group(const Spec& s) {
+    return config::SPREAD_WINDOW && s.frames_per_cw ? std::max(1, config::SPREAD_WINDOW / s.frames_per_cw) : 0;
+}
+
 double header_min_score(std::string_view band);  // HEADER_MIN_SCORE[band]; throws std::out_of_range
 double pilot_noise(std::string_view band);       // PILOT_NOISE[band]
 double pilot_pattern(std::string_view band);     // PILOT_PATTERN[band]

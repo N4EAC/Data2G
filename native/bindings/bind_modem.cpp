@@ -143,7 +143,12 @@ py::dict est_dict(const modem::DataEstimate& e) {
     d["h"] = np3(e.h, S);
     d["mse"] = np3(e.mse, S);
     d["n0"] = e.n0;
-    d["n0_k"] = np(e.n0_k);
+    // per frame (EST_WINDOW) as Python keeps it, (F, 1, nc); else (nc,)
+    if (e.h.cols && e.n0_k.size() > e.h.cols)
+        d["n0_k"] = np(e.n0_k).reshape(std::vector<py::ssize_t>{
+            static_cast<py::ssize_t>(e.n0_k.size() / e.h.cols), 1, static_cast<py::ssize_t>(e.h.cols)});
+    else
+        d["n0_k"] = np(e.n0_k);
     d["p_sig"] = e.p_sig;
     d["spread_hz"] = e.spread_hz;
     d["filter_spread_hz"] = e.filter_spread_hz;
@@ -161,6 +166,8 @@ modem::DataEstimate est_of(const py::dict& d) {
     e.mse = mat2(d["mse"].cast<In<double>>());
     e.n0 = d["n0"].cast<double>();
     if (d.contains("n0_k")) e.n0_k = vec(d["n0_k"].cast<In<double>>());
+    e.nc = static_cast<int>(e.h.cols);  // n0_at reads n0_k per carrier or per frame by these
+    e.n_f = static_cast<int>(e.h.rows / config::DATA_SYMS_PER_FRAME);
     e.p_sig = get<double>(d, "p_sig", 0.0);
     e.clip_ratio = d["clip_ratio"].cast<double>();
     return e;
@@ -190,6 +197,7 @@ py::dict received_dict(const modem::Received& r) {
     d["band"] = std::string(r.band);
     d["hp"] = np(r.hp);
     d["kc"] = r.kc ? py::object(py::int_(*r.kc)) : py::object(py::none());
+    d["frames_in"] = r.n_cw * r.spec->frames_per_cw;  // native receives whole bursts (Python's partial: data2g.modem)
     d["cfo"] = r.cfo;
     d["p0"] = r.p0;
     d["shift"] = r.shift;
@@ -395,7 +403,9 @@ void bind_modem(py::module_& m) {
         mo::DataEstimate e;
         e.n0_k = vec(n0_k);
         e.clip_ratio = clip_ratio;
-        const auto v = mo::noise_var(mat2(h), e);
+        const auto hm = mat2(h);
+        e.nc = static_cast<int>(hm.cols);  // n0_k per carrier, or per frame (F, 1, nc) flattened
+        const auto v = mo::noise_var(hm, e);
         return np(v).reshape(std::vector<py::ssize_t>(h.shape(), h.shape() + h.ndim()));
     });
     d.def("soft_bits", [](const In<cd>& raw, const In<cd>& h, const In<double>& var, const py::object& s) {

@@ -123,13 +123,20 @@ ACQUIRE_REACH_HZ = float(os.environ.get("DATA2G_ACQUIRE_REACH_HZ", {"hf": 150.0,
 SYMBOL_NOISE = bool(int(os.environ.get("DATA2G_SYMBOL_NOISE", int(PROFILE == "fm"))))
 # Interleaving window, frames (codes.spread_group): 0, every codeword over the whole
 # burst. A window lets a codeword group complete, and decode, while the burst
-# arrives (FM plan: decoding while the burst arrives). DATA2G_SPREAD_WINDOW:
-# studies only, Python only (native spreads over the whole burst).
-SPREAD_WINDOW = int(os.environ.get("DATA2G_SPREAD_WINDOW", 0))
+# arrives (FM plan: decoding while the burst arrives).
 # Channel estimate in windows of this many frames (modem.data_channel), each from
 # its own pilots and one either side: what a receiver estimating as frames
-# arrive sees. 0: the whole burst. DATA2G_EST_WINDOW: studies only.
-EST_WINDOW = int(os.environ.get("DATA2G_EST_WINDOW", 0))
+# arrive sees. 0: the whole burst.
+# FM: 8 and 8. scripts/fm_window_study.py (4 s bursts, 30 paired trials, every
+# fmchannel condition): 8-frame windows, spread and estimate, at most +0.12 dB
+# anywhere, better on mobile paths (0.3-0.4 dB) and slow fading (0.45-1.24 dB),
+# most likely from the per-window noise level; 4 frames cost up to +0.35 dB.
+# HF: 0 and 0 (issue #212). DATA2G_SPREAD_WINDOW, DATA2G_EST_WINDOW: studies only.
+SPREAD_WINDOW = int(os.environ.get("DATA2G_SPREAD_WINDOW", {"hf": 0, "fm": 8}[PROFILE]))
+EST_WINDOW = int(os.environ.get("DATA2G_EST_WINDOW", {"hf": 0, "fm": 8}[PROFILE]))
+# Decoding while the burst arrives (receiver.Receiver "partial" events, ModemRx.advance):
+# Python only so far, off until native has it. DATA2G_DECODE_EARLY=1: studies.
+DECODE_EARLY = bool(int(os.environ.get("DATA2G_DECODE_EARLY", 0)))
 FIRST_PATH_SEARCH = NCP
 FIRST_PATH_FRAC = 0.5
 
@@ -148,8 +155,9 @@ FIRST_PATH_FRAC = 0.5
 # the same analog waveform as HF's. Distinct seeds while HF's version < 32.
 # Header symbols per band: BandSpec.header_syms.
 PROFILE_TAG = {"hf": 0, "fm": 0x20}[PROFILE]
-# FM counts its own versions from 1 (no FM format is frozen yet).
-PROTOCOL_VERSION = {"hf": 15, "fm": 1}[PROFILE]  # HF: 10: first frozen submode table; n4 on n10 sync (2026-09-23); 11: header copy;
+# FM counts its own versions from 1 (no FM format is frozen yet); 2: codewords
+# interleaved in 8-frame windows (SPREAD_WINDOW).
+PROTOCOL_VERSION = {"hf": 15, "fm": 2}[PROFILE]  # HF: 10: first frozen submode table; n4 on n10 sync (2026-09-23); 11: header copy;
 # 12: polar codewords carry CRC-24 (k + 8, payloads kept); n10's header 5 | 5 (CW_BITS, 2026-10-06,
 # in place: development, one operator); 13: a non-periodic c8r50 front (2026-10-24: the tiled
 # Costas array matched one period off, sync 0.76, and its header read as another word); 14: the CPM

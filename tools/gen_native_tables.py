@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 HF_OUT = ROOT / "native" / "core" / "generated"
 MODEL = None  # --model: a measurement build's outcome model, no regions
 
-for var in ("DATA2G_PREAMBLE_REPEATS", "DATA2G_OUTCOME_MODEL", "DATA2G_RS", "DATA2G_NCP", "DATA2G_ACQUIRE_REACH_HZ", "DATA2G_SYMBOL_NOISE", "DATA2G_SPREAD_WINDOW", "DATA2G_EST_WINDOW",
+for var in ("DATA2G_PREAMBLE_REPEATS", "DATA2G_OUTCOME_MODEL", "DATA2G_RS", "DATA2G_NCP", "DATA2G_ACQUIRE_REACH_HZ", "DATA2G_SYMBOL_NOISE", "DATA2G_SPREAD_WINDOW", "DATA2G_EST_WINDOW", "DATA2G_DECODE_EARLY",
             "DATA2G_CARRIER0"):  # DATA2G_PROFILE: main() sets it
     if var in os.environ:
         sys.exit(f"{var} is set: the generated tables must hold the on-air defaults")

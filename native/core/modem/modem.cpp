@@ -461,7 +461,8 @@ std::vector<double> modulate(std::span<const std::vector<std::uint8_t>> payloads
         const auto c = codes::encode(cs, payloads[i], rvs.empty() ? 0 : rvs[i], 0, static_cast<int>(i));
         coded.insert(coded.end(), c.begin(), c.end());
     }
-    const auto bits = codes::spread<std::uint8_t>(coded, static_cast<int>(payloads.size()), spec.bits_per_cu);
+    const auto bits = codes::spread<std::uint8_t>(coded, static_cast<int>(payloads.size()), spec.bits_per_cu,
+                                                  spread_group(spec));
     return modulate_bits(bits, spec);
 }
 
@@ -956,8 +957,51 @@ ClipConsts clip_consts(std::string_view name) {
     throw std::out_of_range("no band " + std::string(name));
 }
 
+namespace {
+DataEstimate data_channel_whole(const Mat<cd>& h_pilot, equalizer::Support support, std::string_view band,
+                                double n0_pre, const ClipConsts* clip, std::span<const double> n0_pre_k,
+                                int n_frames);
+}  // namespace
+
 DataEstimate data_channel(const Mat<cd>& h_pilot, equalizer::Support support, std::string_view band, double n0_pre,
                           const ClipConsts* clip, std::span<const double> n0_pre_k, int n_frames) {
+    const int n_air = static_cast<int>(h_pilot.rows) - 1, W = config::EST_WINDOW;
+    if (!(W > 0 && n_air > W)) return data_channel_whole(h_pilot, support, band, n0_pre, clip, n0_pre_k, n_frames);
+    // each window of frames from its own pilots and one either side (Python's data_channel, EST_WINDOW)
+    const size_t nc = h_pilot.cols, S = DATA_SYMS_PER_FRAME;
+    DataEstimate est;
+    std::vector<cd> h;
+    std::vector<double> mse, n0_k;
+    double n0 = 0, p_sig = 0, spread = 0;
+    int parts = 0;
+    for (int a = 0; a < n_air; a += W) {
+        const int lo = std::max(0, a - 1), hi = std::min(n_air, a + W + 1), count = std::min(W, n_air - a);
+        Mat<cd> sub(static_cast<size_t>(hi - lo + 1), nc);
+        std::copy(h_pilot[static_cast<size_t>(lo)], h_pilot[static_cast<size_t>(lo)] + sub.data.size(), sub.data.begin());
+        auto e = data_channel_whole(sub, support, band, n0_pre, clip, n0_pre_k, n_frames < 0 ? n_air : n_frames);
+        const size_t r0 = static_cast<size_t>(a - lo) * S * nc, r1 = r0 + static_cast<size_t>(count) * S * nc;
+        h.insert(h.end(), e.h.data.begin() + static_cast<std::ptrdiff_t>(r0), e.h.data.begin() + static_cast<std::ptrdiff_t>(r1));
+        mse.insert(mse.end(), e.mse.data.begin() + static_cast<std::ptrdiff_t>(r0),
+                   e.mse.data.begin() + static_cast<std::ptrdiff_t>(r1));
+        for (int f = 0; f < count; ++f)
+            for (size_t k = 0; k < nc; ++k) n0_k.push_back(e.n0_k.empty() ? e.n0 : e.n0_k[k]);
+        n0 += e.n0, p_sig += e.p_sig, spread += e.spread_hz, ++parts;
+        if (a == 0) est = std::move(e);  // the rest of the fields: the first window's (Python's dict(parts[0]))
+    }
+    est.h = Mat<cd>(h.size() / nc, nc);
+    est.h.data = std::move(h);
+    est.mse = Mat<double>(mse.size() / nc, nc);
+    est.mse.data = std::move(mse);
+    est.n0_k = std::move(n0_k);
+    est.n0 = n0 / parts, est.p_sig = p_sig / parts, est.spread_hz = spread / parts;
+    est.n_f = n_air;
+    return est;
+}
+
+namespace {
+DataEstimate data_channel_whole(const Mat<cd>& h_pilot, equalizer::Support support, std::string_view band,
+                                double n0_pre, const ClipConsts* clip, std::span<const double> n0_pre_k,
+                                int n_frames) {
     DataEstimate est;
     static_cast<equalizer::Estimate&>(est) = equalizer::estimate(h_pilot, support, bb_of(band), n0_pre, n0_pre_k);
     const ClipConsts own = clip ? ClipConsts{} : clip_consts(band);
@@ -970,6 +1014,7 @@ DataEstimate data_channel(const Mat<cd>& h_pilot, equalizer::Support support, st
     est.band = config::band(band).name;
     return est;
 }
+}  // namespace
 
 double resolve_alias(double fine, double coarse) {
     return fine + std::nearbyint((coarse - fine) * equalizer::FRAME_S) / equalizer::FRAME_S;
@@ -1077,6 +1122,10 @@ Received receive(std::span<const double> x, std::span<const std::string_view> ba
         drop(fr.raw, static_cast<size_t>(*kc) * SYMS_PER_FRAME, SYMS_PER_FRAME);
         drop(out.est.h, static_cast<size_t>(*kc) * DATA_SYMS_PER_FRAME, DATA_SYMS_PER_FRAME);
         drop(out.est.mse, static_cast<size_t>(*kc) * DATA_SYMS_PER_FRAME, DATA_SYMS_PER_FRAME);
+        if (out.est.n0_k.size() == static_cast<size_t>(out.est.n_f * out.est.nc)) {  // per frame (EST_WINDOW)
+            const auto at = out.est.n0_k.begin() + static_cast<std::ptrdiff_t>(*kc * out.est.nc);
+            out.est.n0_k.erase(at, at + out.est.nc);
+        }
         out.est.n_f -= 1;
     }
     out.spec = &spec;
@@ -1103,7 +1152,7 @@ Mat<double> noise_var(const Mat<cd>& h, const DataEstimate& est) {
     Mat<double> v(h.rows, h.cols);
     for (size_t r = 0; r < h.rows; ++r)
         for (size_t k = 0; k < h.cols; ++k)
-            v[r][k] = (est.n0_k.empty() ? est.n0 : est.n0_k[k]) + est.clip_ratio * sq_abs(h[r][k]);
+            v[r][k] = est.n0_at(r, k) + est.clip_ratio * sq_abs(h[r][k]);
     return v;
 }
 
@@ -1154,7 +1203,8 @@ Mat<double> data_var(const Received& r, const DataEstimate& est) {
 Mat<double> burst_soft(const Received& r, const DataEstimate& est) {
     const auto var = data_var(r, est);
     Mat<double> out;
-    out.data = codes::despread<double>(soft_bits(r.raw, est.h, var, *r.spec), r.n_cw, r.spec->bits_per_cu);
+    out.data = codes::despread<double>(soft_bits(r.raw, est.h, var, *r.spec), r.n_cw, r.spec->bits_per_cu,
+                                       spread_group(*r.spec));
     out.rows = static_cast<size_t>(r.n_cw);
     out.cols = out.data.size() / out.rows;
     return out;
@@ -1172,12 +1222,18 @@ std::vector<double> slot_soft(const Received& r, const DataEstimate& est, int sl
         for (size_t i = 0; i < full.data.size(); ++i) full.data[i] += est.mse.data[i];
         scale = symbol_noise_scale(r, est.h, full);
     }
-    for (size_t j = static_cast<size_t>(slot); j < total; j += n) {
+    // the slot's cells in its order: codes::despread of the cell indices (round-robin, or by spread_group's windows)
+    std::vector<size_t> idx(total);
+    std::iota(idx.begin(), idx.end(), size_t{0});
+    const auto cells = codes::despread<size_t>(idx, static_cast<int>(n), 1, spread_group(*r.spec));
+    const size_t per = total / n;
+    for (size_t i = 0; i < per; ++i) {
+        const size_t j = cells[static_cast<size_t>(slot) * per + i];
         const size_t row = j / nc, c = j % nc;
         const cd hj = est.h.data[j];
         y.push_back(data_row(r.raw, row)[c]);
         h.push_back(hj);
-        const double v = (est.n0_k.empty() ? est.n0 : est.n0_k[c]) + est.clip_ratio * std::norm(hj) + est.mse.data[j];
+        const double v = est.n0_at(row, c) + est.clip_ratio * std::norm(hj) + est.mse.data[j];
         var.push_back(scale.empty() ? v : v * scale[row]);
     }
     return constellation::llr(y, h, var, points_of(*r.spec));

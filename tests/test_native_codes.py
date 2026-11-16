@@ -66,6 +66,11 @@ def test_spread(native, py):
             np.testing.assert_array_equal(s, py.spread(x, m).reshape(2, -1))
             assert s.dtype == dtype
             np.testing.assert_array_equal(native.codes.despread(s, n_cw, m), py.despread(s, n_cw, m).reshape(2, -1))
+            for group in (1, 2, 3):  # windowed interleaving (config.SPREAD_WINDOW): groups of codewords
+                s = native.codes.spread(x.reshape(2, -1), n_cw, m, group)
+                np.testing.assert_array_equal(s, py.spread(x, m, group).reshape(2, -1))
+                np.testing.assert_array_equal(native.codes.despread(s, n_cw, m, group),
+                                              py.despread(s, n_cw, m, group).reshape(2, -1))
 
 
 def _noisy(spec, coded, rng, sigmas):
