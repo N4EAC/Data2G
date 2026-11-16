@@ -9,6 +9,12 @@ domain fading, noise, and the real channel estimator.
     uv run python scripts/train_constellation.py --m 6 --band w48 --headroom 5 \
         --at awgn:12.75 mpd:20.25 --init c64-snr18 --steps 1500 --out runs/c64-w48-r712.npy
 
+FM (DATA2G_PROFILE=fm): `fm-<radio>[-<condition>]:<CNR>` entries train
+through data2g.fmtorch (fmchannel's FM chain, radio and path by name, CNR
+in fmchannel's convention), e.g.
+    DATA2G_PROFILE=fm uv run python scripts/train_constellation.py --m 6 --band w48 \
+        --at fm-mic:20 fm-flat:20 fm-mic-mobile-urban:25 --init c64-w48-r34 --out runs/c64-fm.npy
+
 Starts from Gray QAM (or --init) so a failure to improve is visible,
 and prints both on the same held-out seeds at the end. Points are
 renormalized to unit power each step (the modem's contract).
@@ -28,19 +34,36 @@ import torch
 
 torch.set_num_threads(4)
 
-from data2g import constellation
+from data2g import constellation, fmchannel
 from data2g.channel_torch import CHANNELS, BurstChannel, bmi, llr
 from data2g.config import DATA_SYMS_PER_FRAME, SubmodeSpec
+from data2g.fmtorch import FmBurstChannel
 
 
-def evaluate(ch, points, chan, snr, m, seed=12345, batches=4, batch=32):
+def fm_channel(name: str, spec, frames: int, device) -> FmBurstChannel:
+    """`fm-<radio>[-<condition>]`: the longest radio name that fits, the rest the condition."""
+    rest = name[3:]
+    radio = max((r for r in fmchannel.RADIOS if rest == r or rest.startswith(r + "-")), key=len)
+    return FmBurstChannel(spec, frames, radio, rest[len(radio) + 1:] or "static", device=device)
+
+
+def through(ch, fm, cname, points, idx, snr, g):
+    """One batch through `cname`'s channel -> (y, h, var)."""
+    if cname in fm:
+        c = fm[cname]
+        return c.receive(c.channel(c.transmit(points[idx]), snr, g), points=points.detach().cpu().numpy())
+    chan = CHANNELS[cname]
+    return ch.receive(ch.channel(ch.transmit(points[idx]), chan, snr, g), chan)
+
+
+def evaluate(ch, fm, points, cname, snr, m, seed=12345, batches=4, batch=32):
     g = torch.Generator(device=ch.device).manual_seed(seed)
     w = torch.tensor(1 << np.arange(m - 1, -1, -1), device=ch.device)
     tot = 0.0
     with torch.no_grad():
         for _ in range(batches):
             bits = torch.randint(0, 2, (batch, ch.n_f, DATA_SYMS_PER_FRAME, ch.nc, m), generator=g, device=ch.device)
-            y, h, var = ch.receive(ch.channel(ch.transmit(points[(bits * w).sum(-1)]), chan, snr, g), chan)
+            y, h, var = through(ch, fm, cname, points, (bits * w).sum(-1), snr, g)
             tot += m * bmi(llr(y, h, var, points), bits.float()).item()
     return tot / batches
 
@@ -78,6 +101,7 @@ def main():
     assert len(base) == 2**a.m, "--init has the wrong number of points"
     spec = SubmodeSpec(0, "train", "ldpc", f"gray-qam{2**a.m}", 1, band=a.band, clip_headroom_db=a.headroom)
     ch = BurstChannel(spec, a.frames, device=a.device)
+    fm = {c: fm_channel(c, spec, a.frames, a.device) for c, _ in at if c.startswith("fm-")}
     init = torch.tensor(base, dtype=torch.complex64, device=a.device)
     param = torch.nn.Parameter(torch.view_as_real(init).clone())
     opt = torch.optim.Adam([param], lr=a.lr)
@@ -88,10 +112,9 @@ def main():
     t0, run = time.time(), []
     for step in range(a.steps):
         cname, snr = at[step % len(at)]
-        chan = CHANNELS[cname]
         pts = unit(torch.view_as_complex(param))
         bits = torch.randint(0, 2, (a.batch, a.frames, DATA_SYMS_PER_FRAME, ch.nc, a.m), generator=g, device=a.device)
-        y, h, var = ch.receive(ch.channel(ch.transmit(pts[(bits * w).sum(-1)]), chan, snr, g), chan)
+        y, h, var = through(ch, fm, cname, pts, (bits * w).sum(-1), snr, g)
         loss = -bmi(llr(y, h, var, pts), bits.float())
         opt.zero_grad()
         loss.backward()
@@ -105,9 +128,9 @@ def main():
     np.save(a.out, learned.cpu().numpy().astype(np.complex128))
     print(f"\nheld-out BMI, bits/cu ({a.init or 'Gray QAM'} -> learned):")
     for name, snr in at:
-        q = evaluate(ch, init, CHANNELS[name], snr, a.m)
-        l = evaluate(ch, learned, CHANNELS[name], snr, a.m)
-        print(f"  {name:5s} at {snr:5.2f} dB: {q:.4f} -> {l:.4f}  ({l - q:+.4f})", flush=True)
+        q = evaluate(ch, fm, init, name, snr, a.m)
+        l = evaluate(ch, fm, learned, name, snr, a.m)
+        print(f"  {name:12s} at {snr:5.2f} dB: {q:.4f} -> {l:.4f}  ({l - q:+.4f})", flush=True)
 
 
 if __name__ == "__main__":
