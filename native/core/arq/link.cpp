@@ -316,6 +316,15 @@ bool nod_default() {
     return on;
 }
 
+// DATA2G_NOD_ALWAYS=1 (testing): any mode, even when the control-only burst would be shorter (link.NOD_ALWAYS)
+static bool nod_always() {
+    static const bool on = [] {
+        const char* v = std::getenv("DATA2G_NOD_ALWAYS");
+        return v && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+
 bool prime_default() {
     static const bool on = env_on("DATA2G_PRIME");
     return on;
@@ -673,7 +682,7 @@ Station::Kept Station::kept(const Core& core, const Ext& ext) {
 std::optional<std::pair<int, nod::FamilyKey>> Station::nod_of(std::int64_t bn, const std::string& submode,
                                                               const Core& core, const Ext& ext) const {
     const Mode* md = arq::mode(submode);
-    if (!(nod_default() && nod && nod_peer && md && md->is_cpm() && !core.reply_lost && core.k == 0 && latest >= 0))
+    if (!(nod_default() && nod && nod_peer && (nod_always() || (md && md->is_cpm())) && !core.reply_lost && core.k == 0 && latest >= 0))
         return std::nullopt;
     for (const auto& [t, v] : ext)
         if (t != T_REPLY && t != T_CHAT && t != T_DUPCTL && t != T_NODS) return std::nullopt;

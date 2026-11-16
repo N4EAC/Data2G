@@ -68,6 +68,9 @@ REPEAT = os.environ.get("DATA2G_REPEAT", "1") != "0"
 # whose content is in the codebook goes as a nod to a peer that said it hears
 # them (T_NODS); nods are listened for always (docs/arq.md §3b)
 NOD = os.environ.get("DATA2G_NOD", "1") != "0"
+# DATA2G_NOD_ALWAYS=1 (testing): a reply the codebook can express goes as a nod
+# whatever its mode (OFDM too), even when the control-only burst would be shorter
+NOD_ALWAYS = os.environ.get("DATA2G_NOD_ALWAYS", "0") == "1"
 NOD_MODE = "fsk16r25-r1/3"  # the mode a nod's control is packed and named in (its grid's control codeword)
 # soft-bit store keys of controls kept for that (RxBurst.decode_repeat): the link's, the session's connect frames
 REPEAT_KEY, REPEAT_SESSION_KEY = ("rep", 1, 0), ("rep", 2, 0)
@@ -802,7 +805,7 @@ class Station:
         R + 1 is the peer's to expect); its cum is A's new data's end ("all",
         A carried new data) or R's ("unchanged"); its recommendation a step
         from R's; its kept fields R's."""
-        if not (NOD and self.nod and self.nod_peer and submode in MODES and is_cpm(MODES[submode])
+        if not (NOD and self.nod and self.nod_peer and (NOD_ALWAYS or submode in MODES and is_cpm(MODES[submode]))
                 and set(ext) <= self.NOD_EXT and not core.reply_lost and core.k == 0 and self._latest >= 0):
             return None
         pa = self._peer_ctl_core.get(core.acted_on)

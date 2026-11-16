@@ -120,12 +120,12 @@ def _ctl(burst):
     return F.Control.unpack([burst.slots[0].payload])
 
 
-def run(seed, a_nods=True, b_nods=True, max_turns=3000):
+def run(seed, a_nods=True, b_nods=True, max_turns=3000, modes=tuple(NOD_MODES)):
     """Lockstep, 15% of bursts lost: -> (a, b, nods expanded, nods taken)."""
     rng = random.Random(seed)
     data_a, data_b = payload(rng, 1500, "mixed"), payload(rng, 100, "mixed")
-    a = L.Station(0, AskingPolicy(random.Random(seed + 1)), master=True, nod=a_nods)
-    b = L.Station(1, AskingPolicy(random.Random(seed + 2)), nod=b_nods)
+    a = L.Station(0, AskingPolicy(random.Random(seed + 1), modes=modes), master=True, nod=a_nods)
+    b = L.Station(1, AskingPolicy(random.Random(seed + 2), modes=modes), nod=b_nods)
     a.write(data_a)
     b.write(data_b)
     got_a, got_b, nods = bytearray(), bytearray(), [0, 0]
@@ -169,6 +169,15 @@ def test_nods_stand_for_their_controls(nodding, seed):
     a, b, nods = run(seed)
     assert nods[1] >= 3 and nods[1] == nods[0], nods
     assert a.nod_peer and b.nod_peer and a._nods_told and b._nods_told
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_nod_always_nods_in_ofdm(nodding, monkeypatch, seed):
+    """DATA2G_NOD_ALWAYS: an OFDM-only link nods too (none without it)."""
+    assert run(seed, modes=("qpsk-r1/2",))[2] == [0, 0]
+    monkeypatch.setattr(L, "NOD_ALWAYS", True)
+    nods = run(seed, modes=("qpsk-r1/2",))[2]
+    assert nods[1] >= 3 and nods[1] == nods[0], nods
 
 
 @pytest.mark.parametrize("seed", range(3))

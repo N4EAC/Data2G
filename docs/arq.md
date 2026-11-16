@@ -244,7 +244,9 @@ decoded. The native host's "Nods" setting (`--no-nods`; default on, from the nex
 `Engine::set_nods`) turns them off for a station, both directions: it neither sends
 `T_NODS` nor listens, so its peer sends it none. For a link whose reply timing is too
 unsteady for the slot (K2CR's TX playout lag on air, 2026-11-13). `DATA2G_NOD=0` turns them off
-everywhere (Python too) for A/B runs.
+everywhere (Python too) for A/B runs. `DATA2G_NOD_ALWAYS=1` (testing) sends a nod for any
+expressible reply in any mode, OFDM too, even where the control-only burst is shorter;
+the peer still takes it as a `NOD_MODE` control.
 
 - **Who nods to whom** (no session version bump). A station that hears nods says so with
   `T_NODS` (empty), in its control's padding only, until the peer acts on a burst that
