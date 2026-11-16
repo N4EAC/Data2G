@@ -518,6 +518,13 @@ def modem_hpp() -> str:
     bands = [clip(config.CLIP[b]) for b in config.BANDS]
     out.append(f"// config.CLIP, per config::BANDS row\ninline constexpr std::array<Clip, {len(bands)}> CLIP_BAND = "
                f"{{{{{', '.join(bands)}}}}};\n")
+    # the flat path's TX tilt per sync band (modem.tx_tilt_fir; FM only: HF has no TX path)
+    tilt = [b for b in modem.SYNC_BANDS if config.PROFILE == "fm"]
+    for b in tilt:
+        out.append(array(f"TX_TILT_{b}", [float(v) for v in modem.tx_tilt_fir(b)], "double"))
+    rows = ", ".join(f'{{"{b}", TX_TILT_{b}}}' for b in tilt)
+    out.append(f"inline constexpr std::array<std::pair<std::string_view, std::span<const double>>, {len(tilt)}> "
+               f"TX_TILT = {{{{{rows}}}}};\n")
     out.append("\n}  // namespace data2g::modem\n")
     return "".join(out)
 

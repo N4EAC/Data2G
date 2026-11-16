@@ -7,6 +7,7 @@
 
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <numbers>
 #include <numeric>
 #include <stdexcept>
@@ -424,7 +425,28 @@ waveform::Projector ace_projector(const Spec& spec, const Mat<cd>& data, std::ve
 
 }  // namespace
 
-std::vector<double> modulate_bits(std::span<const std::uint8_t> bits, const Spec& spec) {
+namespace {
+std::string tx_path_ = "mic";
+std::mutex tx_path_mu_;
+}  // namespace
+
+std::string_view tx_path() {
+    std::lock_guard lk(tx_path_mu_);
+    return tx_path_ == "flat" ? "flat" : "mic";  // a view of a literal: safe after a later set
+}
+
+void set_tx_path(std::string_view path) {
+    if (path != "mic" && path != "flat")
+        throw std::invalid_argument("tx_path: '" + std::string(path) + "', not mic or flat");
+    std::lock_guard lk(tx_path_mu_);
+    tx_path_ = std::string(path);
+}
+
+std::vector<double> modulate_bits(std::span<const std::uint8_t> bits, const Spec& spec, std::string_view path) {
+    if (path.empty()) path = tx_path();
+    if (path != "mic" && path != "flat")
+        throw std::invalid_argument("tx_path: '" + std::string(path) + "', not mic or flat");
+    const bool fm = config::PROFILE == "fm";
     const auto& b = waveform::band(spec.band);
     const auto& pts = points_of(spec);
     const size_t nc = static_cast<size_t>(b.nc());
@@ -445,12 +467,40 @@ std::vector<double> modulate_bits(std::span<const std::uint8_t> bits, const Spec
         }
         project = ace_projector(spec, data, std::move(dirs));
     }
-    return waveform::tx_condition(x, spec.headroom, b.spec->clip_overshoot, LEADIN_SAMPLES, x.size() - LEADOUT_SAMPLES,
-                                  waveform::band(spec.sync_band).tx_bandpass(), project, spec.ace);
+    // FM flat path: sent unclipped from 16-QAM up (a headroom no burst reaches)
+    const double headroom = fm && path == "flat" && pts.m >= config::FM_FLAT_NOCLIP_BITS ? 40.0 : spec.headroom;
+    auto y = waveform::tx_condition(x, headroom, b.spec->clip_overshoot, LEADIN_SAMPLES, x.size() - LEADOUT_SAMPLES,
+                                    waveform::band(spec.sync_band).tx_bandpass(), project, spec.ace);
+    if (!fm) return y;
+    if (path == "mic") {
+        const double g = config::FM_MIC_GAIN[static_cast<size_t>(pts.m)];
+        for (auto& v : y) v *= g;
+        return y;
+    }
+    // the tilt: np.convolve(y, h, "same") (odd h: centred), then the rms over the burst kept
+    std::span<const double> h;
+    for (const auto& [name, taps] : TX_TILT)
+        if (name == spec.sync_band) h = taps;
+    if (h.empty()) throw std::logic_error("modulate_bits: no TX tilt for band " + std::string(spec.sync_band));
+    const auto n = static_cast<std::ptrdiff_t>(y.size()), L = static_cast<std::ptrdiff_t>(h.size()), c = (L - 1) / 2;
+    std::vector<double> t(y.size(), 0.0);
+    for (std::ptrdiff_t i = 0; i < n; ++i) {
+        double acc = 0.0;
+        for (std::ptrdiff_t j = 0; j < L; ++j) {
+            const std::ptrdiff_t k = i + c - j;
+            if (k >= 0 && k < n) acc += h[static_cast<size_t>(j)] * y[static_cast<size_t>(k)];
+        }
+        t[static_cast<size_t>(i)] = acc;
+    }
+    double py = 0.0, pt = 0.0;
+    for (size_t i = LEADIN_SAMPLES; i < y.size() - LEADOUT_SAMPLES; ++i) py += y[i] * y[i], pt += t[i] * t[i];
+    const double g = std::sqrt(py / pt);
+    for (auto& v : t) v *= g;
+    return t;
 }
 
 std::vector<double> modulate(std::span<const std::vector<std::uint8_t>> payloads, const Spec& spec,
-                             std::span<const int> rvs) {
+                             std::span<const int> rvs, std::string_view tx_path) {
     if (payloads.empty() || payloads.size() > static_cast<size_t>(max_codewords(spec.sync_band)))
         throw std::invalid_argument("1.." + std::to_string(max_codewords(spec.sync_band)) + " codewords per burst, got " +
                                     std::to_string(payloads.size()));
@@ -463,7 +513,7 @@ std::vector<double> modulate(std::span<const std::vector<std::uint8_t>> payloads
     }
     const auto bits = codes::spread<std::uint8_t>(coded, static_cast<int>(payloads.size()), spec.bits_per_cu,
                                                   spread_group(spec));
-    return modulate_bits(bits, spec);
+    return modulate_bits(bits, spec, tx_path);
 }
 
 // --- receive ------------------------------------------------------------------

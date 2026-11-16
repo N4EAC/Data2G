@@ -144,6 +144,17 @@ EST_WINDOW = int(os.environ.get("DATA2G_EST_WINDOW", {"hf": 0, "fm": 8}[PROFILE]
 # Decoding while the burst arrives (receiver.Receiver "partial" events, ModemRx.advance):
 # FM on (its windows let codeword groups complete early); HF has no windows. DATA2G_DECODE_EARLY: studies.
 DECODE_EARLY = bool(int(os.environ.get("DATA2G_DECODE_EARLY", {"hf": 0, "fm": 1}[PROFILE])))
+# FM transmit, per station's radio path (modem.TX_PATH, "mic" or "flat"); HF ignores
+# these. Flat (a 9600 port: no pre-emphasis, no limiter, f^2 discriminator noise):
+# a fixed +3 dB/octave tilt on the whole burst (1.4-2.9 dB on f108, 0.9-1.6 dB on f55,
+# scripts/fm_tilt_study.py) and no TX clipping from 16-QAM up (clipping buys no
+# deviation on FM, the width being set by rms; 1.2-1.4 dB on 64/256-point,
+# scripts/fm_clip_study.py). Mic (pre-emphasis and the radio's 5 kHz limiter): the
+# top modes sent quieter so the limiter rarely acts (under 1%): gain per bits per
+# cell, 64-point 0.70, 256-point 0.55 (fm_clip_study; more than doubles their BMI).
+FM_TX_TILT_DB_OCT = 3.0
+FM_FLAT_NOCLIP_BITS = 4
+FM_MIC_GAIN = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.70, 1.0, 0.55)  # by bits per cell
 # The Doppler spread the equalizer assumes for a burst too short to measure one
 # (equalizer.measure_spread: under 8 pilots). HF: 2.0, what MPD measures. FM:
 # the audio channel is the radios' fixed response, RF Doppler reaching it as
@@ -171,8 +182,9 @@ FIRST_PATH_FRAC = 0.5
 PROFILE_TAG = {"hf": 0, "fm": 0x20}[PROFILE]
 # FM counts its own versions from 1 (no FM format is frozen yet); 2: codewords
 # interleaved in 8-frame windows (SPREAD_WINDOW); 3: FM's own bands f55 and f108 (new
-# preambles, headers and submode indices; the FM plan's M4/M5 bands).
-PROTOCOL_VERSION = {"hf": 15, "fm": 3}[PROFILE]  # HF: 10: first frozen submode table; n4 on n10 sync (2026-09-23); 11: header copy;
+# preambles, headers and submode indices; the FM plan's M4/M5 bands); 4: f55's and
+# f108's measured ladders (14 modes each, runs/fm_ladder/final_proposal.md).
+PROTOCOL_VERSION = {"hf": 15, "fm": 4}[PROFILE]  # HF: 10: first frozen submode table; n4 on n10 sync (2026-09-23); 11: header copy;
 # 12: polar codewords carry CRC-24 (k + 8, payloads kept); n10's header 5 | 5 (CW_BITS, 2026-10-06,
 # in place: development, one operator); 13: a non-periodic c8r50 front (2026-10-24: the tiled
 # Costas array matched one period off, sync 0.76, and its header read as another word); 14: the CPM
@@ -510,26 +522,43 @@ SUBMODES = dict([
     _m(13, "w48-64l-r3/4", "ldpc", "c64-w48-r34", 2, 2160, band="w48", headroom=5),  # 7389 bps
     _m(14, "w48-256l-r5/8", "ldpc", "c256-w48-r58", 2, 2400, band="w48", headroom=6),  # 8222 bps
 ])
-# FM's narrow (f55) and wide (f108) bands: a provisional ladder, w48's kinds of
-# mode at its kinds of rate, k picked so each code lands on an existing LDPC
-# shift table (ldpc.layout), headrooms w48's. Not the FM ladder: that is
-# measured on FM channels (plan M4, M5). Not in the ARQ's modes yet
-# (arq.modes.MODES: no thresholds, predictor inputs or recommendation codes
-# for them until M6).
+# FM's narrow (f55) and wide (f108) ladders (FM plan M4/M5), measured on FM
+# channels: runs/fm_ladder/final_proposal.md (scripts/fm_ladder_study.py, 30
+# paired trials, streamed receiver; 10% knee CNR, static: f55 mic / flat,
+# f108 flat). One f55 ladder serves mic and flat radios; the transmit differs
+# by station (modem.TX_PATH). Constellations: the existing learned sets, one
+# per family (runs/fm_const/report.txt). Indices 14 and 15 free. Approved
+# 2026-11-17, subject to on-air testing. Not in the ARQ's modes yet (M6).
 if PROFILE == "fm":
     SUBMODES.update(dict([
-        _m(0, "f55-qpsk-r1/5", "ldpc", "gray-qam4", 4, 480, band="f55", headroom=0),
-        _m(1, "f55-qpsk-r1/2", "ldpc", "gray-qam4", 4, 1040, band="f55", headroom=0),
-        _m(2, "f55-16qam-r1/2", "ldpc", "gray-qam16", 2, 1040, band="f55", headroom=1),
-        _m(3, "f55-16qam-r3/4", "ldpc", "gray-qam16", 2, 1584, band="f55", headroom=3),
-        _m(4, "f55-64l-r2/3", "ldpc", "c64-w48-r23", 2, 2288, band="f55", headroom=6),
-        _m(5, "f55-256l-r5/8", "ldpc", "c256-w48-r58", 1, 1376, band="f55", headroom=6),
-        _m(0, "f108-qpsk-r1/5", "ldpc", "gray-qam4", 2, 480, band="f108", headroom=0),
-        _m(1, "f108-qpsk-r1/2", "ldpc", "gray-qam4", 2, 1040, band="f108", headroom=0),
-        _m(2, "f108-16qam-r1/2", "ldpc", "gray-qam16", 1, 1040, band="f108", headroom=1),
-        _m(3, "f108-16qam-r3/4", "ldpc", "gray-qam16", 1, 1584, band="f108", headroom=3),
-        _m(4, "f108-64l-r2/3", "ldpc", "c64-w48-r23", 1, 2288, band="f108", headroom=6),
-        _m(5, "f108-256l-r3/5", "ldpc", "c256-w48-r58", 1, 2560, band="f108", headroom=6),
+        _m(0, "f55-qpsk-r21", "ldpc", "gray-qam4", 4, 456, band="f55", headroom=2),  # 730 bps; 1.25 / 0.25 dB
+        _m(1, "f55-qpsk-r40", "ldpc", "gray-qam4", 4, 888, band="f55", headroom=2),  # 1421; 2.75 / 2.0
+        _m(2, "f55-qpsk-r60", "ldpc", "gray-qam4", 4, 1320, band="f55", headroom=2),  # 2138; 4.0 / 3.25
+        _m(3, "f55-16qam-r47", "ldpc", "gray-qam16", 2, 1040, band="f55", headroom=3),  # 3379; 5.25 / 4.5
+        _m(4, "f55-64l-r50", "ldpc", "c64-w48-r12", 2, 1648, band="f55", headroom=6),  # 5417; 7.0 / 6.25
+        _m(5, "f55-64l-r67", "ldpc", "c64-w48-r12", 2, 2216, band="f55", headroom=6),  # 7321; 8.5 / 7.5
+        _m(6, "f55-64l-r75", "ldpc", "c64-w48-r23", 2, 2472, band="f55", headroom=6),  # 8179; 9.75 / 8.25
+        _m(7, "f55-64l-r80", "ldpc", "c64-w48-r23", 2, 2640, band="f55", headroom=6),  # 8743; 10.5 / 9.0
+        _m(8, "f55-64l-r83", "ldpc", "c64-w48-r23", 2, 2752, band="f55", headroom=6),  # 9118; 11.25 / 9.25
+        _m(9, "f55-256l-r67", "ldpc", "c256-w48-r12", 1, 1480, band="f55", headroom=6),  # 9708; 14.25 / 10.0
+        _m(10, "f55-256l-r72", "ldpc", "c256-w48-r12", 1, 1584, band="f55", headroom=6),  # 10405; 15.75 / 11.0
+        _m(11, "f55-256l-r80", "ldpc", "c256-w48-r58", 1, 1760, band="f55", headroom=6),  # 11585; 19.25 / 13.25
+        _m(12, "f55-256l-r83", "ldpc", "c256-w48-r58", 1, 1832, band="f55", headroom=6),  # 12068; 21.25 / 14.0
+        _m(13, "f55-256l-r88", "ldpc", "c256-w48-r58", 1, 1928, band="f55", headroom=6),  # 12712; 27.25 / 15.75
+        _m(0, "f108-qpsk-r21", "ldpc", "gray-qam4", 2, 456, band="f108", headroom=2),  # 1475; 2.25
+        _m(1, "f108-qpsk-r41", "ldpc", "gray-qam4", 2, 888, band="f108", headroom=2),  # 2870; 4.0
+        _m(2, "f108-qpsk-r60", "ldpc", "gray-qam4", 2, 1296, band="f108", headroom=2),  # 4237; 5.5
+        _m(3, "f108-16qam-r41", "ldpc", "gray-qam16", 1, 888, band="f108", headroom=6),  # 5739; 6.5
+        _m(4, "f108-64l-r40", "ldpc", "c64-w48-r12", 1, 1296, band="f108", headroom=6),  # 8474; 8.5
+        _m(5, "f108-64l-r50", "ldpc", "c64-w48-r12", 1, 1616, band="f108", headroom=6),  # 10620; 10.0
+        _m(6, "f108-64l-r59", "ldpc", "c64-w48-r12", 1, 1920, band="f108", headroom=6),  # 12658; 11.5
+        _m(7, "f108-64l-r67", "ldpc", "c64-w48-r23", 1, 2176, band="f108", headroom=6),  # 14374; 13.0
+        _m(8, "f108-64l-r75", "ldpc", "c64-w48-r23", 1, 2432, band="f108", headroom=6),  # 16091; 14.75
+        _m(9, "f108-64l-r80", "ldpc", "c64-w48-r23", 1, 2592, band="f108", headroom=6),  # 17163; 15.75
+        _m(10, "f108-256l-r67", "ldpc", "c256-w48-r12", 1, 2896, band="f108", headroom=6),  # 19202; 17.5
+        _m(11, "f108-256l-r75", "ldpc", "c256-w48-r58", 1, 3240, band="f108", headroom=6),  # 21508; 19.75
+        _m(12, "f108-256l-r80", "ldpc", "c256-w48-r58", 1, 3456, band="f108", headroom=6),  # 22956; 21.25
+        _m(13, "f108-256l-r87", "ldpc", "c256-w48-r58", 1, 3776, band="f108", headroom=6),  # 25102; 23.75
     ]))
 # (sync band, header index) -> submode: what a header's index means
 # (native config::by_index)

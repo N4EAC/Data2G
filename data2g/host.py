@@ -75,7 +75,7 @@ from pathlib import Path  # noqa: E402
 
 import numpy as np  # noqa: E402
 
-from . import audio, cwid, hand  # noqa: E402
+from . import audio, cwid, hand, modem  # noqa: E402
 from .arq import modes  # noqa: E402
 from .arq import session as S  # noqa: E402
 from .arq.engine import Engine  # noqa: E402
@@ -623,6 +623,7 @@ def serve(a, pa, stop: threading.Event | None = None):
     engine = Engine(a.mycall or "NOCALL", ptt_delay_s=a.ptt_on_delay_ms / 1000, record_dir=a.record_dir,
                     min_header_score=a.min_header_score, kiss=link, stats_interval_s=a.stats_interval)
     engine.cw_id, engine.cw_wpm = getattr(a, "cw_id", "off"), getattr(a, "cw_wpm", cwid.WPM)  # (a test's args may lack them)
+    modem.TX_PATH = getattr(a, "tx_path", modem.TX_PATH)  # the station's radio path (FM's transmit)
     engine.hand_round = getattr(a, "hand_decoder", "full")
     engine.pending = getattr(a, "pending", "fsk")
     host = Host(engine, None if a.buffer_credit < 0 else a.buffer_credit)
@@ -774,6 +775,9 @@ def main():
     ap.add_argument("--cw-id", choices=("off", "add", "only"), default="off",
                     help="CW ID (docs/arq.md §7b): off (ID frames only), add (with them), only (in their place)")
     ap.add_argument("--cw-wpm", type=float, default=20.0, help="CW ID speed, 15-40 wpm")
+    ap.add_argument("--tx-path", choices=modem.TX_PATHS, default="mic",
+                    help="FM profile: the radio's TX audio path, mic (pre-emphasis and limiter; the default) or flat"
+                         " (a 9600 data port): sets the TX tilt, clipping and top-mode levels (config.FM_*)")
     ap.add_argument("--hand-decoder", choices=("full", "cheap"), default="full",
                     help="net control's Hand round: cheap, one fewer candidate and coarser grids, half the CPU"
                          " of a 40-channel round for 0.2-0.4 dB (docs/hand-burst.md)")

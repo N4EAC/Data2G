@@ -46,7 +46,7 @@ from typing import NotRequired, TypedDict
 
 import numpy as np
 
-from . import codes, constellation, equalizer
+from . import codes, config, constellation, equalizer
 from .config import (
     BANDS,
     BY_INDEX,
@@ -431,18 +431,42 @@ def decode_header(soft: np.ndarray, band: str = "w",
 
 # --- transmit ---------------------------------------------------------------
 
-def modulate(payloads: list[bytes], submode: str | SubmodeSpec, rvs=None) -> np.ndarray:
+# The station's radio path on the FM profile (config.FM_*): "mic" (the default:
+# its quieter top modes are safe on a flat radio, where flat's settings would
+# overdrive a mic radio's limiter) or "flat" (a 9600 port). Set by the station
+# (data2g-host --tx-path); what the transmitter sends, never what it receives.
+TX_PATHS = ("mic", "flat")
+TX_PATH = "mic"
+
+
+@lru_cache(maxsize=None)
+def tx_tilt_fir(band: str) -> np.ndarray:
+    """The flat path's TX tilt (config.FM_TX_TILT_DB_OCT): linear-phase FIR,
+    amplitude (f / fc)^(dB per octave / 6.02) over the band (fc its geometric
+    centre), held flat outside it (scripts/fm_tilt_study.py's, measured with it)."""
+    from scipy import signal
+
+    b = BANDS[band]
+    lo = config.CARRIER0 + RS * b.k0
+    hi = lo + RS * (b.nc - 1)
+    f = np.linspace(0, FS / 2, 513)
+    g = (np.clip(f, lo, hi) / np.sqrt(lo * hi)) ** (config.FM_TX_TILT_DB_OCT / (20 * np.log10(2)))
+    return signal.firwin2(255, f, g, fs=FS)
+
+
+def modulate(payloads: list[bytes], submode: str | SubmodeSpec, rvs=None, tx_path: str | None = None) -> np.ndarray:
     """Codeword payloads (each exactly codes.payload_bytes long) -> unit-RMS
-    audio. `rvs`: each codeword's redundancy version (codes.rv_positions),
-    all 0 by default."""
+    audio (FM, mic path: the top modes quieter, config.FM_MIC_GAIN). `rvs`:
+    each codeword's redundancy version (codes.rv_positions), all 0 by
+    default. `tx_path`: FM's radio path (default TX_PATH)."""
     spec = SUBMODES[submode] if isinstance(submode, str) else submode
     if not 1 <= len(payloads) <= max_codewords(spec.sync_band):
         raise ValueError(f"1..{max_codewords(spec.sync_band)} codewords per burst, got {len(payloads)}")
     bits = np.stack([codes.encode(spec, p, rv, index=i) for i, (p, rv) in enumerate(zip(payloads, rvs or [0] * len(payloads)))])
-    return modulate_bits(codes.spread(bits, spec.bits_per_cu, codes.spread_group(spec)), spec)
+    return modulate_bits(codes.spread(bits, spec.bits_per_cu, codes.spread_group(spec)), spec, tx_path)
 
 
-def modulate_bits(bits: np.ndarray, spec: SubmodeSpec) -> np.ndarray:
+def modulate_bits(bits: np.ndarray, spec: SubmodeSpec, tx_path: str | None = None) -> np.ndarray:
     """Coded bits in burst order (whole codewords, after `codes.spread`)
     -> unit-RMS audio. The codec-free half of `modulate`, for
     measurements that send raw bits."""
@@ -455,12 +479,26 @@ def modulate_bits(bits: np.ndarray, spec: SubmodeSpec) -> np.ndarray:
         m = constellation.bits_per_symbol(pts)
         idx = (bits.reshape(-1, m) @ (1 << np.arange(m - 1, -1, -1))).reshape(data.shape)
         project = ace_projector(spec, data, constellation.ace_dirs(spec.constellation)[idx])
+    path = TX_PATH if tx_path is None else tx_path
+    if path not in TX_PATHS:
+        raise ValueError(f"tx_path: {path!r}, not one of {TX_PATHS}")
+    fm = config.PROFILE == "fm"
+    m = constellation.bits_per_symbol(pts)
+    # FM flat path: sent unclipped from 16-QAM up (a headroom no burst reaches)
+    headroom = 40.0 if fm and path == "flat" and m >= config.FM_FLAT_NOCLIP_BITS else spec.headroom
     # the sync band's filter: it contains the data band (BandSpec.sync)
-    return dsp.tx_condition(
-        x, spec.headroom, b.spec.clip_overshoot,
+    y = dsp.tx_condition(
+        x, headroom, b.spec.clip_overshoot,
         active=slice(LEADIN_SAMPLES, len(x) - LEADOUT_SAMPLES), bandpass=BANDS[spec.sync_band].tx_bandpass,
         project=project, closing=spec.ace,
     )
+    if not fm:
+        return y
+    if path == "mic":
+        return y * config.FM_MIC_GAIN[m]
+    act = slice(LEADIN_SAMPLES, len(y) - LEADOUT_SAMPLES)
+    t = np.convolve(y, tx_tilt_fir(spec.sync_band), "same")
+    return t * np.sqrt(np.mean(y[act] ** 2) / np.mean(t[act] ** 2))  # rms kept (the tilt studies')
 
 
 def ace_cells(spec: SubmodeSpec, n_f: int) -> tuple[np.ndarray, np.ndarray]:

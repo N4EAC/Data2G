@@ -18,6 +18,16 @@ no-failure knee there.
 Modes are config.SUBMODES names, or candidates registered by
 scripts/fm_ladder_screen.register (band:constellation:frames:k:headroom
 strings, e.g. f55:gray-qam16:2:1200:1). Writes runs/fm_ladder/<out>.csv.
+
+The transmitter is the shipping one: modem.modulate with tx_path = the
+radio's path ("mic" for mic radios, "flat" otherwise; config.FM_*). The
+drive is a station's: one audio level, set so the full-level modes meet the
+15 kHz limit, so a mode sent quieter (the mic path's top modes,
+config.FM_MIC_GAIN) deviates that much less. FM_TX=1 (scripts/fm_tx.py)
+re-applies the study settings on top for comparison; leave it off.
+FM_RX_UNCLIPPED=1: on the flat path, the receiver assumes no clipping from
+16-QAM up (clip gain 1, no clip noise) instead of the mode's headroom's
+constants (what is actually sent).
 """
 
 import argparse
@@ -48,10 +58,15 @@ def spec_of(name: str):
     return L.register(name)
 
 
+def tx_path(radio: str) -> str:
+    return "mic" if radio.startswith("mic") else "flat"
+
+
 def burst(spec, seed, radio):
-    """S.burst as transmitted under fm_tx's settings (unchanged with FM_TX off)."""
+    """S.burst as transmitted on the radio's path (fm_tx's settings on top with FM_TX=1)."""
     from data2g import constellation, modem
 
+    modem.TX_PATH = tx_path(radio)
     orig = modem.dsp.tx_condition
     if T.noclip(radio, constellation.bits_per_symbol(constellation.load(spec.constellation))):
         modem.dsp.tx_condition = lambda x, h, *a, **k: orig(x, T.NOCLIP_HEADROOM, *a, **k)
@@ -87,9 +102,16 @@ def knees(args) -> dict:
     c, mhz = (cond.split("@") + ["146"])[:2]
     from data2g import constellation
 
+    from data2g import config
+
     _, x = burst(spec, 0, radio)
     bits = constellation.bits_per_symbol(constellation.load(spec.constellation))
-    drive = F.drive_for_bandwidth(x[np.abs(x) > 0], S.radio_of(radio), S.OBW_HZ)[0] * T.drive_scale(radio, bits)
+    if os.environ.get("FM_RX_UNCLIPPED") and tx_path(radio) == "flat" and bits >= config.FM_FLAT_NOCLIP_BITS:
+        config.clip_consts = lambda *a, **k: config.ClipConsts({1: 1.0}, 1.0, 0.0)  # what was sent
+    # the station's level: FmChannel scales each burst to its own rms, so a mode
+    # sent quieter (FM_MIC_GAIN) deviates that much less than the width-limited drive
+    gain = config.FM_MIC_GAIN[bits] if tx_path(radio) == "mic" else 1.0
+    drive = F.drive_for_bandwidth(x[np.abs(x) > 0], S.radio_of(radio), S.OBW_HZ)[0] * gain * T.drive_scale(radio, bits)
     seen = {}
 
     def f(cnr):

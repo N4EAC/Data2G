@@ -541,6 +541,8 @@ def main(argv=None):
                    f"CPM 1-{CPM_MAX_H} (default {CPM_MAX_H})")
     s.add_argument("--passes", type=int, default=1, help="times the whole text is sent, RVs rotating (default 1)")
     s.add_argument("--lead-ms", type=float, default=500, help="silence before the first burst, for PTT/VOX")
+    s.add_argument("--tx-path", choices=modem.TX_PATHS, default="mic",
+                   help="FM profile: the radio's TX audio path, mic or flat (a 9600 port); see data2g-host")
     r = sub.add_parser("recv", help="WAV (or raw float32 at 8 kHz on stdin) -> text")
     r.add_argument("audio", help="WAV file, or '-' for raw float32 mono at 8 kHz on stdin")
     r.add_argument("-o", "--output", required=True, help="text file to write (several streams: .<id> appended)")
@@ -560,6 +562,7 @@ def main(argv=None):
         ap.error(f"mode {a.mode!r}: one of {', '.join(sorted(MODES))}")
     logging.basicConfig(level=logging.INFO if a.verbose else logging.WARNING, format="%(message)s")
     if a.cmd == "send":
+        modem.TX_PATH = a.tx_path
         h = a.blocks_per_burst or min(15, max_h(MODES[a.mode]))
         check_mode(a.mode, h)
         text = sys.stdin.buffer.read() if a.text == "-" else open(a.text, "rb").read()

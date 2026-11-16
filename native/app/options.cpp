@@ -43,7 +43,7 @@ const char* USAGE =
     "                   [--tci | --no-tci] [--tci-host HOST[:PORT]] [--threads N] [--realtime | --no-realtime]\n"
     "                   [--live-constellation | --no-live-constellation] [--nods | --no-nods]\n"
     "                   [--dd-budget S] [--decoder-effort N] [--cw-id {off,add,only}] [--cw-wpm WPM]\n"
-    "                   [--hand-decoder {full,cheap}]\n"
+    "                   [--hand-decoder {full,cheap}] [--tx-path {mic,flat}]\n"
     "                   [--rig | --no-rig] [--list-rigs] [--rig-model N] [--rig-device DEVICE] [--rig-baud BAUD]\n"
     "                   [--rig-data-bits {default,7,8}] [--rig-stop-bits {default,1,2}]\n"
     "                   [--rig-parity {default,none,odd,even}] [--rig-handshake {default,none,xonxoff,hardware}]\n"
@@ -129,6 +129,8 @@ const char* HELP =
     "                        CFO refinement: under half the CPU of a 40-channel round (0.37 s to 0.16 s on a\n"
     "                        desktop) for 0.2-0.4 dB (docs/hand-burst.md). Only a station running a HAND\n"
     "                        LISTEN round pays it (default full)\n"
+    "  --tx-path {mic,flat}  FM profile: the radio's TX audio path, mic (pre-emphasis and limiter) or flat\n"
+    "                        (a 9600 data port): sets the TX tilt, clipping and top-mode levels (default mic)\n"
     "\nrig control (Hamlib, linked in):\n"
     "  --rig, --no-rig       rig control at all; --no-rig: no PTT (default: on)\n"
     "  --list-rigs           Hamlib's rig models: number, manufacturer, model, status\n"
@@ -231,6 +233,7 @@ Args parse(int argc, char** argv, Args a, const char* prog, const char* extra_he
         {"--dd-budget", [&](auto& o, auto& v) { a.dd_budget = d_(o, v); }},
         {"--decoder-effort", [&](auto& o, auto& v) { a.decoder_effort = i_(o, v); }},
         {"--cw-id", [&](auto&, auto& v) { a.cw_id = v; }},
+        {"--tx-path", [&](auto&, auto& v) { a.tx_path = v; }},
         {"--cw-wpm", [&](auto& o, auto& v) { a.cw_wpm = d_(o, v); }},
         {"--hand-decoder", [&](auto&, auto& v) { a.hand_decoder = v; }},
         {"--pending", [&](auto&, auto& v) { a.pending = v; }},
@@ -400,6 +403,8 @@ std::optional<std::string> check(const Args& a) {
         if (a.sample_rate != 8000 && a.sample_rate != 24000 && a.sample_rate != 48000)
             return "--tci: --sample-rate must be 8000, 24000 or 48000 (TCI's rates that are multiples of 8000)";
     }
+    if (a.tx_path != "mic" && a.tx_path != "flat")
+        return "--tx-path: invalid choice: '" + a.tx_path + "' (choose from mic, flat)";
     if (a.cw_id != "off" && a.cw_id != "add" && a.cw_id != "only")
         return "--cw-id: invalid choice: '" + a.cw_id + "' (choose from off, add, only)";
     if (a.pending != "off" && a.pending != "fsk" && a.pending != "ofdm" && a.pending != "all")

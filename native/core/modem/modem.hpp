@@ -77,11 +77,19 @@ Header decode_header(std::span<const double> soft, std::string_view band = "w", 
 
 // --- transmit -------------------------------------------------------------
 
-// Codeword payloads -> unit-RMS audio. rvs empty: all 0.
+// The station's radio path on the FM profile (modem.py TX_PATH; config FM_*): "mic"
+// (the default) or "flat". What the transmitter sends; the receiver never needs it.
+// HF ignores it. An empty tx_path argument below means this setting.
+std::string_view tx_path();
+void set_tx_path(std::string_view path);  // throws std::invalid_argument unless "mic" or "flat"
+
+// Codeword payloads -> unit-RMS audio (FM mic path: the top modes quieter,
+// config::FM_MIC_GAIN). rvs empty: all 0.
 std::vector<double> modulate(std::span<const std::vector<std::uint8_t>> payloads, const Spec& spec,
-                             std::span<const int> rvs = {});
+                             std::span<const int> rvs = {}, std::string_view tx_path = {});
 // Coded bits in burst order (codes::spread) -> unit-RMS audio.
-std::vector<double> modulate_bits(std::span<const std::uint8_t> bits, const Spec& spec);
+std::vector<double> modulate_bits(std::span<const std::uint8_t> bits, const Spec& spec,
+                                  std::string_view tx_path = {});
 // (n_f * 5, nc) data symbols -> the unclipped burst waveform.
 std::vector<double> burst_waveform(const Mat<cd>& data, const Spec& spec);
 // First sample of each data symbol of a burst of n_f data frames (ace_cells' `full`[:, 0]).

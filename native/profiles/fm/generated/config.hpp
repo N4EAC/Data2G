@@ -28,11 +28,14 @@ inline constexpr bool SYMBOL_NOISE = true;
 inline constexpr int SPREAD_WINDOW = 8;
 inline constexpr int EST_WINDOW = 8;
 inline constexpr bool DECODE_EARLY = true;
+inline constexpr double FM_TX_TILT_DB_OCT = 3.0;
+inline constexpr int FM_FLAT_NOCLIP_BITS = 4;
+inline constexpr std::array<double, 9> FM_MIC_GAIN = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.7, 1.0, 0.55};
 inline constexpr double DEFAULT_SPREAD_HZ = 0.2;
 inline constexpr int FIRST_PATH_SEARCH = 32;
 inline constexpr double FIRST_PATH_FRAC = 0.5;
 inline constexpr int PROFILE_TAG = 32;
-inline constexpr int PROTOCOL_VERSION = 3;
+inline constexpr int PROTOCOL_VERSION = 4;
 inline constexpr std::array<std::string_view, 4> HEADER_COPY_BANDS = {"w", "w48", "f55", "f108"};
 inline constexpr int HEADER_COPY_AFTER = 2;
 inline constexpr int MAX_CODEWORDS = 64;
@@ -101,7 +104,7 @@ inline constexpr std::array<double, 1> ACE_35 = {1.0};
 inline constexpr std::array<double, 1> ACE_36 = {1.0};
 inline constexpr std::array<double, 1> ACE_38 = {1.0};
 
-inline constexpr std::array<Submode, 56> SUBMODES = {{
+inline constexpr std::array<Submode, 72> SUBMODES = {{
     {0, "ack-4f", "polar", "gray-qam4", "w", "w", 4, 56, 2, 960, 24, 4, 0.0, {}},
     {1, "polar-k96-f8", "polar", "gray-qam4", "w", "w", 8, 104, 2, 1920, 24, 10, 0.0, {}},
     {2, "polar-k96-f4", "polar", "gray-qam4", "w", "w", 4, 104, 2, 960, 24, 10, 0.0, {}},
@@ -146,18 +149,34 @@ inline constexpr std::array<Submode, 56> SUBMODES = {{
     {12, "w48-64l-r2/3", "ldpc", "c64-w48-r23", "w48", "w48", 2, 1920, 6, 2880, 32, 236, 6.0, {}},
     {13, "w48-64l-r3/4", "ldpc", "c64-w48-r34", "w48", "w48", 2, 2160, 6, 2880, 32, 266, 5.0, {}},
     {14, "w48-256l-r5/8", "ldpc", "c256-w48-r58", "w48", "w48", 2, 2400, 8, 3840, 32, 296, 6.0, {}},
-    {0, "f55-qpsk-r1/5", "ldpc", "gray-qam4", "f55", "f55", 4, 480, 2, 2200, 16, 58, 0.0, {}},
-    {1, "f55-qpsk-r1/2", "ldpc", "gray-qam4", "f55", "f55", 4, 1040, 2, 2200, 32, 126, 0.0, {}},
-    {2, "f55-16qam-r1/2", "ldpc", "gray-qam16", "f55", "f55", 2, 1040, 4, 2200, 32, 126, 1.0, {}},
-    {3, "f55-16qam-r3/4", "ldpc", "gray-qam16", "f55", "f55", 2, 1584, 4, 2200, 32, 194, 3.0, {}},
-    {4, "f55-64l-r2/3", "ldpc", "c64-w48-r23", "f55", "f55", 2, 2288, 6, 3300, 32, 282, 6.0, {}},
-    {5, "f55-256l-r5/8", "ldpc", "c256-w48-r58", "f55", "f55", 1, 1376, 8, 2200, 32, 168, 6.0, {}},
-    {0, "f108-qpsk-r1/5", "ldpc", "gray-qam4", "f108", "f108", 2, 480, 2, 2160, 16, 58, 0.0, {}},
-    {1, "f108-qpsk-r1/2", "ldpc", "gray-qam4", "f108", "f108", 2, 1040, 2, 2160, 32, 126, 0.0, {}},
-    {2, "f108-16qam-r1/2", "ldpc", "gray-qam16", "f108", "f108", 1, 1040, 4, 2160, 32, 126, 1.0, {}},
-    {3, "f108-16qam-r3/4", "ldpc", "gray-qam16", "f108", "f108", 1, 1584, 4, 2160, 32, 194, 3.0, {}},
-    {4, "f108-64l-r2/3", "ldpc", "c64-w48-r23", "f108", "f108", 1, 2288, 6, 3240, 32, 282, 6.0, {}},
-    {5, "f108-256l-r3/5", "ldpc", "c256-w48-r58", "f108", "f108", 1, 2560, 8, 4320, 32, 316, 6.0, {}},
+    {0, "f55-qpsk-r21", "ldpc", "gray-qam4", "f55", "f55", 4, 456, 2, 2200, 16, 55, 2.0, {}},
+    {1, "f55-qpsk-r40", "ldpc", "gray-qam4", "f55", "f55", 4, 888, 2, 2200, 32, 107, 2.0, {}},
+    {2, "f55-qpsk-r60", "ldpc", "gray-qam4", "f55", "f55", 4, 1320, 2, 2200, 32, 161, 2.0, {}},
+    {3, "f55-16qam-r47", "ldpc", "gray-qam16", "f55", "f55", 2, 1040, 4, 2200, 32, 126, 3.0, {}},
+    {4, "f55-64l-r50", "ldpc", "c64-w48-r12", "f55", "f55", 2, 1648, 6, 3300, 32, 202, 6.0, {}},
+    {5, "f55-64l-r67", "ldpc", "c64-w48-r12", "f55", "f55", 2, 2216, 6, 3300, 32, 273, 6.0, {}},
+    {6, "f55-64l-r75", "ldpc", "c64-w48-r23", "f55", "f55", 2, 2472, 6, 3300, 32, 305, 6.0, {}},
+    {7, "f55-64l-r80", "ldpc", "c64-w48-r23", "f55", "f55", 2, 2640, 6, 3300, 32, 326, 6.0, {}},
+    {8, "f55-64l-r83", "ldpc", "c64-w48-r23", "f55", "f55", 2, 2752, 6, 3300, 32, 340, 6.0, {}},
+    {9, "f55-256l-r67", "ldpc", "c256-w48-r12", "f55", "f55", 1, 1480, 8, 2200, 32, 181, 6.0, {}},
+    {10, "f55-256l-r72", "ldpc", "c256-w48-r12", "f55", "f55", 1, 1584, 8, 2200, 32, 194, 6.0, {}},
+    {11, "f55-256l-r80", "ldpc", "c256-w48-r58", "f55", "f55", 1, 1760, 8, 2200, 32, 216, 6.0, {}},
+    {12, "f55-256l-r83", "ldpc", "c256-w48-r58", "f55", "f55", 1, 1832, 8, 2200, 32, 225, 6.0, {}},
+    {13, "f55-256l-r88", "ldpc", "c256-w48-r58", "f55", "f55", 1, 1928, 8, 2200, 32, 237, 6.0, {}},
+    {0, "f108-qpsk-r21", "ldpc", "gray-qam4", "f108", "f108", 2, 456, 2, 2160, 16, 55, 2.0, {}},
+    {1, "f108-qpsk-r41", "ldpc", "gray-qam4", "f108", "f108", 2, 888, 2, 2160, 32, 107, 2.0, {}},
+    {2, "f108-qpsk-r60", "ldpc", "gray-qam4", "f108", "f108", 2, 1296, 2, 2160, 32, 158, 2.0, {}},
+    {3, "f108-16qam-r41", "ldpc", "gray-qam16", "f108", "f108", 1, 888, 4, 2160, 32, 107, 6.0, {}},
+    {4, "f108-64l-r40", "ldpc", "c64-w48-r12", "f108", "f108", 1, 1296, 6, 3240, 32, 158, 6.0, {}},
+    {5, "f108-64l-r50", "ldpc", "c64-w48-r12", "f108", "f108", 1, 1616, 6, 3240, 32, 198, 6.0, {}},
+    {6, "f108-64l-r59", "ldpc", "c64-w48-r12", "f108", "f108", 1, 1920, 6, 3240, 32, 236, 6.0, {}},
+    {7, "f108-64l-r67", "ldpc", "c64-w48-r23", "f108", "f108", 1, 2176, 6, 3240, 32, 268, 6.0, {}},
+    {8, "f108-64l-r75", "ldpc", "c64-w48-r23", "f108", "f108", 1, 2432, 6, 3240, 32, 300, 6.0, {}},
+    {9, "f108-64l-r80", "ldpc", "c64-w48-r23", "f108", "f108", 1, 2592, 6, 3240, 32, 320, 6.0, {}},
+    {10, "f108-256l-r67", "ldpc", "c256-w48-r12", "f108", "f108", 1, 2896, 8, 4320, 32, 358, 6.0, {}},
+    {11, "f108-256l-r75", "ldpc", "c256-w48-r58", "f108", "f108", 1, 3240, 8, 4320, 32, 401, 6.0, {}},
+    {12, "f108-256l-r80", "ldpc", "c256-w48-r58", "f108", "f108", 1, 3456, 8, 4320, 32, 428, 6.0, {}},
+    {13, "f108-256l-r87", "ldpc", "c256-w48-r58", "f108", "f108", 1, 3776, 8, 4320, 32, 468, 6.0, {}},
 }};
 
 }  // namespace data2g::config

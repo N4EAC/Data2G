@@ -722,6 +722,12 @@ class Engine:
     def next_event(self) -> float | None:
         return self.session.next_event()
 
+    @property
+    def tx_path(self) -> str:
+        """The station's FM radio path (modem.TX_PATH): what its bursts are
+        shaped for, for a level / ping report (FM plan M7)."""
+        return modem.TX_PATH
+
     def _hear(self, x: np.ndarray, t: float):
         if self._nod is not None:
             self._nod_feed(x, t)

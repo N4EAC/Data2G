@@ -129,6 +129,29 @@ def test_modulate_matches(native, py, name):
     np.testing.assert_array_equal(native.modem.ace_cells(name, n_f), full)
 
 
+@pytest.mark.parametrize("tx_path", ["mic", "flat"])
+def test_modulate_tx_path_matches(native, py, tx_path):
+    """modem.TX_PATH: the FM transmit per radio path (flat: the tilt and no
+    clipping from 16-QAM up; mic: the top modes' gain), every mode family;
+    on HF both paths send the same."""
+    for name, spec in SUBMODES.items():
+        if spec.code != "ldpc" or spec.index % 3:  # every family, a third of the modes
+            continue
+        pl = _payloads(spec, 1, spec.index + 7)
+        close(native.modem.modulate(pl, name, [0], tx_path), py.modulate(pl, spec, [0], tx_path), 1e-9)
+    old = native.modem.tx_path()
+    try:
+        native.modem.set_tx_path(tx_path)
+        assert native.modem.tx_path() == tx_path
+        spec = next(s for s in SUBMODES.values() if s.code == "ldpc")
+        pl = _payloads(spec, 1, 3)
+        close(native.modem.modulate(pl, spec.name), py.modulate(pl, spec, None, tx_path), 1e-9)
+        with pytest.raises(ValueError):
+            native.modem.set_tx_path("loud")
+    finally:
+        native.modem.set_tx_path(old)
+
+
 def test_burst_waveform_matches(native, py):
     rng = np.random.default_rng(2)
     for name in ("ack-1f", "qpsk-r1/2", "n4-ack-2f", "n10-qpsk-r1/5", "w48-16qam-r1/2"):
@@ -144,8 +167,8 @@ RX_CASES = [("ack-1f", 1, 10.0, None), ("qpsk-r1/2", 2, 6.0, "mpp"), ("n4-ack-2f
             ("n10-qpsk-r1/3", 1, 4.0, "mpp"), ("w48-16qam-r1/2", 3, 14.0, None), ("w48-64l-r1/2", 2, 20.0, "mpd"),
             ("polar-k96-f4", 3, -3.0, "mpd")]
 if "f55" in BANDS:  # FM's own bands (FM profile)
-    RX_CASES += [("f55-16qam-r1/2", 3, 16.0, None), ("f55-qpsk-r1/2", 2, 4.0, "mpp"), ("f108-64l-r2/3", 2, 22.0, None),
-                 ("f108-qpsk-r1/5", 3, 0.0, "mpd")]
+    RX_CASES += [("f55-16qam-r47", 3, 16.0, None), ("f55-qpsk-r40", 2, 4.0, "mpp"), ("f108-64l-r67", 2, 22.0, None),
+                 ("f108-qpsk-r21", 3, 0.0, "mpd")]
 
 
 def same_received(n, r):

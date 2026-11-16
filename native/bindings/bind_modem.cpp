@@ -280,17 +280,21 @@ void bind_modem(py::module_& m) {
         return header_tuple(mo::decode_header(view(soft), band, a ? &*a : nullptr));
     }, py::arg("soft"), py::arg("band") = "w", py::arg("accept") = py::none());
 
-    d.def("modulate", [](const std::vector<py::bytes>& payloads, const py::object& s, const std::vector<int>& rvs) {
+    // tx_path "": the native setting (set_tx_path)
+    d.def("modulate", [](const std::vector<py::bytes>& payloads, const py::object& s, const std::vector<int>& rvs,
+                         const std::string& tx_path) {
         std::vector<std::vector<std::uint8_t>> p;
         for (const auto& b : payloads) {
             const auto v = bytes_view(b);
             p.emplace_back(v.begin(), v.end());
         }
-        return np(mo::modulate(p, spec_of(s), rvs));
-    }, py::arg("payloads"), py::arg("submode"), py::arg("rvs") = std::vector<int>{});
-    d.def("modulate_bits", [](const In<std::uint8_t>& bits, const py::object& s) {
-        return np(mo::modulate_bits(view(bits), spec_of(s)));
-    });
+        return np(mo::modulate(p, spec_of(s), rvs, tx_path));
+    }, py::arg("payloads"), py::arg("submode"), py::arg("rvs") = std::vector<int>{}, py::arg("tx_path") = "");
+    d.def("modulate_bits", [](const In<std::uint8_t>& bits, const py::object& s, const std::string& tx_path) {
+        return np(mo::modulate_bits(view(bits), spec_of(s), tx_path));
+    }, py::arg("bits"), py::arg("spec"), py::arg("tx_path") = "");
+    d.def("tx_path", [] { return std::string(mo::tx_path()); });
+    d.def("set_tx_path", [](const std::string& p) { mo::set_tx_path(p); });
     d.def("burst_waveform", [](const In<cd>& data, const py::object& s) {
         return np(mo::burst_waveform(mat2(data), spec_of(s)));
     });

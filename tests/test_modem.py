@@ -17,7 +17,9 @@ def _payloads(spec, n, seed):
     return [rng.bytes(codes.payload_bytes(spec)) for _ in range(n)]
 
 
-LOOPBACK = [(s, "awgn", 30) for s in SUBMODES] + [
+# f108 at 36: SNR here is in 2500 Hz and f108 spreads over 5350, 3.3 dB less per
+# carrier, near its top rung's (256-point r0.874) threshold at 30
+LOOPBACK = [(s, "awgn", 36 if SUBMODES[s].band == "f108" else 30) for s in SUBMODES] + [
     (s, "mpp", 20) for s in ("ack-1f", "polar-k96-f4", "qpsk-r1/2", "n4-ack-2f")  # n4: n10's sync and header
 ]
 
@@ -28,7 +30,11 @@ def test_burst_loopback(sub, channel, snr):
     numpy modem with CFO and clock error; a few robust ones on fading."""
     spec = SUBMODES[sub]
     sent = _payloads(spec, 2, spec.index)
-    x = modem.modulate(sent, sub)
+    # FM's f55/f108 on the flat path: their top rungs (256-point r0.83-0.88) are
+    # flat-radio rungs; the mic path clips them at 6 dB, near their threshold here
+    # (test_fm_bands round-trips both paths clean)
+    path = "flat" if spec.band in ("f55", "f108") else None
+    x = modem.modulate(sent, sub, tx_path=path)
     x = np.concatenate([np.zeros(3000), x, np.zeros(3000)])
     y = hfchannel.apply_channel(
         x, snr_db=snr, freq_offset_hz=CFO_HZ, ppm=10,
