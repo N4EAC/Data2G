@@ -296,10 +296,15 @@ Decisions for the user:
 
 - Q2. How low does the FM floor go? VARA FM stops at 549 bps (4PSK on 14 carriers). The CPM floor reaches SNRs FM audio never delivers with a usable carrier, and squelch hides them anyway. Recommendation: keep the w and n10 QPSK rungs (down to 128 bps), no CPM, no n4.
 - Q18. Is there a microwave FM rung or two worth having? Wider channels there allow more deviation and a wider audio or discriminator band than 15 kHz permits on 2 m and 70 cm. Only if it stays inside what a sound card or discriminator tap carries, and costs 2 m and 70 cm nothing.
-- Q16. Are 12.5 kHz channels (2.5 kHz deviation, about 11 kHz occupied) a case to support, or is 15 kHz the only target?
 
-Decided (2026-11-13, Q1 2026-11-15, Q15 2026-11-16):
+Decided (2026-11-13, Q1 2026-11-15, Q15 and Q16 2026-11-16):
 
+- Q16 (2026-11-16). 12.5 kHz channels are a soft goal for the narrow ladder. Measured (`scripts/fm_narrow_study.py`, `runs/fm_narrow/report.txt`; w48 modes, mic path, streamed receiver, 30 paired trials, CNR in a fixed 15 kHz, so every arm hears the same carrier and noise; dB against a 25 kHz radio driven to 15 kHz):
+  - A 12.5 kHz radio's 2.5 kHz limiter, not a 12.5 kHz bandwidth target, sets the drive: it holds our signal near 10 kHz at any drive, and driving by bandwidth put it in 30-40% clipping. Narrow needs a drive rule by limiter headroom (M4, M7).
+  - At wide's clipping (half its drive): QPSK and 16-QAM lose 0-0.4 dB on fixed, slow and flutter paths and 1.3 dB on mobile (0.4 of it acquisition). That is less than the same drive on the 25 kHz radio (0.9-2.5 dB): the 11 kHz IF passes less noise. For these modes a narrow channel is a mild SNR loss.
+  - 64-point r3/4 loses 1.5-4.5 dB, 1.6-2.0 dB beyond the drive cut alone: the narrow radio's IF filter and limiter distort it. At 0.7 drive (about 14% clipped) it fails outright (+14-27 dB) while 16-QAM gains up to 0.3 dB. So the top rungs are where narrow is not just a weaker SNR: drive per mode, and maybe a lower top rung on 12.5 kHz.
+  - The bandwidth target alone (a 25 kHz radio driven to 12.5 kHz) costs 0-0.4 dB.
+  - Not simulated: a wide transmitter into a narrow receiver (M1 has the same radio at both ends). The per-direction capability (M6) carries a 12.5 kHz RX, and the far end drives for it.
 - Q15. 15 kHz measured 26 dB down, US Part 97's definition (see the constraint section for the rules and the reference modes' widths).
 
 - Q1. One codebase, profile fixed at process start, native built once per profile (PR #204).
@@ -338,6 +343,7 @@ Measurements that decide design:
 
 ## Revisions
 
+- 2026-11-16, Q16: 12.5 kHz channels a soft goal; measured on M1 (limiter-bound drive; QPSK/16-QAM a mild SNR loss, 64-point 1.5-4.5 dB).
 - 2026-11-16, Q15 decided (15 kHz, 26 dB down) with the rules and existing modes' measured widths; capability per direction (TX and RX separately) from the discussion; PR #214's windows and decoding while the burst arrives.
 - 2026-11-15, M2b first Pi bench and M3's damaged burst start (PR #206); HF per-symbol noise is issue #207.
 - 2026-11-15, M3 (PR #206): per-symbol noise up to 2.25 dB on mobile paths; +-12.5 Hz search at no cost, 6.7x less detector CPU; FM threshold 28.7.
