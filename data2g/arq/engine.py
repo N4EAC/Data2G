@@ -660,6 +660,10 @@ class Engine:
             hand_free = t >= self._hand_hold and self._hand_tx is None
             free = t >= self._hold and t >= self._cw_until and hand_free
             busy = self.receiver.busy or cw
+            if busy and self._id_pending is not None:
+                # the peer's trailing ID runs past ID_GUARD_S: its CW after its ID frame
+                # (cw_id "add"), which CwSense needs ~1 s to hear, so a gap opened there
+                self._id_pending[1] = max(self._id_pending[1], t + ID_GUARD_S)
             if not busy and not held:  # a burst still arriving holds any reply (half duplex)
                 self._carrier_hold(t)
                 burst = self.session.poll(t)

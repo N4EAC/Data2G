@@ -702,7 +702,9 @@ Station identification, readable by anyone listening (data2g/arq/engine.py).
     finding its header takes up to ~0.85 s, close to `T_turn`.
 - **After a session:** one more ID, still with the expired session's key.
   - The station that closes on a DISC sends it right after its DISC_ACK.
-  - Otherwise it goes `ID_GUARD_S` (2.5 s) after the close.
+  - Otherwise it goes `ID_GUARD_S` (2.5 s) after the close, and at least that long past
+    the last burst or CW ID heard: the peer's ID frame then CW ID (`add`) outlast the guard,
+    and CwSense takes ~1 s to hear the CW.
   - Nothing new goes out in that guard (KISS, CQ, a new session), so the peer's
     trailing ID is heard and not keyed over. A KISS frame queued during a session was
     lost that way.
