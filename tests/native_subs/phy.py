@@ -9,7 +9,7 @@ def substitutions(native):
     phy.DD when made, and its store stays the caller's dict."""
     import time
 
-    from data2g import codes, kisslink
+    from data2g import codes, kisslink, modem
     from data2g.arq import modes
     from data2g.arq import phy as PHY
 
@@ -71,7 +71,8 @@ def substitutions(native):
             return self._n.forget(key)
 
     def tx_audio(burst, tx_path=None, level=None):
-        return (P.tx_audio(burst, tx_path, level) if burst.submode in modes.MODES
+        # tx_path None: Python's station setting (modem.TX_PATH), as the modulate substitution reads it
+        return (P.tx_audio(burst, tx_path or modem.TX_PATH, level) if burst.submode in modes.MODES
                 else py_tx(burst, tx_path=tx_path, level=level))
 
     def soft_bits(r):

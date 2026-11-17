@@ -85,3 +85,25 @@ def test_kiwi_like_recording(tmp_path):
     assert all(r["cw_ok"] == r["n_cw"] for r in rep["bursts"])
     assert all(abs(r["cfo_hz"] - 37.0) < 2 for r in rep["bursts"] if r["family"] != "cpm")
     assert not rep["extra"]
+
+
+@pytest.mark.skipif(PROFILE != "fm", reason="FM's bands, TX path and simulator")
+@pytest.mark.parametrize("radio", ["mic", "flat"])
+def test_fm_round_trip_through_the_simulator(radio, monkeypatch):
+    """FM: a sounding sent with the radio's TX path, through the FM simulator at
+    a station's level (static, CNR 35), decodes every codeword, and the report
+    calls the path static (the policy's noise-spread regime)."""
+    from data2g import fmchannel, modem
+
+    monkeypatch.setattr(modem, "TX_PATH", radio)
+    modes = ["f55-qpsk-r21", "f55-64l-r67", "f55-256l-r72"] + (["f108-256l-r87"] if radio == "flat" else [])
+    x, bursts = S.sequence("W1AW", seed=1, reps=1, modes=modes)
+    station = 1460.0 if radio == "mic" else 2350.0  # rms deviation of a unit-RMS burst (fork K's levels)
+    ref = np.sqrt(np.mean(x[np.abs(x) > 0] ** 2))  # FmChannel scales the whole input by its rms
+    ch = fmchannel.FmChannel("static", radio, 35.0, seed=3, duration_s=len(x) / FS + 1,
+                             drive_dev_hz=station * ref / (1 / config.FM_TX_PEAK))
+    rep = S.analyse(ch.apply(x), FS, "W1AW", 1, 1, modes)
+    for r in rep["bursts"]:
+        assert r["cw_ok"] == r["n_cw"], r
+    assert rep["path"]["channel"] == "static"
+    assert all(m["predicted_pass"] for m in rep["per_mode"]), [(m["submode"], m.get("p_usable")) for m in rep["per_mode"]]

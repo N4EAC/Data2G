@@ -1,6 +1,6 @@
 # FM on-air test plan (M0 / M9)
 
-TLDR: four radios, five pairings, one procedure per pairing: ping to set levels and check the TX path, a bandwidth check, a recorded sounding sweep at two or three RF levels, then ARQ sessions. Everything is recorded for offline replay. Tooling to finish first: `sounding.py` on FM, an IF-recording analyser, and a run log.
+TLDR: four radios, five pairings, one procedure per pairing: ping to set levels and check the TX path, a bandwidth check, a recorded sounding sweep at two or three RF levels, then ARQ sessions. Everything is recorded for offline replay. Tooling is ready: soundings on FM, an IF-recording analyser, and a run log (below).
 
 ## What the results decide
 
@@ -69,8 +69,32 @@ One line per run:
 
 `time, pairing, direction, step, tx radio, tx_path, tx level, power, attenuation, rx radio, rx path (AF / IF), CNR guess, file, notes`
 
-## Tooling to finish before the hardware
+## Tooling (ready)
 
-1. **`sounding.py` on FM:** the FM bands' caps, WAVs at 16 or 48 kHz, FM's threshold columns (static, flutter, mobile), only FM-selectable modes, and `--tx-path` for the sender's settings.
-2. **IF analyser** (`scripts/fm_if_analyse.py`): from a USB IF recording, recover the FM signal with our own discriminator, then report deviation (rms and peak), occupied bandwidth (26 dB down and 99%), and CNR. It also feeds the demodulated audio to `sounding decode` (M10). Its first step is to find out the IF recordings' centre frequency and sample rate per radio.
-3. **Run log template:** `runs/onair/log.csv` with the columns above.
+1. **Soundings on FM** (`scripts/sounding.py`). `make` sends every FM-selectable mode (no CPM, w48 or n4). `--tx-path mic|flat` sets the sender's settings, `--bands f55 f108 w n10` picks a subset, and `--rate` is 16000 (default) or 48000. The sequence's JSON records the TX path.
+   - `decode` takes the same `--tx-path` and `--bands`. It listens as the FM engine does, and predicts pass or fail per mode with the gear shifter's own outcome model (`predictor.fm_outcome`): the reference band's `snr_est`, mapped to each mode's band, with steady or fading chosen by the median noise spread.
+   - The report's carrier response shows the TX path's tilt (a flat sender's +3 dB/octave) on top of the radios'.
+
+   ```
+   DATA2G_PROFILE=fm python -m scripts.sounding make seq.wav --call W1AW --tx-path mic --reps 2
+   DATA2G_PROFILE=fm python -m scripts.sounding decode rec.wav --call W1AW --tx-path mic --reps 2
+   ```
+2. **IF analyser** (`scripts/fm_if_analyse.py`). It reads a radio's USB IF recording with our own discriminator. The IC-9700 and TH-D75 both give their IF as an ordinary USB audio device when a menu option is set, with the dial frequency at 12 kHz (`--centre`'s default; the spectrum's own centre is reported as a check). The sample rate is read from the WAV.
+   - It reports the deviation (rms, and peak at the 99.9th percentile, within 7 kHz of audio), the occupied bandwidth (26 dB down and 99%) and the CNR, per stretch of modulation.
+   - It writes the demodulated audio (de-emphasised for a mic sender) as `PREFIX.demod.wav`, which `sounding decode` reads.
+   - The radio's own FM IF filter is about 15 kHz wide with soft skirts. So noise is read only where there is no carrier (leave a second or two of no carrier at the start and end of a recording, and between overs), and the filter's widths 3 and 26 dB down are reported from it. A 26 dB width near 15 kHz is then partly the radio's filter, not the sender alone: compare it with the filter's widths.
+   - Validated on synthetic IF (a 12 kHz real IF at 48 kHz, CNR 27, f55 256-point on mic and f108 256-point on flat):
+
+     | case | rms deviation | 26 dB width |
+     |---|---|---|
+     | no IF filter | within 1-5% of the truth | within 1% |
+     | a radio-like 15 kHz IF filter | 1-6% under | up to 6% narrow (the filter's real effect) |
+
+     The peak runs 5-23% high (discriminator noise). The filter's 3 dB width is recovered (14.7 kHz for a 15 kHz bandpass). The demodulated audio decodes every codeword through `sounding decode`, with the filter in the loop.
+
+   ```
+   DATA2G_PROFILE=fm python scripts/fm_if_analyse.py if.wav --tx-path mic
+   DATA2G_PROFILE=fm python -m scripts.sounding decode if.demod.wav --call W1AW --tx-path mic
+   ```
+   - Recording IF: set the radio's IF-output menu option, then record its USB audio device as an ordinary WAV. TODO: name the menu item per radio (IC-9700, TH-D75) once found.
+3. **Run log:** `runs/onair/log.csv`, with the columns above.
