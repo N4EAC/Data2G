@@ -118,6 +118,8 @@ def pair_products(C: np.ndarray, F: int, P: int) -> np.ndarray:
     consecutive pairs, for every start with all of them in C (modem.find_copy's
     frame-pilot statistic, before its fold)."""
     n = max(0, C.shape[1] - P * F)
+    if not n:
+        return np.zeros((len(C), 0), dtype=np.complex128)
     d = C[:, F:F + n + (P - 1) * F] * np.conj(C[:, :n + (P - 1) * F])
     return sum((d[:, j * F:j * F + n] for j in range(P)), np.zeros((len(C), n), dtype=np.complex128))
 

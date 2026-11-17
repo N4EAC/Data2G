@@ -251,8 +251,9 @@ class Engine:
 
     @property
     def channel_busy(self) -> bool:
-        """The host's BUSY ON/OFF (receiver.Receiver.channel_busy, or a CW ID heard)."""
-        return self.receiver.channel_busy or self._cw_heard
+        """The host's BUSY ON/OFF (receiver.Receiver.channel_busy, or a CW ID
+        heard). Not the receiver's while we transmit: it hears nothing then."""
+        return (self.tx is None and self.receiver.channel_busy) or self._cw_heard
 
     @property
     def tx_submode(self) -> str | None:
@@ -936,7 +937,7 @@ class Engine:
         if not link.queue:
             self._kiss_busy, self._kiss_deferred = 0, False
             return None
-        if busy or getattr(self.receiver, "data2g_on_air", False):
+        if busy or self.receiver.data2g_on_air:
             self._kiss_busy += k
             self._kiss_deferred = True
             if self._kiss_busy < link.busy_limit_s * FS:

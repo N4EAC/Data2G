@@ -622,7 +622,7 @@ class _Busy:
     def busy(self):
         return self.t < self.until
 
-    channel_busy = busy
+    channel_busy = data2g_on_air = busy
 
     def feed(self, x):
         self.t += len(x) / FS
@@ -1017,11 +1017,13 @@ class _OnAir(_Busy):
     """Nothing locked, but a Data2G burst on the air (Receiver.data2g_on_air)
     until `until`: one whose start we missed."""
 
-    busy = channel_busy = False
+    busy = False
 
     @property
     def data2g_on_air(self):
         return self.t < self.until
+
+    channel_busy = data2g_on_air  # (nothing locked: BUSY is it)
 
 
 def test_kiss_waits_out_a_burst_heard_without_its_header():
@@ -1041,3 +1043,20 @@ def test_kiss_waits_out_a_burst_heard_without_its_header():
     assert 5.0 <= _first_tx(e, 8) <= 5.2
     r = Engine("W1AW", seed=1).receiver
     assert r is None or r.sense  # BUSY reads it too, KISS or not
+
+
+def test_busy_is_off_while_we_transmit():
+    """The receiver hears nothing while we transmit, so its last reading
+    (here a burst on air past busy_limit_s, sent over anyway) is not BUSY."""
+    from data2g.kisslink import KissLink
+
+    e = Engine("W1AW", seed=1, kiss=KissLink(busy_limit_s=1.0))
+    e.receiver = _OnAir(until=1e9)
+    e.kiss.enqueue(b"frame")
+    states = []
+    for _ in range(int(3 * FS / BLOCK)):
+        ptt = e.step(np.zeros(BLOCK))[1]
+        states.append((ptt, e.channel_busy))
+    assert any(p for p, _ in states)
+    assert all(not b for p, b in states if p)
+    assert all(b for _, b in states[:int(0.9 * FS / BLOCK)])

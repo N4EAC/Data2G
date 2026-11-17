@@ -890,7 +890,7 @@ def find_copy(x: np.ndarray, band: str, accept: Accept | None = None, C: np.ndar
        pilot's pattern (COPY_PATTERN: a CW ID or a narrower band's burst
        is coherent too)."""
     if (C is not None or D is not None) and level is None:
-        raise ValueError("find_copy: C needs its noise level")
+        raise ValueError("find_copy: C or D needs its noise level")
     b = ofdm.band(band)
     z0 = dsp.to_baseband(np.asarray(x, dtype=np.float64))
     freqs = _sync.cfo_grid()

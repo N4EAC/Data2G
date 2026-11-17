@@ -45,8 +45,7 @@ protected:
         return receiver.is_none() ? Engine::receiver_channel_busy() : receiver.attr("channel_busy").cast<bool>();
     }
     bool receiver_data2g_on_air() override {
-        return receiver.is_none() ? Engine::receiver_data2g_on_air()
-                                  : py::getattr(receiver, "data2g_on_air", py::bool_(false)).cast<bool>();
+        return receiver.is_none() ? Engine::receiver_data2g_on_air() : receiver.attr("data2g_on_air").cast<bool>();
     }
     void receiver_reset() override {
         if (receiver.is_none()) return Engine::receiver_reset();

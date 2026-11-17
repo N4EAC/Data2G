@@ -171,6 +171,7 @@ void Receiver::reset() {
     cpm_wait_.clear();
     expected_.reset();
     present_ = false;
+    heard_to_ = 0;
     for (auto& t : tracks_) t.reset();
     for (auto& d : detectors_) d.d.reset();
 }
@@ -226,14 +227,17 @@ bool Receiver::on_air() const {
     return mean(last) > floor * std::pow(10.0, ON_AIR_DB / 10);
 }
 
+// receiver.Receiver._sense: of audio past the last burst handled (a suspect one's kept tail would read its own
+// pilots)
 void Receiver::read_presence() {
     const auto n = static_cast<int64_t>(PRESENCE_S * config::FS);
+    const int64_t start = std::max(off_, heard_to_);
     constexpr int64_t PF = static_cast<int64_t>(modem::COPY_PAIRS) * config::FRAME_SAMPLES;
     for (auto& det : detectors_) {
         auto& d = det.d;
         const auto level = d.level();
         if (!level) continue;
-        const auto c = d.products_from(off_, config::FRAME_SAMPLES, modem::COPY_PAIRS);
+        const auto c = d.products_from(start, config::FRAME_SAMPLES, modem::COPY_PAIRS);
         const auto cols = static_cast<std::size_t>(std::max<int64_t>(
             0, std::min(static_cast<int64_t>(c.cols), off_ + len() - c.start - config::M + 1 - PF)));
         if (modem::pilot_presence(c.rows, cols, *level, n).present()) {
@@ -241,7 +245,7 @@ void Receiver::read_presence() {
             return;
         }
     }
-    const int64_t lo = std::max(off_, off_ + len() - static_cast<int64_t>(CPM_PRESENCE_S * config::FS));
+    const int64_t lo = std::max(start, off_ + len() - static_cast<int64_t>(CPM_PRESENCE_S * config::FS));
     for (auto& t : tracks_) t.feed(buf_, off_, lo);
     for (const auto& t : tracks_)
         if (t.present()) {
@@ -445,6 +449,7 @@ bool Receiver::supersede(std::vector<Item>& out, bool whole) {
         out.push_back(BurstEvent{p, std::nullopt, std::vector<double>(buf_.begin() + a, buf_.begin() + std::max(a, b))});
     }
     pending_ = q;
+    present_ = false;  // (read again once nothing is locked)
     pilots_ok_ = q->is_cpm() || q->copy() || q->score() >= SUSPECT_SCORE;
     confirmed_ = false;
     dark_ = 0;
@@ -576,6 +581,7 @@ std::vector<Receiver::Item> Receiver::feed_deferred(std::span<const double> x_in
             if (p->start() + off_ <= last_start_) break;  // the suspect burst just handled, still in the kept window
             p->shift(off_);
             pending_ = p;
+            present_ = false;  // (read again once nothing is locked)
             // BUSY at once on a clear header (or a copy lock: its pilots
             // passed already); a suspect one waits for its pilots
             pilots_ok_ = p->is_cpm() || p->copy() || p->score() >= SUSPECT_SCORE;
@@ -611,6 +617,7 @@ std::vector<Receiver::Item> Receiver::feed_deferred(std::span<const double> x_in
             req.stream = std::move(stream_);
             out.push_back(std::move(req));
             last_start_ = p.start();
+            heard_to_ = p.end();
             // a CPM burst has no lead-out silence: with the sender's clock fast,
             // the next back-to-back burst's front begins before this one's
             // computed end (receiver.Receiver.feed)
@@ -626,6 +633,7 @@ std::vector<Receiver::Item> Receiver::feed_deferred(std::span<const double> x_in
         req.audio_hi = s1 - s0;
         out.push_back(std::move(req));
         last_start_ = p.start();
+        heard_to_ = p.end();
         // a better header inside this burst's span (it was a false lock, and
         // the real one began before it ended) is next, not trimmed away
         if (!confirmed_ && supersede(out, true)) {

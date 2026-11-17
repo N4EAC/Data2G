@@ -207,6 +207,7 @@ private:
     int dark_ = 0;  // the pending lock's latest pilot checks in a row with its pilots measurably absent
     bool looked_ = false;  // the pending CPM lock's second look is done (unconfirmed)
     bool present_ = false;  // data2g_on_air's latest reading with nothing locked
+    std::int64_t heard_to_ = 0;  // stream index where the last burst handled ended (read_presence reads past it)
     std::vector<cpm::PresenceTrack> tracks_;  // data2g_on_air's CPM reading, per grid
     std::deque<double> powers_;  // in-band power of 0.1 s blocks
     double ps_ = 0.0;

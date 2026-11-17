@@ -363,6 +363,7 @@ class Receiver:
         self.cpm_wait: list = []
         self.expected = None  # expect()'s window, until it is looked at
         self._present = False  # data2g_on_air's latest reading with nothing locked
+        self._heard_to = 0  # stream index where the last burst handled ended (_sense reads past it)
         for d in getattr(self, "detectors", {}).values():
             d.reset()
         for t in getattr(self, "tracks", ()):
@@ -461,19 +462,22 @@ class Receiver:
     CPM_PRESENCE_S = 3.0
 
     def _sense(self):
+        """data2g_on_air's reading, of audio past the last burst handled (a
+        suspect one's kept tail would read its own pilots)."""
         from . import cpm
 
+        start = max(self.off, self._heard_to)
         for band, d in self.detectors.items():
             level = d.level()
             if level is None:
                 continue
-            a, D = d.products_from(self.off, modem.FRAME_SAMPLES, modem.COPY_PAIRS)
+            a, D = d.products_from(start, modem.FRAME_SAMPLES, modem.COPY_PAIRS)
             D = D[:, :max(0, self.off + len(self.buf) - a - modem.M + 1 - modem.COPY_PAIRS * modem.FRAME_SAMPLES)]
             if modem.pilot_present(D, level, int(self.PRESENCE_S * FS)):
                 log.debug("data2g on air: %s pilots", band)
                 self._present = True
                 return
-        lo = max(self.off, self.off + len(self.buf) - int(self.CPM_PRESENCE_S * FS))
+        lo = max(start, self.off + len(self.buf) - int(self.CPM_PRESENCE_S * FS))
         for t in self.tracks:
             t.feed(self.buf, self.off, lo)
         for t in self.tracks:
@@ -653,6 +657,7 @@ class Receiver:
             out.append(("burst", {"header": p, "rx": None,
                                   "audio": self.buf[max(0, p["start"] - self.off):max(0, q["start"] - self.off)]}))
         self.pending = q
+        self._present = False  # (read again once nothing is locked)
         self.pilots_ok = q.get("family") == "cpm" or "copy" in q or q["score"] >= self.SUSPECT_SCORE
         self.confirmed = False
         self._dark = 0
@@ -776,6 +781,7 @@ class Receiver:
                 if p["start"] + self.off <= self.last_start:
                     break  # the suspect burst just handled, still in the kept window
                 self.pending = _shift(p, self.off)
+                self._present = False  # (read again once nothing is locked)
                 # BUSY at once on a clear header (or a copy lock: its pilots
                 # passed already); a suspect one waits for its pilots
                 self.pilots_ok = p.get("family") == "cpm" or "copy" in p or p["score"] >= self.SUSPECT_SCORE
@@ -806,7 +812,7 @@ class Receiver:
                 r = cpm.receive(self.buf, dict(p, start=p["start"] - self.off))
                 out.append(("burst", {"header": p, "rx": r, "audio": self.buf[max(0, p["start"] - self.off):
                                                                                p["end"] - self.off]}))
-                self.last_start = p["start"]
+                self.last_start, self._heard_to = p["start"], p["end"]
                 # keep a little before its end: a CPM burst has no lead-out silence,
                 # and with the sender's clock fast (30 ppm) the next back-to-back
                 # burst's front began 4 samples before this one's computed end; cut
@@ -827,7 +833,7 @@ class Receiver:
                 log.warning("burst lost: %s", e)
                 r = None
             out.append(("burst", {"header": p, "rx": r, "audio": seg}))
-            self.last_start = p["start"]
+            self.last_start, self._heard_to = p["start"], p["end"]
             # a better header inside this burst's span (it was a false lock,
             # and the real one began before it ended) is next, not trimmed away
             if not self.confirmed and self._supersede(out, whole=True):

@@ -808,7 +808,20 @@ std::vector<double> pilot_coherence(std::span<const double> x, const Lock& lock,
     return out;
 }
 
-Mat<cd> pilot_fold(std::span<const cd* const> D_rows, size_t t0, size_t mm);  // below, beside find_copy
+namespace {
+// modem._pilot_fold: fold[f, ph] = sum over frames i (in order) of D[f, t0 + i * FR + ph], D the pair products
+// (waveform::pair_products of the matched filter's outputs, COPY_PAIRS pairs a frame apart)
+Mat<cd> pilot_fold(std::span<const cd* const> D_rows, size_t t0, size_t mm) {
+    const size_t FR = FRAME_SAMPLES;
+    Mat<cd> fold(D_rows.size(), FR);
+    for (size_t f = 0; f < D_rows.size(); ++f) {
+        const cd* d = D_rows[f] + t0;
+        for (size_t i = 0; i < mm; ++i)
+            for (size_t ph = 0; ph < FR; ++ph) fold[f][ph] = i ? fold[f][ph] + d[i * FR + ph] : d[ph];
+    }
+    return fold;
+}
+}  // namespace
 
 Presence pilot_presence(std::span<const cd* const> D_rows, size_t dcols, double level, int64_t window) {
     Presence out;
@@ -848,25 +861,8 @@ std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, 
                               const Mat<cd>* C_in, std::optional<double> level, double* peak) {
     if (!C_in && level) throw std::invalid_argument("find_copy: level without C");
     if (!C_in) return find_copy(x, band, accept, std::span<const cd* const>{}, 0, level, peak);
-    std::vector<const cd*> rows;
-    for (size_t i = 0; i < C_in->rows; ++i) rows.push_back((*C_in)[i]);
-    const Mat<cd> D = waveform::pair_products(rows, C_in->cols, FRAME_SAMPLES, COPY_PAIRS);
-    std::vector<const cd*> d_rows;
-    for (size_t i = 0; i < D.rows; ++i) d_rows.push_back(D[i]);
-    return find_copy(x, band, accept, d_rows, D.cols, level, peak);
-}
-
-// modem._pilot_fold: fold[f, ph] = sum over frames i (in order) of D[f, t0 + i * FR + ph], D the pair products
-// (waveform::pair_products of the matched filter's outputs, COPY_PAIRS pairs a frame apart)
-Mat<cd> pilot_fold(std::span<const cd* const> D_rows, size_t t0, size_t mm) {
-    const size_t FR = FRAME_SAMPLES;
-    Mat<cd> fold(D_rows.size(), FR);
-    for (size_t f = 0; f < D_rows.size(); ++f) {
-        const cd* d = D_rows[f] + t0;
-        for (size_t i = 0; i < mm; ++i)
-            for (size_t ph = 0; ph < FR; ++ph) fold[f][ph] = i ? fold[f][ph] + d[i * FR + ph] : d[ph];
-    }
-    return fold;
+    const Mat<cd> D = waveform::pair_products(C_in->row_ptrs(), C_in->cols, FRAME_SAMPLES, COPY_PAIRS);
+    return find_copy(x, band, accept, D.row_ptrs(), D.cols, level, peak);
 }
 
 std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, const Accept* accept,
@@ -881,10 +877,8 @@ std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, 
         if (level) throw std::invalid_argument("find_copy: level without C");
         const Mat<cd> C = waveform::repeat_corrs(z0, waveform::unit_template(b), freqs);
         level = waveform::noise_level(C);
-        std::vector<const cd*> c_rows;
-        for (size_t i = 0; i < C.rows; ++i) c_rows.push_back(C[i]);
-        D_own = waveform::pair_products(c_rows, C.cols, FRAME_SAMPLES, COPY_PAIRS);
-        for (size_t i = 0; i < D_own.rows; ++i) own_rows.push_back(D_own[i]);
+        D_own = waveform::pair_products(C.row_ptrs(), C.cols, FRAME_SAMPLES, COPY_PAIRS);
+        own_rows = D_own.row_ptrs();
         D_rows = own_rows;
         dcols = D_own.cols;
     } else if (!level) {

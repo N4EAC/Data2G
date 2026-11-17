@@ -283,3 +283,11 @@ def test_stream_products_are_pair_products_of_its_outputs():
             assert a == d.c0 + 7 and D.shape == want.shape
             # (bit for bit in Python; native rounds its products its own way)
             np.testing.assert_allclose(D, want, rtol=0, atol=1e-12 * max(1.0, float(np.abs(want).max(initial=0.0))))
+
+
+def test_find_copy_on_audio_shorter_than_its_pairs():
+    """Fewer matched filter outputs than COPY_PAIRS frames: nothing found,
+    not an error (receive_any runs it on whatever it is given)."""
+    rng = np.random.default_rng(1)
+    for n in (1000, 3000):
+        assert modem.find_copy(rng.normal(size=n), "w") is None

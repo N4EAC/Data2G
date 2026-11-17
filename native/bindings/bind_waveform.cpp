@@ -116,9 +116,7 @@ void bind_waveform(py::module_& m) {
     w.def("noise_level", [](const In<cdouble>& C) { return waveform::noise_level(mat(C)); });
     w.def("pair_products", [](const In<cdouble>& C, int F, int P) {
         const auto c = mat(C);
-        std::vector<const cdouble*> r;
-        for (std::size_t i = 0; i < c.rows; ++i) r.push_back(c[i]);
-        return np(waveform::pair_products(r, c.cols, F, P));
+        return np(waveform::pair_products(c.row_ptrs(), c.cols, F, P));
     });
     w.def("crossings", [](const In<double>& D, double thr, std::size_t span, std::size_t limit) {
         return waveform::crossings(view(D), thr, span, limit);

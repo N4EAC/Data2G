@@ -354,9 +354,7 @@ void bind_modem(py::module_& m) {
         {
             py::gil_scoped_release nogil;
             if (dm) {  // the pair products (modem.find_copy's D)
-                std::vector<const cd*> rows;
-                for (std::size_t i = 0; i < dm->rows; ++i) rows.push_back((*dm)[i]);
-                l = mo::find_copy(view(x), band_view(band), a ? &*a : nullptr, rows, dm->cols, level, &peak);
+                l = mo::find_copy(view(x), band_view(band), a ? &*a : nullptr, dm->row_ptrs(), dm->cols, level, &peak);
             } else {
                 l = mo::find_copy(view(x), band_view(band), a ? &*a : nullptr, c ? &*c : nullptr, level, &peak);
             }
@@ -367,16 +365,12 @@ void bind_modem(py::module_& m) {
        py::arg("level") = py::none(), py::arg("D") = py::none());
     d.def("pilot_presence", [](const In<cd>& D, double level, std::int64_t window) {
         const auto c = mat(D);
-        std::vector<const cd*> rows;
-        for (std::size_t i = 0; i < c.rows; ++i) rows.push_back(c[i]);
-        const auto p = mo::pilot_presence(rows, c.cols, level, window);
+        const auto p = mo::pilot_presence(c.row_ptrs(), c.cols, level, window);
         return py::make_tuple(p.peak, p.contrast);
     }, py::arg("D"), py::arg("level"), py::arg("window"));
     d.def("pilot_present", [](const In<cd>& D, double level, std::int64_t window) {
         const auto c = mat(D);
-        std::vector<const cd*> rows;
-        for (std::size_t i = 0; i < c.rows; ++i) rows.push_back(c[i]);
-        return mo::pilot_presence(rows, c.cols, level, window).present();
+        return mo::pilot_presence(c.row_ptrs(), c.cols, level, window).present();
     }, py::arg("D"), py::arg("level"), py::arg("window"));
     d.def("cfo_aliases", &mo::cfo_aliases);
     d.def("copy_header", [](const In<cd>& z, const py::dict& lock) {

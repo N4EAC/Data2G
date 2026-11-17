@@ -239,7 +239,8 @@ public:
     // -- audio side (the engine thread)
     Out step(std::span<const double> x);
     bool busy() const { return busy_now_; }  // a burst arriving (the receiver stage's, latest)
-    bool channel_busy() const { return channel_busy_now_; }  // the host's BUSY ON/OFF
+    // the host's BUSY ON/OFF; not the receiver's while we transmit (it hears nothing then)
+    bool channel_busy() const { return channel_busy_now_ && !transmitting_; }
     // the session peer's last burst it claimed: snr_est (the host's SN); nullopt before one
     std::optional<double> session_snr() const { return session_snr_; }
     // Samples dropped because the worker fell max_backlog_s behind (any thread).
