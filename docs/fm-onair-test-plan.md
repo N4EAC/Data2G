@@ -96,5 +96,8 @@ One line per run:
    DATA2G_PROFILE=fm python scripts/fm_if_analyse.py if.wav --tx-path mic
    DATA2G_PROFILE=fm python -m scripts.sounding decode if.demod.wav --call W1AW --tx-path mic
    ```
-   - Recording IF: set the radio's IF-output menu option, then record its USB audio device as an ordinary WAV. TODO: name the menu item per radio (IC-9700, TH-D75) once found.
+   - Recording IF: set the radio's IF-output menu option, then record its USB audio device as an ordinary WAV.
+     - IC-9700: menu "USB Output IF" (or "USB Output AF" for its own demodulated FM audio, the AF receive path). Device "PCM2901 Audio Codec" (`alsa_input.usb-Burr-Brown_from_TI_USB_Audio_CODEC-00.analog-stereo`), s16le, 2 channels, 48 kHz native; the IF is on the left channel, the right is silent. Record: `parecord --device=alsa_input.usb-Burr-Brown_from_TI_USB_Audio_CODEC-00.analog-stereo --file-format=wav --rate=48000 --channels=2 --format=s16le if.wav` (the analyser reads the left channel).
+     - IC-9700's IF filter, measured from 10 s of open-squelch noise (2026-11-17): 17.1 kHz wide 3 dB down, 19.9 kHz 26 dB down, around 12 kHz (noise flat from about 4 to 20 kHz). So a 15 kHz signal's 26 dB width is measurable through it, but not one much past 20 kHz.
+     - TH-D75: TODO: menu item, device name, channels.
 3. **Run log:** `runs/onair/log.csv`, with the columns above.

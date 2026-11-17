@@ -29,6 +29,9 @@ from data2g import fmchannel
 from data2g.config import FS
 
 HALF_BW_HZ = 10_000.0  # the channel filter around the carrier: a 15 kHz signal and its skirts
+# envelope std / mean per window: noise alone 0.52 (Rayleigh); a carrier with noise sqrt(1/(2 CNR))
+# about, 0.3 at about 7 dB CNR in the channel filter
+CV_NOISE, CV_CARRIER = 0.45, 0.3
 WIN_S = 0.1  # analysis windows: carrier presence and modulation activity
 ACTIVE = 0.3  # a window is modulated when its rms deviation is this share of the loudest window's
 CENTRE_HZ = 12_000.0  # IC-9700 and TH-D75 USB IF: the dial frequency
@@ -82,17 +85,23 @@ def analyse(x: np.ndarray, fs: int, centre: float = CENTRE_HZ, tx_path: str = "m
     dev_a = signal.sosfiltfilt(signal.butter(6, AUDIO_HZ, "lowpass", fs=fs, output="sos"), dev)
     w = int(WIN_S * fs)
     k = len(z) // w
-    pw = np.mean(np.abs(z[:k * w].reshape(k, w)) ** 2, axis=1)
-    # no carrier: the quietest windows, if the recording has any (10 dB under the loudest)
-    quiet = pw <= np.percentile(pw, 10) * 2
-    noise_only = bool(np.any(quiet) and pw.max() > 10 * np.median(pw[quiet]))
+    env = np.abs(z[:k * w].reshape(k, w))
+    pw = np.mean(env ** 2, axis=1)
+    # carrier or not by the envelope, not the power: an FM carrier's is constant, noise's is
+    # Rayleigh (std / mean 0.52). By power, an IC-9700 IF capture with no carrier (open
+    # squelch, 2026-11-17) read as one long modulated stretch: its noise is as loud as a weak signal
+    cv = env.std(axis=1) / np.maximum(env.mean(axis=1), 1e-30)
+    quiet = cv > CV_NOISE
+    if np.any(quiet):  # a window straddling a burst's edge varies too: noise alone is also no louder than noise
+        quiet &= pw < 2 * np.median(pw[quiet])
+    noise_only = bool(np.any(quiet))
     n0, filt = float("nan"), {}
     if noise_only:
         zq = np.concatenate([zr[i * w:(i + 1) * w] for i in np.flatnonzero(quiet)])
         fz, pz = signal.welch(zq, fs, nperseg=min(len(zq), 1 << 12), return_onesided=False, detrend=False)
         n0 = float(np.median(pz[np.abs(fz) <= IN_BAND_HZ]))  # power per Hz, in band
         filt = _widths(fz, pz, n0)  # the radio's IF filter, seen in its noise
-        carrier = pw > 10 * n0 * 2 * HALF_BW_HZ  # 10 dB over the noise in the channel filter
+        carrier = cv < CV_CARRIER
     else:
         carrier = np.ones(k, dtype=bool)  # carrier throughout: no noise reading, no CNR
     rms = np.sqrt(np.mean(dev[:k * w].reshape(k, w) ** 2, axis=1))
