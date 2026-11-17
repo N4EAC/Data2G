@@ -166,3 +166,24 @@ def test_cpm_control_padding_is_known_when_it_fails(monkeypatch):
         rx = PHY.ModemRx(r, {})
         assert ctl in rx.raw(0)
         assert rx.decode(0, ctl_mask(0, 0, 7), 0, None) == ctl
+
+
+def test_presence_track_reads_presence_of_its_window():
+    """The streaming tracker, fed odd-sized chunks with the buffer's start
+    jumping (a burst handled), reads presence() of its window from a
+    multiple of T / PRESENCE_PHASES: each symbol once, the same value."""
+    from data2g.config import FS
+
+    rng = np.random.default_rng(2)
+    for g in cpm.GRIDS.values():
+        s = cpm.bandpass(g, cpm.tones(g, rng.integers(0, g.m, int(4 * g.rate))))
+        y = np.concatenate([rng.normal(size=3 * FS), s + rng.normal(scale=1.5, size=len(s)), rng.normal(size=2 * FS)])
+        t, end, off, q = cpm.PresenceTrack(g), 0, 0, g.T // cpm.PRESENCE_PHASES
+        while end < len(y):
+            end = min(len(y), end + int(rng.integers(500, 4000)))
+            if rng.random() < 0.1:
+                off = max(off, end - int(rng.integers(FS, 3 * FS)))
+            lo = max(off, end - 3 * FS)
+            t.feed(y[off:end], off, lo)
+            assert t.n == (end - lo) // g.T
+            np.testing.assert_allclose(t.value(), cpm.presence(g, y[-(-lo // q) * q:end]), rtol=0, atol=1e-12)

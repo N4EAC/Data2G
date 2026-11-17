@@ -153,11 +153,47 @@ std::vector<double> pilot_coherence(std::span<const double> x, const Lock& lock,
 // neither. peak: the normalized pilot peak, if one was computed (find_copy.peak).
 std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, const Accept* accept = nullptr,
                               const Mat<cd>* C = nullptr, std::optional<double> level = {}, double* peak = nullptr);
-// The same with C as row pointers (C_rows empty: compute C, as C == nullptr),
-// each row `cols` long: StreamDetector.C rows, used in place.
+// The same from C's pair products (modem.find_copy's D: StreamDetector::products_from rows, each `dcols` long, used
+// in place; empty: compute them, as C == nullptr).
+// `fold`: step 1's fold of D's whole frames, if kept running (FoldTrack, rolled to D's start).
 std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, const Accept* accept,
-                              std::span<const cd* const> C_rows, std::size_t cols, std::optional<double> level,
-                              double* peak = nullptr);
+                              std::span<const cd* const> D_rows, std::size_t dcols, std::optional<double> level,
+                              double* peak = nullptr, const Mat<cd>* fold = nullptr);
+// modem.FoldTrack: the pilot fold kept running over a window of a stream's pair products that slides forward, per
+// CFO bin and absolute frame phase; entering products added and leaving ones subtracted in stream order, a frame
+// phase's run at a time, summed afresh every RENEW folds or when the window moves any other way.
+class FoldTrack {
+public:
+    static constexpr int RENEW = 64;
+    void reset() {
+        have_ = false;
+        lo_ = hi_ = 0;
+        n_ = 0;
+    }
+    // the window [lo, hi) of stream starts (D: pair products from stream start a, dcols of them, covering it)
+    const Mat<cd>& fold(std::span<const cd* const> D_rows, std::size_t dcols, std::int64_t a, std::int64_t lo,
+                        std::int64_t hi);
+
+private:
+    void acc(std::span<const cd* const> D_rows, std::int64_t a, std::int64_t u0, std::int64_t u1, bool add);
+    Mat<cd> R_;
+    bool have_ = false;
+    std::int64_t lo_ = 0, hi_ = 0;
+    int n_ = 0;
+};
+// modem.pilot_presence: over the newest `window` of a sync band's matched filter outputs, from their pair products
+// (D rows, `dcols` long; `level` the outputs' noise level), the normalized frame-pilot fold peak and its contrast (over the fold's median
+// over frame phases), folded over m frames (0: too short).
+struct Presence {
+    double peak = 0.0, contrast = 0.0;
+    int m = 0;
+    bool present() const;  // modem.pilot_present
+};
+Presence pilot_presence(std::span<const cd* const> D_rows, std::size_t dcols, double level, std::int64_t window);
+// modem.presence_window: (t0, m), the newest `window` outputs' fold over m whole frames from pair product t0 (m < 1:
+// too few); modem.fold_presence: an m-frame fold's Presence (any rotation of its phases reads the same).
+std::pair<std::int64_t, std::int64_t> presence_window(std::size_t dcols, std::int64_t window);
+Presence fold_presence(const Mat<cd>& fold, double level, std::int64_t m);
 std::vector<double> cfo_aliases(cd d, double centre);
 HeaderRead copy_header(std::span<const cd> z, const Lock& lock);
 
