@@ -24,7 +24,8 @@ TOL = 1e-9
 # never reaches the native ones through module globals (--native)
 OWN = ("crc6", "header_bits", "_signs", "_valid_words", "_valid_signs", "decode_header", "modulate",
        "modulate_bits", "burst_waveform", "ace_cells", "_bin_phase_step", "_demod_frames", "_read_header",
-       "_copy_llr", "_best_header", "find_burst", "pilot_coherence", "find_copy", "_cfo_aliases", "_copy_header",
+       "_copy_llr", "_best_header", "find_burst", "pilot_coherence", "find_copy", "_pilot_fold", "pilot_presence", "pilot_present",
+       "_cfo_aliases", "_copy_header",
        "receive", "resolve_alias", "data_channel", "noise_var", "soft_bits", "burst_soft", "slot_soft", "snr_db",
        "symbol_times", "demodulate", "decode_received")
 
@@ -282,6 +283,25 @@ def test_find_copy_matches(native, py, reference, name, n_cw):
     centre = 12.5 * np.round(lock["cfo"] / 12.5)
     d = np.exp(2j * np.pi * lock["cfo"] * config.FRAME_SAMPLES / config.FS)
     close(native.modem.cfo_aliases(d, centre), py._cfo_aliases(d, centre))
+
+
+def test_pilot_presence_matches(native, py):
+    """The fold peak and contrast over the newest window: a burst, a tone,
+    noise, and a window longer than C (all of it)."""
+    from data2g.waveform import ofdm, sync
+
+    n = 3 * config.FS
+    rng = np.random.default_rng(7)
+    sigs = [_burst("qpsk-r1/2", 4, snr=-3.0, preset="mpp")[-n:],
+            np.sin(2 * np.pi * 1510.0 * np.arange(n) / config.FS) + rng.normal(size=n), rng.normal(size=n)]
+    for band in ("w", "n10"):
+        for y in sigs:
+            C = sync.repeat_corrs(dsp.to_baseband(y), sync.unit_template(ofdm.band(band)), list(sync.cfo_grid()))
+            level = sync.noise_level(C)
+            for w in (config.FS, 3 * config.FS // 2, 10 * config.FS):
+                close(native.modem.pilot_presence(C, level, w), py.pilot_presence(C, level, w), CORR_TOL)
+                assert native.modem.pilot_present(C, level, w) == py.pilot_present(C, level, w)
+    assert native.modem.pilot_presence(C[:, :1000], level, config.FS) == (0.0, 0.0)
 
 
 def test_demodulate_matches(native, py):

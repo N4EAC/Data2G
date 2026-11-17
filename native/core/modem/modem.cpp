@@ -808,6 +808,31 @@ std::vector<double> pilot_coherence(std::span<const double> x, const Lock& lock,
     return out;
 }
 
+Mat<cd> pilot_fold(std::span<const cd* const> C_rows, size_t t0, size_t mm);  // below, beside find_copy
+
+Presence pilot_presence(std::span<const cd* const> C_rows, size_t cols, double level, int64_t window) {
+    Presence out;
+    const int64_t W = std::min<int64_t>(static_cast<int64_t>(cols), window);
+    if (W < static_cast<int64_t>(COPY_PAIRS + 1) * FRAME_SAMPLES) return out;
+    const int64_t m = (W - static_cast<int64_t>(COPY_PAIRS) * FRAME_SAMPLES) / FRAME_SAMPLES;
+    const size_t FR = FRAME_SAMPLES;
+    const Mat<cd> fold = pilot_fold(C_rows, static_cast<size_t>(static_cast<int64_t>(cols) - W), static_cast<size_t>(m));
+    std::vector<double> mag(FR, -equalizer::INF);
+    for (size_t f = 0; f < C_rows.size(); ++f)
+        for (size_t ph = 0; ph < FR; ++ph) mag[ph] = std::max(mag[ph], std::abs(fold[f][ph]));
+    const double top = *std::max_element(mag.begin(), mag.end());
+    out.m = static_cast<int>(m);
+    out.peak = top / (level * std::sqrt(static_cast<double>(m * COPY_PAIRS)));
+    out.contrast = top / (dsp::quantile(mag, 0.5) + 1e-300);
+    return out;
+}
+
+bool Presence::present() const {
+    return m >= PRESENCE_MIN_M && peak >= PRESENCE_PEAK &&
+           contrast >= PRESENCE_CONTRAST[std::min<std::size_t>(static_cast<std::size_t>(m - PRESENCE_MIN_M),
+                                                                PRESENCE_CONTRAST.size() - 1)];
+}
+
 std::vector<double> cfo_aliases(cd d, double centre) {
     const double alias = static_cast<double>(FS) / FRAME_SAMPLES;
     const double frac = std::arg(d) / (2 * PI) * alias;
@@ -825,6 +850,32 @@ std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, 
     if (C_in)
         for (size_t i = 0; i < C_in->rows; ++i) rows.push_back((*C_in)[i]);
     return find_copy(x, band, accept, rows, C_in ? C_in->cols : 0, level, peak);
+}
+
+// modem._pilot_fold: fold[f, ph] = sum over frames i (in order) of D[f, t0 + i * FR + ph],
+// D = sum_j d[:, j FR : j FR + m FR], d[:, t] = C[:, FR + t] conj(C[:, t])
+Mat<cd> pilot_fold(std::span<const cd* const> C_rows, size_t t0, size_t mm) {
+    const size_t F = C_rows.size(), FR = FRAME_SAMPLES;
+    Mat<cd> fold(F, FR);
+    std::vector<cd> drow(mm * FR);
+    for (size_t f = 0; f < F; ++f) {
+        const cd* c = C_rows[f] + t0;
+        // c[FR + u] * conj(c[u]) with the products spelled out: std::complex's operator* carries
+        // numpy-unlike NaN handling that stops the loop vectorizing (same values for finite input)
+        for (size_t t = 0; t < mm * FR; ++t) {
+            double sr = 0.0, si = 0.0;
+            for (size_t j = 0; j < static_cast<size_t>(COPY_PAIRS); ++j) {
+                const size_t u = j * FR + t;
+                const double ar = c[FR + u].real(), ai = c[FR + u].imag(), br = c[u].real(), bi = c[u].imag();
+                sr += ar * br + ai * bi;
+                si += ai * br - ar * bi;
+            }
+            drow[t] = {sr, si};
+        }
+        for (size_t i = 0; i < mm; ++i)
+            for (size_t ph = 0; ph < FR; ++ph) fold[f][ph] = i ? fold[f][ph] + drow[i * FR + ph] : drow[ph];
+    }
+    return fold;
 }
 
 std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, const Accept* accept,
@@ -849,28 +900,8 @@ std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, 
     const int64_t n = static_cast<int64_t>(cols) - static_cast<int64_t>(COPY_PAIRS) * FRAME_SAMPLES;
     const int64_t m = n >= 0 ? n / FRAME_SAMPLES : -((-n + FRAME_SAMPLES - 1) / FRAME_SAMPLES);
     if (m < 1) return std::nullopt;
-    const size_t FR = FRAME_SAMPLES, mm = static_cast<size_t>(m);
-    // fold[f, ph] = sum over frames i (in order) of D[f, i * FR + ph],
-    // D = sum_j d[:, j FR : j FR + m FR], d[:, t] = C[:, FR + t] conj(C[:, t])
-    Mat<cd> fold(F, FR);
-    std::vector<cd> drow(mm * FR);
-    for (size_t f = 0; f < F; ++f) {
-        const cd* c = C_rows[f];
-        // c[FR + u] * conj(c[u]) with the products spelled out: std::complex's operator* carries
-        // numpy-unlike NaN handling that stops the loop vectorizing (same values for finite input)
-        for (size_t t = 0; t < mm * FR; ++t) {
-            double sr = 0.0, si = 0.0;
-            for (size_t j = 0; j < static_cast<size_t>(COPY_PAIRS); ++j) {
-                const size_t u = j * FR + t;
-                const double ar = c[FR + u].real(), ai = c[FR + u].imag(), br = c[u].real(), bi = c[u].imag();
-                sr += ar * br + ai * bi;
-                si += ai * br - ar * bi;
-            }
-            drow[t] = {sr, si};
-        }
-        for (size_t i = 0; i < mm; ++i)
-            for (size_t ph = 0; ph < FR; ++ph) fold[f][ph] = i ? fold[f][ph] + drow[i * FR + ph] : drow[ph];
-    }
+    const size_t FR = FRAME_SAMPLES;
+    const Mat<cd> fold = pilot_fold(C_rows, 0, static_cast<size_t>(m));
     std::vector<double> mag(FR, -equalizer::INF);
     for (size_t f = 0; f < F; ++f)
         for (size_t ph = 0; ph < FR; ++ph) mag[ph] = std::max(mag[ph], std::abs(fold[f][ph]));

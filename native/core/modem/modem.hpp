@@ -158,6 +158,15 @@ std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, 
 std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, const Accept* accept,
                               std::span<const cd* const> C_rows, std::size_t cols, std::optional<double> level,
                               double* peak = nullptr);
+// modem.pilot_presence: over the newest `window` of a sync band's matched filter outputs C (rows, `cols` long;
+// `level` their noise level), the normalized frame-pilot fold peak and its contrast (over the fold's median
+// over frame phases), folded over m frames (0: too short).
+struct Presence {
+    double peak = 0.0, contrast = 0.0;
+    int m = 0;
+    bool present() const;  // modem.pilot_present
+};
+Presence pilot_presence(std::span<const cd* const> C_rows, std::size_t cols, double level, std::int64_t window);
 std::vector<double> cfo_aliases(cd d, double centre);
 HeaderRead copy_header(std::span<const cd> z, const Lock& lock);
 

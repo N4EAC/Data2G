@@ -1011,3 +1011,33 @@ def test_pending_on_a_connect_header_then_connected_or_cancelled():
     assert link(a, b, 20, 60, lambda: drain() or b.session.state == S.CONNECTED, seed=74)
     drain()
     assert seen == ["PENDING", "CONNECTED W1AW"], seen
+
+
+class _OnAir(_Busy):
+    """Nothing locked, but a Data2G burst on the air (Receiver.data2g_on_air)
+    until `until`: one whose start we missed."""
+
+    busy = channel_busy = False
+
+    @property
+    def data2g_on_air(self):
+        return self.t < self.until
+
+
+def test_kiss_waits_out_a_burst_heard_without_its_header():
+    """A burst we hold no lock on holds a queued KISS burst as BUSY does
+    (two stations that each missed the other's start talked over each
+    other), up to busy_limit_s; once it is gone the burst goes."""
+    from data2g.kisslink import KissLink
+
+    e = Engine("W1AW", seed=1, kiss=KissLink(persist=255))
+    assert e.receiver is None or e.receiver.sense  # (the native engine's own receiver: set in C++)
+    e.receiver = _OnAir(until=2.0)
+    e.kiss.enqueue(b"frame")
+    assert 2.0 <= _first_tx(e, 6) <= 2.2
+    e = Engine("W1AW", seed=1, kiss=KissLink(busy_limit_s=5.0))
+    e.receiver = _OnAir(until=1e9)
+    e.kiss.enqueue(b"frame")
+    assert 5.0 <= _first_tx(e, 8) <= 5.2
+    r = Engine("W1AW", seed=1).receiver
+    assert r is None or not r.sense  # no KISS: listening costs nothing more

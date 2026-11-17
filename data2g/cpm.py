@@ -450,6 +450,54 @@ def _shares(E: np.ndarray) -> np.ndarray:
     return E / (E.sum(axis=1, keepdims=True) + 1e-30)
 
 
+# Receiver.data2g_on_air's rule (present, scripts/presence_study.py, 2026-11-17):
+# presence at least a + b / sqrt(n) over n symbols, per grid (noise passes
+# 2e-4 of search hops from PRESENCE_MIN_S to the whole window); tones, CW
+# and Hands at 0 and +20 dB passed 0-10%.
+PRESENCE = {"c16r25": (0.1662, 0.3222), "c8r50": (0.254, 0.5332), "c32r62": (0.1049, 0.1588)}
+PRESENCE_MIN_S = 1.0
+PRESENCE_PHASES = 4  # symbol timings presence tries, T / 4 apart
+PRESENCE_FRACS = 2  # CFOs within a tone spacing, R / 2 apart
+
+
+def presence(g: Grid, x: np.ndarray, reach_hz: float = 150.0) -> float:
+    """Is a burst on this grid on the air in x (any part of it: no sync or
+    header needed)? -> the best, over symbol timing and CFO, of the mean
+    over x's symbols of the strongest tone's share of the grid's energy,
+    counted only where the strongest tone changed from the symbol before,
+    and then as the lesser of the two symbols' shares. M-FSK data puts
+    most of a symbol in one tone, a different one most symbols ((M-1)/M);
+    noise spreads it (a 1/M-ish share); a tone or a slow FSK narrower than
+    a bin (FT8) holds one bin; a key-down after a key-up changes from a
+    noise symbol (its share counts)."""
+    T = g.T
+    extra = int(np.ceil(reach_hz / g.rate))
+    best = 0.0
+    for ph in range(PRESENCE_PHASES):
+        s = ph * T // PRESENCE_PHASES
+        n = (len(x) - s) // T
+        if n < 2:
+            continue
+        for fr in range(PRESENCE_FRACS):
+            E = _energies(g, x, s, n, fr * g.rate / PRESENCE_FRACS, extra)
+            for k in range(2 * extra + 1):
+                S = _shares(E[:, k:k + g.m])
+                a = S.argmax(axis=1)
+                top = S.max(axis=1)
+                v = float(np.sum(np.where(a[1:] != a[:-1], np.minimum(top[1:], top[:-1]), 0.0)) / (n - 1))
+                best = max(best, v)
+    return best
+
+
+def present(g: Grid, x: np.ndarray) -> bool:
+    """presence's verdict on all of x (at least PRESENCE_MIN_S of it)."""
+    n = len(x) // g.T
+    if n < PRESENCE_MIN_S * g.rate:
+        return False
+    a, b = PRESENCE[g.name]
+    return presence(g, x) >= a + b / np.sqrt(n)
+
+
 def detect(g: Grid, x: np.ndarray, reach_hz: float = 150.0, fine=True, front_only: bool = False, n_sym: int = 0,
            floor: float = -1.0, mid: bool = False):
     """-> (score, burst start sample, cfo Hz): the sync pattern's best

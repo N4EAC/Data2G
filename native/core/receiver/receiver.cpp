@@ -169,6 +169,7 @@ void Receiver::reset() {
     decided_mid_.clear();
     cpm_wait_.clear();
     expected_.reset();
+    present_ = false;
     for (auto& d : detectors_) d.d.reset();
 }
 
@@ -221,6 +222,30 @@ bool Receiver::on_air() const {
     const double floor = dsp::quantile(std::vector<double>(powers_.begin(), powers_.end()), 0.05);
     const double last[] = {powers_[powers_.size() - 3], powers_[powers_.size() - 2], powers_.back()};
     return mean(last) > floor * std::pow(10.0, ON_AIR_DB / 10);
+}
+
+void Receiver::read_presence() {
+    const auto n = static_cast<int64_t>(PRESENCE_S * config::FS);
+    for (const auto& det : detectors_) {
+        const auto& d = det.d;
+        const auto level = d.level();
+        if (!level) continue;
+        const auto c = d.outputs_from(off_);
+        const auto cols = static_cast<std::size_t>(std::max<int64_t>(
+            0, std::min(static_cast<int64_t>(c.cols), off_ + len() - c.start - config::M + 1)));
+        if (modem::pilot_presence(c.rows, cols, *level, n).present()) {
+            present_ = true;
+            return;
+        }
+    }
+    const auto nc = static_cast<int64_t>(CPM_PRESENCE_S * config::FS);
+    const auto x = std::span<const double>(buf_).last(static_cast<std::size_t>(std::min(nc, len())));
+    for (const auto* g : grids_)
+        if (cpm::present(*g, x)) {
+            present_ = true;
+            return;
+        }
+    present_ = false;
 }
 
 int64_t Receiver::decided(std::string_view key) const {
@@ -516,6 +541,7 @@ std::vector<Receiver::Item> Receiver::feed_deferred(std::span<const double> x_in
                 std::vector<double> sq(tail.size());
                 for (std::size_t i = 0; i < tail.size(); ++i) sq[i] = tail[i] * tail[i];
                 if (std::sqrt(mean(sq)) < SILENCE_RMS) {
+                    present_ = false;
                     trim(keep_);
                     for (auto& d : detectors_) d.d.restart_at(off_ + len());  // no noise level in silence: skip it
                     break;
@@ -536,6 +562,7 @@ std::vector<Receiver::Item> Receiver::feed_deferred(std::span<const double> x_in
             if (!p && expected_)
                 if (auto c = primed()) p = Pending{*c};
             if (!p) {
+                if (sense) read_presence();
                 // (a waiting candidate's start is within it; and the expected window, while queued)
                 trim(expected_ ? std::max(hold_, off_ + len() - expected_->lo) : hold_);
                 break;

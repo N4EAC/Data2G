@@ -166,6 +166,17 @@ and reads any codeword. A mask only decides whose CRC check passes.
 - **One queue for all ports:** the next burst takes the first queued frame's port and
   mode, then every queued frame of that port that fits. KISS p-persistence and
   SLOTTIME apply to all ports. Broadcast still goes only between ARQ sessions.
+- **Channel access:** a queued burst waits while a burst is locked, and also while a
+  Data2G burst is on the air that we never locked: one that began while we were
+  transmitting, or under another burst (`Receiver.data2g_on_air`).
+  - Missing those, two stations that each missed the other's start talked over
+    each other, and every later station joined in.
+  - OFDM: the frame pilots, folded over the last 1.75 s, must peak at one frame
+    phase. CPM: most symbols in the last 3 s must sit in one tone of a grid, and
+    a different one from the symbol before.
+  - Noise, tones, CW and Hands don't hold it (`scripts/presence_study.py`). The
+    hold ends about 2-3 s after the burst does.
+  - It is bounded by `--kiss-busy-limit` (60 s) like any BUSY.
 
 ## 5. Host interface
 

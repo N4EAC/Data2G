@@ -325,6 +325,7 @@ class Receiver:
         # each band's detection statistic, computed once per sample (not per search)
         self.detectors = {b: sync.StreamDetector(ofdm.band(b)) for b in self.bands}
         self.blanker = audio.Blanker() if blank else None
+        self.sense = False  # read data2g_on_air (KISS channel access; off, listening costs nothing more)
         self.reset()
 
     # new audio between preamble searches (one is ~40 ms of CPU at +-150 Hz):
@@ -360,6 +361,7 @@ class Receiver:
         # stream indices): read again with both copies once the second is in
         self.cpm_wait: list = []
         self.expected = None  # expect()'s window, until it is looked at
+        self._present = False  # data2g_on_air's latest reading with nothing locked
         for d in getattr(self, "detectors", {}).values():
             d.reset()
 
@@ -433,6 +435,44 @@ class Receiver:
             return False
         floor = np.percentile(self.powers, 5)
         return float(np.mean(list(self.powers)[-3:])) > floor * 10 ** (self.ON_AIR_DB / 10)
+
+    @property
+    def data2g_on_air(self) -> bool:
+        """A Data2G burst is on the air: one locked, or (with `sense`) the
+        newest audio carries a burst's frame pilots or CPM tones, its header
+        heard or not (one that began while we transmitted, or under another
+        burst): modem.pilot_present over the last PRESENCE_S, cpm.present
+        over the last CPM_PRESENCE_S. Read every search hop (HOP) while
+        nothing is locked: a burst we never locked holds this as long as it
+        lasts, plus up to its window. Unlike on_air, noise or a tone can't hold it (a false
+        reading is a lone hop; scripts/presence_study.py)."""
+        return self.pending is not None or self._present
+
+    # the newest audio data2g_on_air reads: the OFDM fold's (C covers the
+    # last `keep` while listening) and CPM tones' (scripts/presence_study.py)
+    PRESENCE_S = 1.75
+    CPM_PRESENCE_S = 3.0
+
+    def _sense(self):
+        from . import cpm
+
+        for band, d in self.detectors.items():
+            level = d.level()
+            if level is None:
+                continue
+            a, C = d.outputs_from(self.off)
+            C = C[:, :max(0, self.off + len(self.buf) - a - modem.M + 1)]
+            if modem.pilot_present(C, level, int(self.PRESENCE_S * FS)):
+                log.debug("data2g on air: %s pilots", band)
+                self._present = True
+                return
+        x = self.buf[-int(self.CPM_PRESENCE_S * FS):]
+        for g in self.grids:
+            if cpm.present(g, x):
+                log.debug("data2g on air: %s tones", g.name)
+                self._present = True
+                return
+        self._present = False
 
     def _check_pilots(self):
         """pilots_ok from the newest PILOT_PAIRS frame pilot pairs: under the
@@ -697,6 +737,7 @@ class Receiver:
                 # (a burst's own tail read as a header at 1e-6 noise). A
                 # radio's noise at the sound card is far above -80 dBFS.
                 if np.sqrt(np.mean(self.buf[-self.min_search :] ** 2)) < SILENCE_RMS:
+                    self._present = False
                     self._trim(self.keep)
                     for d in self.detectors.values():  # no noise level in silence: skip it
                         d.restart_at(self.off + len(self.buf))
@@ -715,6 +756,8 @@ class Receiver:
                 if p is None and self.expected is not None:
                     p = self._primed()
                 if p is None:
+                    if self.sense:
+                        self._sense()
                     # (a waiting candidate's start is within it; and the expected window, while queued)
                     self._trim(self.hold if self.expected is None else
                                max(self.hold, self.off + len(self.buf) - self.expected[1]))

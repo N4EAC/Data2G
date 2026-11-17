@@ -154,6 +154,8 @@ void bind_receiver(py::module_& m) {
         .def_property_readonly("busy", &receiver::Receiver::busy)
         .def_property_readonly("channel_busy", &receiver::Receiver::channel_busy)
         .def_property_readonly("on_air", &receiver::Receiver::on_air)
+        .def_property_readonly("data2g_on_air", &receiver::Receiver::data2g_on_air)
+        .def_readwrite("sense", &receiver::Receiver::sense)
         .def_property_readonly("n_blanked", &receiver::Receiver::n_blanked)
         .def_property_readonly("pending", [](const receiver::Receiver& r) -> py::object {
             return r.pending() ? py::object(pending_dict(*r.pending())) : py::object(py::none());

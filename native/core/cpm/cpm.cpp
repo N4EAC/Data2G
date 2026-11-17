@@ -282,6 +282,45 @@ Mat<double> shares(const Mat<double>& E) {
     return out;
 }
 
+double presence(const Grid& g, std::span<const double> x, double reach_hz) {
+    const std::int64_t T = g.T, len = static_cast<std::int64_t>(x.size());
+    const int extra = static_cast<int>(std::ceil(reach_hz / g.rate));
+    const std::size_t m = static_cast<std::size_t>(g.m);
+    double best = 0.0;
+    for (int ph = 0; ph < PRESENCE_PHASES; ++ph) {
+        const std::int64_t s = ph * T / PRESENCE_PHASES;
+        if (len - s < 2 * T) continue;
+        const int n = static_cast<int>((len - s) / T);
+        for (int fr = 0; fr < PRESENCE_FRACS; ++fr) {
+            const Mat<double> E = energies(g, x, s, n, fr * g.rate / PRESENCE_FRACS, extra);
+            std::vector<double> terms(static_cast<std::size_t>(n - 1));
+            for (std::size_t k = 0; k <= static_cast<std::size_t>(2 * extra); ++k) {
+                std::size_t prev = 0;
+                double prev_top = 0.0;
+                for (std::size_t r = 0; r < E.rows; ++r) {
+                    const double* e = E[r] + k;
+                    const double tot = np_sum(e, m) + 1e-30;
+                    std::size_t a = 0;
+                    for (std::size_t j = 1; j < m; ++j)
+                        if (e[j] / tot > e[a] / tot) a = j;
+                    const double top = e[a] / tot;
+                    if (r) terms[r - 1] = a != prev ? std::min(top, prev_top) : 0.0;
+                    prev = a;
+                    prev_top = top;
+                }
+                best = std::max(best, np_sum(terms.data(), terms.size()) / (n - 1));
+            }
+        }
+    }
+    return best;
+}
+
+bool present(const Grid& g, std::span<const double> x) {
+    const auto n = static_cast<std::int64_t>(x.size()) / g.T;
+    if (static_cast<double>(n) < PRESENCE_MIN_S * g.rate) return false;
+    return presence(g, x) >= g.presence_a + g.presence_b / std::sqrt(static_cast<double>(n));
+}
+
 Detection detect(const Grid& g, std::span<const double> x, double reach_hz, bool fine, bool front_only, int n_sym,
                  double floor, bool mid) {
     const Layout L = layout(g, n_sym ? n_sym : stream_symbols(g, 0, false));

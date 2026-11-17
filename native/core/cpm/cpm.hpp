@@ -131,6 +131,17 @@ std::optional<Lock> find_mid(const Grid& g, std::span<const double> x, std::int6
 // header copy at the locked word, unfloored; under CONFIRM_LLR the burst is
 // not there (receiver::Receiver lets an early lock go). confirm_end: one past
 // its second header copy's last sample.
+// cpm.presence: a burst on grid g anywhere in x (no sync or header): the best, over PRESENCE_PHASES symbol
+// timings and PRESENCE_FRACS CFOs within a spacing (and whole-bin shifts over reach_hz), of the mean over symbols
+// of the strongest tone's share, counted where the strongest tone changed from the symbol before and then as the
+// lesser of the two symbols' shares. present: its verdict on all of x (at least PRESENCE_MIN_S), the floor
+// g.presence_a + g.presence_b / sqrt(symbols) (Receiver::data2g_on_air).
+inline constexpr int PRESENCE_PHASES = 4;
+inline constexpr int PRESENCE_FRACS = 2;
+inline constexpr double PRESENCE_MIN_S = 1.0;
+double presence(const Grid& g, std::span<const double> x, double reach_hz = 150.0);
+bool present(const Grid& g, std::span<const double> x);
+
 inline constexpr double CONFIRM_LLR = -2.0;
 double confirm(const Grid& g, std::span<const double> x, const Lock& lock);
 std::int64_t confirm_end(const Grid& g, const Lock& lock);

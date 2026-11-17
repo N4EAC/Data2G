@@ -333,6 +333,7 @@ Engine::Engine(std::string call, EngineConfig cfg, EngineHooks hooks)
       accept_(receive_accept(cfg_.min_header_score)),
       receiver_(accept_, all_grids()),
       ptt_delay_(static_cast<std::int64_t>(cfg_.ptt_delay_s * config::FS)) {
+    receiver_.sense = cfg_.kiss != nullptr;  // data2g_on_air holds KISS bursts (kiss_burst)
     if (!cfg_.record_dir.empty()) rec_.emplace(cfg_.record_dir, call_, cfg_.record_async);
     // CPM bursts decode as they arrive (cpm::Stream): refine, then each data slot's pass. The same results as
     // after the burst; DATA2G_CPM_STREAM=0 (read here) turns it off.
@@ -674,6 +675,7 @@ Engine::Out Engine::step(std::span<const double> x) {
         receiver_.drop();
     }
     b.busy = receiver_busy();
+    b.on_air = cfg_.kiss && receiver_data2g_on_air();
     busy_now_ = b.busy;
     channel_busy_now_ = receiver_channel_busy() || b.cw;
     if (!cfg_.worker) {
@@ -799,7 +801,7 @@ Engine::Done Engine::process(Block& b) {
             }
         }
         if (bursts.empty() && cfg_.kiss && free && (idle() || session_->idle_connected())) {  // KISS between ARQ sessions, or while one is idle
-            if (auto kb = kiss_burst(k, busy)) {
+            if (auto kb = kiss_burst(k, busy || (fresh && b.on_air))) {
                 bursts = cw_ahead({kb}, t);
                 main = kb;
             }
@@ -1354,8 +1356,9 @@ void Engine::hear_burst(receiver::BurstEvent& ev, double t) {
 }
 
 // The next KISS burst if it may go now: after waiting on BUSY, p-persistent
-// slots; on a free channel at once; BUSY holds it, but not past
-// busy_limit_s of it unbroken.
+// slots; on a free channel at once; BUSY (`busy`: a burst arriving, a CW ID,
+// or Receiver::data2g_on_air, a burst we hold no lock on) holds it, but not
+// past busy_limit_s of it unbroken.
 TxBurstPtr Engine::kiss_burst(std::int64_t k, bool busy) {
     auto& link = *cfg_.kiss;
     if (link.queue.empty()) {

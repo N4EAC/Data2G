@@ -114,6 +114,10 @@ public:
     // a row (pilot checks, one a HOP) is let go: reported lost, the search goes on past it.
     // 0: never. A member so a study can set it (scripts/false_lock_study.py).
     double release_s = 3.0;
+    // receiver.Receiver.sense: read data2g_on_air (KISS channel access; off, listening costs nothing more)
+    bool sense = false;
+    static constexpr double PRESENCE_S = 1.75;      // the newest audio data2g_on_air reads: OFDM fold
+    static constexpr double CPM_PRESENCE_S = 3.0;   // and CPM tones
 
     explicit Receiver(modem::Accept accept, std::vector<std::string_view> cpm_grids = {}, bool blank = true);
 
@@ -147,6 +151,9 @@ public:
     bool busy() const { return pending_.has_value(); }
     bool channel_busy() const { return pending_ && (pilots_ok_ || on_air()); }
     bool on_air() const;
+    // receiver.Receiver.data2g_on_air: a burst locked, or (with `sense`) the newest audio carries a burst's
+    // frame pilots or CPM tones, header heard or not; read every search hop while nothing is locked.
+    bool data2g_on_air() const { return pending_.has_value() || present_; }
     const std::optional<Pending>& pending() const { return pending_; }
     // The (blanked) audio fed so far: its end's stream index, and n samples from stream index
     // `from` (empty unless all of them are still held).
@@ -169,6 +176,7 @@ private:
     };
 
     void check_pilots();
+    void read_presence();  // receiver.Receiver._sense
     void trim(std::int64_t n);
     Stats stats(std::int64_t w0 = 0);
     void searched();
@@ -198,6 +206,7 @@ private:
     bool pilots_ok_ = false, confirmed_ = false;
     int dark_ = 0;  // the pending lock's latest pilot checks in a row with its pilots measurably absent
     bool looked_ = false;  // the pending CPM lock's second look is done (unconfirmed)
+    bool present_ = false;  // data2g_on_air's latest reading with nothing locked
     std::deque<double> powers_;  // in-band power of 0.1 s blocks
     double ps_ = 0.0;
     int pn_ = 0;

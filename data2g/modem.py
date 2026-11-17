@@ -900,9 +900,7 @@ def find_copy(x: np.ndarray, band: str, accept: Accept | None = None, C: np.ndar
     m = n // FRAME_SAMPLES
     if m < 1:
         return None
-    d = C[:, FRAME_SAMPLES:] * np.conj(C[:, :-FRAME_SAMPLES])
-    D = sum(d[:, j * FRAME_SAMPLES:j * FRAME_SAMPLES + m * FRAME_SAMPLES] for j in range(COPY_PAIRS))
-    fold = D.reshape(len(freqs), m, FRAME_SAMPLES).sum(axis=1)
+    fold = _pilot_fold(C, 0, m)
     mag = np.abs(fold).max(axis=0)
     # on noise each product's magnitude is about the level, and the m x
     # COPY_PAIRS of them add at random: the header reads (nearly all of the
@@ -942,6 +940,56 @@ def find_copy(x: np.ndarray, band: str, accept: Accept | None = None, C: np.ndar
         if len(c) >= 2 and np.mean(c) >= COPY_COHERENCE and pat >= COPY_PATTERN:
             return lock
     return None
+
+
+def _pilot_fold(C: np.ndarray, t0: int, m: int) -> np.ndarray:
+    """find_copy's step 1 from output t0: per CFO bin and frame phase, the
+    matched filter's outputs one frame apart, multiplied, summed over
+    COPY_PAIRS consecutive pairs and folded over m frames."""
+    F = FRAME_SAMPLES
+    d = C[:, t0 + F:t0 + (m + COPY_PAIRS) * F] * np.conj(C[:, t0:t0 + (m + COPY_PAIRS - 1) * F])
+    D = sum(d[:, j * F:j * F + m * F] for j in range(COPY_PAIRS))
+    return D.reshape(len(C), m, F).sum(axis=1)
+
+
+# Receiver.data2g_on_air's OFDM rule (pilot_present, scripts/presence_study.py,
+# 2026-11-17): the fold's contrast at least PRESENCE_CONTRAST[m - PRESENCE_MIN_M]
+# over m frames, the last entry past the table (noise passes 2e-4 of search
+# hops on each band, from a window cut short after a burst to the whole
+# PRESENCE window: runs/presence_curve.txt, the bands' worst, non-increasing),
+# and its peak at least PRESENCE_PEAK (about noise's median: something on
+# air). Tones, CW and Hands at 0 and +20 dB never passed (the peak alone
+# passed them all: they fold as high, at every phase).
+PRESENCE_PEAK = 8.0
+PRESENCE_CONTRAST = (4.9, 4.9, 4.9, 4.75, 4.35, 4.25, 4.05, 3.9)
+PRESENCE_MIN_M = 2
+
+
+def pilot_present(C: np.ndarray, level: float, window: int) -> bool:
+    """pilot_presence's verdict over the newest `window` outputs (fewer when
+    C is shorter: the threshold rises as the window shrinks)."""
+    m = (min(C.shape[1], window) - COPY_PAIRS * FRAME_SAMPLES) // FRAME_SAMPLES
+    if m < PRESENCE_MIN_M:
+        return False
+    peak, contrast = pilot_presence(C, level, window)
+    return peak >= PRESENCE_PEAK and contrast >= PRESENCE_CONTRAST[min(m - PRESENCE_MIN_M, len(PRESENCE_CONTRAST) - 1)]
+
+
+def pilot_presence(C: np.ndarray, level: float, window: int) -> tuple[float, float]:
+    """Is a burst of this sync band on the air in the newest `window`
+    matched filter outputs `C` (a StreamDetector's, `level` their noise
+    level), its header heard or not? -> (peak, contrast): find_copy's
+    normalized frame-pilot fold peak over the window, and the peak over
+    the fold's median over frame phases. A burst's pilots fold to one
+    phase (a CP's spread); a tone or a key-down folds as high at every
+    phase."""
+    P = COPY_PAIRS
+    W = min(C.shape[1], window)
+    m = (W - P * FRAME_SAMPLES) // FRAME_SAMPLES
+    if m < 1:
+        return 0.0, 0.0
+    mag = np.abs(_pilot_fold(C, C.shape[1] - W, m)).max(axis=0)
+    return float(mag.max() / (level * np.sqrt(m * P))), float(mag.max() / (np.median(mag) + 1e-300))
 
 
 def _cfo_aliases(d: complex, centre: float) -> list[float]:

@@ -357,6 +357,19 @@ void bind_modem(py::module_& m) {
                               std::isnan(peak) ? py::object(py::none()) : py::object(py::float_(peak)));
     }, py::arg("x"), py::arg("band"), py::arg("accept") = py::none(), py::arg("C") = py::none(),
        py::arg("level") = py::none());
+    d.def("pilot_presence", [](const In<cd>& C, double level, std::int64_t window) {
+        const auto c = mat(C);
+        std::vector<const cd*> rows;
+        for (std::size_t i = 0; i < c.rows; ++i) rows.push_back(c[i]);
+        const auto p = mo::pilot_presence(rows, c.cols, level, window);
+        return py::make_tuple(p.peak, p.contrast);
+    }, py::arg("C"), py::arg("level"), py::arg("window"));
+    d.def("pilot_present", [](const In<cd>& C, double level, std::int64_t window) {
+        const auto c = mat(C);
+        std::vector<const cd*> rows;
+        for (std::size_t i = 0; i < c.rows; ++i) rows.push_back(c[i]);
+        return mo::pilot_presence(rows, c.cols, level, window).present();
+    }, py::arg("C"), py::arg("level"), py::arg("window"));
     d.def("cfo_aliases", &mo::cfo_aliases);
     d.def("copy_header", [](const In<cd>& z, const py::dict& lock) {
         return header_dict(mo::copy_header(view(z), lock_of(lock)));
