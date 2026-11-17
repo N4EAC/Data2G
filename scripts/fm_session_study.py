@@ -9,6 +9,11 @@ Arms are predictor settings (environment for the session's process, ARMS):
     fitnoreg  fit, every burst read as steady noise (DATA2G_FM_REGIME=0)
     fit2      fit, steady slope 2.0 logits per dB (the fit's 1.50)
     fitr1     fit, fading from a noise spread of 1.0 dB (0.7)
+    fitr1-    fitr1 without predictor.FM_STEADY_OFFSET_DB (fitr1 ran before it existed)
+    off1      fitr1-, f108's band offset 1 dB lower
+    off1s     the steady-only extra dB on f108 (FM's default). A first short burst on a new
+              band (a probe, tried 2026-11-17) lost 0.6-1.5 kbps at every flat CNR above 10:
+              runs/fm_session/probe_report.txt
 
 Scenarios: each radio (TX path = radio) on static, flutter at 440 MHz and
 mobile-rural at CNRs spanning its ladder, and a CNR ramp through threshold
@@ -40,7 +45,12 @@ CONDS = ("static", "flutter@440", "mobile-rural")
 ARMS = {"prov": {"DATA2G_FM_PREDICTOR": "prov",
                  "DATA2G_FM_THRESHOLDS": str(ROOT / "runs" / "fm_regime" / "thr_provisional.json")},
         "fit": {}, "fitnoreg": {"DATA2G_FM_REGIME": "0"},
-        "fit2": {"DATA2G_FM_SLOPE_STEADY": "2.0"}, "fitr1": {"DATA2G_FM_FADING_SPREAD_DB": "1.0"}}
+        "fit2": {"DATA2G_FM_SLOPE_STEADY": "2.0"}, "fitr1": {"DATA2G_FM_FADING_SPREAD_DB": "1.0"},
+        # predictor.FM_STEADY_OFFSET_DB: fitr1 is the shifter before it (none), off1s with it
+        # (the default since); off1, f108's offset 1 dB lower on every regime
+        "fitr1-": {"DATA2G_FM_STEADY_OFFSET": ""}, "off1": {"DATA2G_FM_STEADY_OFFSET": "",
+                                                            "DATA2G_FM_BAND_OFFSET": "f108:-4.9"},
+        "off1s": {}}
 
 
 def ramp(t: float) -> float:

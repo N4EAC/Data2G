@@ -267,12 +267,18 @@ double fm_band_offset_db(std::string_view band) {  // snr_est against f55's, sam
     return 0.0;
 }
 
+// on steady noise, a reading on another band moved this much more for a mode on it (predictor.py)
+double fm_steady_offset_db(std::string_view band) { return band == "f108" ? -1.0 : 0.0; }
+
 Outcome fm_outcome(const Measured& meas, int mode, std::string_view measured_band) {
     const auto& row = tables::MODE_THRESHOLDS[static_cast<std::size_t>(mode)];
     const Mode* m = arq::mode(row.name);
     double snr = meas.snr_est;
-    if (m && !measured_band.empty()) snr += fm_band_offset_db(m->band) - fm_band_offset_db(measured_band);
     const bool fading = meas.n0_spread_db >= FM_FADING_SPREAD_DB;
+    if (m && !measured_band.empty()) {
+        snr += fm_band_offset_db(m->band) - fm_band_offset_db(measured_band);
+        if (m->band != measured_band && !fading) snr += fm_steady_offset_db(m->band);
+    }
     const double k = fading ? FM_SLOPE_FADING : FM_SLOPE_STEADY;
     const double p = sigmoid(std::clamp(std::log(9.0) + k * (snr - row.db[fading ? 2 : 0]), -40.0, 40.0));
     return {p, p};

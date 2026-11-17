@@ -372,6 +372,21 @@ FM_SLOPE_FADING = 0.51
 # flat at CNR 32, -567 -> +102 mic at 14, against the provisional predictor)
 FM_FADING_SPREAD_DB = float(os.environ.get("DATA2G_FM_FADING_SPREAD_DB", "1.0"))  # env: studies
 FM_BAND_OFFSET_DB = {"w": 0.8, "n10": -3.9, "f55": 0.0, "f108": -3.9}  # snr_est against f55's, same channel
+# DATA2G_FM_BAND_OFFSET="band:dB,..." (studies): these entries instead
+FM_BAND_OFFSET_DB.update({b: float(v) for b, v in (e.split(":") for e in
+                                                    os.environ.get("DATA2G_FM_BAND_OFFSET", "").split(",") if e)})
+# On steady noise only, a reading on another band moves this much more for a mode
+# on these bands. f55 and w readings overstate f108 by 0.5-1.2 dB at CNR 8-12 on
+# flat (static; scripts/fm_band_predict.py), where a full f108 burst then failed
+# once a session; mobile has its own column. Sessions (scripts/fm_session_study.py
+# off1s, 8 paired seeds): flat static CNR 10 +584 bps, flutter +453, ramp +756,
+# CNR 16-32 -53..-85, mic unchanged, flat mobile 32 -835. A short first burst on a
+# new band instead lost 0.6-1.5 kbps at every flat CNR above 10 (one per session).
+# DATA2G_FM_STEADY_OFFSET="band:dB,..." (studies): this table instead.
+FM_STEADY_OFFSET_DB = {"f108": -1.0}
+if os.environ.get("DATA2G_FM_STEADY_OFFSET") is not None:
+    FM_STEADY_OFFSET_DB = {b: float(v) for b, v in (e.split(":") for e in
+                                                    os.environ["DATA2G_FM_STEADY_OFFSET"].split(",") if e)}
 _FM_THR = (json.loads(Path(os.environ.get("DATA2G_FM_THRESHOLDS") or data_path("mode_thresholds.json")).read_text())
            ["modes"] if FM_THRESHOLD else {})
 
@@ -384,9 +399,11 @@ def fm_outcome(snr_est: float, submode: str, measured_band: str | None = None, n
             snr_est -= 6.0
         z = np.log(9.0) + 2.0 * (snr_est - thr[0])
     else:
+        fading = FM_REGIME and n0_spread_db >= FM_FADING_SPREAD_DB
         if measured_band is not None:
             snr_est += FM_BAND_OFFSET_DB.get(band, 0.0) - FM_BAND_OFFSET_DB.get(measured_band, 0.0)
-        fading = FM_REGIME and n0_spread_db >= FM_FADING_SPREAD_DB
+            if band != measured_band and not fading:
+                snr_est += FM_STEADY_OFFSET_DB.get(band, 0.0)
         z = np.log(9.0) + (FM_SLOPE_FADING if fading else FM_SLOPE_STEADY) * (snr_est - thr[2 if fading else 0])
     return float(1 / (1 + np.exp(-np.clip(z, -40, 40))))
 

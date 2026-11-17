@@ -25,6 +25,7 @@ def test_a_reading_on_another_band_moves_by_the_band_offsets():
     t = P._FM_THR[name][0]
     off = P.FM_BAND_OFFSET_DB
     # n10 and f108 read alike on the same channel; w about 4.7 dB higher than f108
+    t -= P.FM_STEADY_OFFSET_DB.get("f108", 0.0)  # steady noise: f108 from another band reads that much lower
     assert P.fm_outcome(t, name, "n10") == pytest.approx(0.9)
     assert P.fm_outcome(t + off["w"] - off["f108"], name, "w") == pytest.approx(0.9)
 
@@ -54,3 +55,15 @@ def test_native_measure_and_predictor_match(native, pure):
                 nat = native.arq.predict_outcome(m, band, 0.5, 3.0, None)
                 for k, v in py.items():
                     assert nat[k][0] == pytest.approx(v[0], rel=1e-9, abs=1e-12), (k, snr, spread, band)
+
+
+
+def test_f108_from_another_band_is_a_db_lower_on_steady_noise_only():
+    """predictor.FM_STEADY_OFFSET_DB: f55 readings overstate f108 by about 1 dB at
+    low CNR on static paths; mobile has its own column."""
+    name = "f108-qpsk-r41"
+    t, mobile = P._FM_THR[name][0], P._FM_THR[name][2]
+    shift = P.FM_BAND_OFFSET_DB["f108"] - P.FM_BAND_OFFSET_DB["f55"]
+    assert P.fm_outcome(t - shift + 1.0, name, "f55", 0.0) == pytest.approx(0.9)
+    assert P.fm_outcome(mobile - shift, name, "f55", 2.0) == pytest.approx(0.9)
+    assert P.fm_outcome(t, name, "f108", 0.0) == pytest.approx(0.9)  # its own band's reading: as is
