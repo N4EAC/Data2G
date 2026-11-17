@@ -333,7 +333,7 @@ Engine::Engine(std::string call, EngineConfig cfg, EngineHooks hooks)
       accept_(receive_accept(cfg_.min_header_score)),
       receiver_(accept_, all_grids()),
       ptt_delay_(static_cast<std::int64_t>(cfg_.ptt_delay_s * config::FS)) {
-    receiver_.sense = cfg_.kiss != nullptr;  // data2g_on_air holds KISS bursts (kiss_burst)
+    receiver_.sense = true;  // data2g_on_air: BUSY (channel_busy) and the KISS hold (kiss_burst)
     if (!cfg_.record_dir.empty()) rec_.emplace(cfg_.record_dir, call_, cfg_.record_async);
     // CPM bursts decode as they arrive (cpm::Stream): refine, then each data slot's pass. The same results as
     // after the burst; DATA2G_CPM_STREAM=0 (read here) turns it off.

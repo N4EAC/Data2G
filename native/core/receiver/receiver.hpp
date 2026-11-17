@@ -99,7 +99,7 @@ void run(StreamFeed& f);
 // back, in order: a HeaderEvent as a burst starts, then its BurstEvent.
 // busy(): a burst is arriving (our own replies wait for it);
 // channel_busy(): the host's BUSY (the pending burst's pilots or in-band
-// energy say it is really there).
+// energy say it is really there; with nothing locked, data2g_on_air).
 class Receiver {
 public:
     static constexpr int HOP = config::FS / 4;
@@ -114,7 +114,7 @@ public:
     // a row (pilot checks, one a HOP) is let go: reported lost, the search goes on past it.
     // 0: never. A member so a study can set it (scripts/false_lock_study.py).
     double release_s = 3.0;
-    // receiver.Receiver.sense: read data2g_on_air (KISS channel access; off, listening costs nothing more)
+    // receiver.Receiver.sense: read data2g_on_air (arq::Engine turns it on; offline searches leave it off)
     bool sense = false;
     static constexpr double PRESENCE_S = 1.75;      // the newest audio data2g_on_air reads: OFDM fold
     static constexpr double CPM_PRESENCE_S = 3.0;   // and CPM tones
@@ -149,7 +149,7 @@ public:
     }
 
     bool busy() const { return pending_.has_value(); }
-    bool channel_busy() const { return pending_ && (pilots_ok_ || on_air()); }
+    bool channel_busy() const { return pending_ ? pilots_ok_ || on_air() : present_; }
     bool on_air() const;
     // receiver.Receiver.data2g_on_air: a burst locked, or (with `sense`) the newest audio carries a burst's
     // frame pilots or CPM tones, header heard or not; read every search hop while nothing is locked.

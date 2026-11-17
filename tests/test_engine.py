@@ -1040,4 +1040,4 @@ def test_kiss_waits_out_a_burst_heard_without_its_header():
     e.kiss.enqueue(b"frame")
     assert 5.0 <= _first_tx(e, 8) <= 5.2
     r = Engine("W1AW", seed=1).receiver
-    assert r is None or not r.sense  # no KISS: listening costs nothing more
+    assert r is None or r.sense  # BUSY reads it too, KISS or not

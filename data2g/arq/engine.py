@@ -200,7 +200,7 @@ class Engine:
         self._extra: list = []  # bursts outside any session (CQ frames), sent when the channel is free
         self._events: list[str] = []  # host notifications from outside the session (CQFRAME)
         self.kiss = kiss
-        self.receiver.sense = kiss is not None  # data2g_on_air holds KISS bursts (_kiss_burst)
+        self.receiver.sense = True  # data2g_on_air: BUSY (channel_busy) and the KISS hold (_kiss_burst)
         self.stats_interval_s = stats_interval_s
         self.kiss_rx: list[tuple[int, bytes]] = []  # (port, frame) heard for KISS clients
         self._tx_kiss = False  # the burst on air is a KISS one

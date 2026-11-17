@@ -326,7 +326,7 @@ class Receiver:
         # each band's detection statistic, computed once per sample (not per search)
         self.detectors = {b: sync.StreamDetector(ofdm.band(b)) for b in self.bands}
         self.blanker = audio.Blanker() if blank else None
-        self.sense = False  # read data2g_on_air (KISS channel access; off, listening costs nothing more)
+        self.sense = False  # read data2g_on_air (arq.engine turns it on; offline searches leave it off)
         self.reset()
 
     # new audio between preamble searches (one is ~40 ms of CPU at +-150 Hz):
@@ -419,10 +419,14 @@ class Receiver:
     @property
     def channel_busy(self) -> bool:
         """What the host reports as BUSY: a burst is being received and its
-        frame pilots say it is really there. A false lock (a weak header off
-        noise or a missed burst's data) held BUSY for the whole length it
-        claimed, up to 12 s, and a VARA client doesn't transmit under BUSY."""
-        return self.pending is not None and (self.pilots_ok or self.on_air)
+        frame pilots say it is really there, or with nothing locked one is on
+        the air anyway (data2g_on_air: its start missed). A false lock (a weak
+        header off noise or a missed burst's data) held BUSY for the whole
+        length it claimed, up to 12 s, and a VARA client doesn't transmit
+        under BUSY."""
+        if self.pending is None:
+            return self._present
+        return self.pilots_ok or self.on_air
 
     # BUSY by energy too: in-band power over the recent noise floor (the 5th
     # percentile of 0.1 s block powers over two minutes, so a long burst does

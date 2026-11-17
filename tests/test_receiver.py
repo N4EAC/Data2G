@@ -363,9 +363,9 @@ def test_a_cpm_burst_whose_front_faded_locks_on_its_mid_block():
 @pytest.mark.parametrize("kind", ["ofdm", "cpm"])
 def test_a_burst_joined_partway_reads_as_data2g_on_air(kind):
     """A burst heard from its middle (no preamble, header or copy: one that
-    began while we transmitted): with `sense`, data2g_on_air holds while it
-    lasts and lets go soon after; noise before it never reads. Without
-    `sense`, data2g_on_air is just a lock (busy)."""
+    began while we transmitted): with `sense`, data2g_on_air and BUSY
+    hold while it lasts and let go soon after; noise before it never reads.
+    Without `sense`, data2g_on_air is just a lock (busy)."""
     from data2g import cpm
     from data2g.arq.policy import slots_for
 
@@ -385,10 +385,12 @@ def test_a_burst_joined_partway_reads_as_data2g_on_air(kind):
         on = []
         for i in range(0, len(y), FS // 10):
             rx.feed(y[i:i + FS // 10])
-            on.append((i / FS, rx.data2g_on_air, rx.busy))
+            on.append((i / FS, rx.data2g_on_air, rx.busy, rx.channel_busy))
         if not sense:
-            assert all(a == b for _, a, b in on)
+            assert all(a == b for _, a, b, _ in on)
             continue
-        assert not any(a for t, a, _ in on if t < 8.0)
-        assert all(a for t, a, _ in on if 10.0 <= t < 14.0)
-        assert not any(a for t, a, _ in on if t >= 17.0)
+        assert not any(a or c for t, a, _, c in on if t < 8.0)
+        assert all(a for t, a, _, _ in on if 10.0 <= t < 14.0)
+        assert not any(a or c for t, a, _, c in on if t >= 17.0)
+        # BUSY with it, while nothing is locked (a lock keeps its own pilots-or-energy rule)
+        assert all(c for t, a, b, c in on if 10.0 <= t < 14.0 and not b)

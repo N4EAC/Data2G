@@ -177,6 +177,7 @@ and reads any codeword. A mask only decides whose CRC check passes.
   - Noise, tones, CW and Hands don't hold it (`scripts/presence_study.py`). The
     hold ends about 2-3 s after the burst does.
   - It is bounded by `--kiss-busy-limit` (60 s) like any BUSY.
+  - The host reports it as BUSY too, with nothing locked, so VARA clients wait as well.
 
 ## 5. Host interface
 
