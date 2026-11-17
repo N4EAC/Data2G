@@ -648,6 +648,21 @@ def test_kiss_waits_out_busy_but_not_a_stuck_one():
     assert 5.0 <= _first_tx(e, 8) <= 5.2
 
 
+def test_queued_kiss_bursts_go_on_one_ptt():
+    """Nothing is heard between queued KISS bursts, so they go back to back
+    on one key-up; every frame's ack once the last has gone."""
+    from data2g.kisslink import KissLink
+
+    e = Engine("W1AW", seed=1, kiss=KissLink())
+    n = e.kiss.open("APRS")  # another port: a burst of its own
+    e.kiss.enqueue(b"one", 0, ack=b"\x00\x01")
+    e.kiss.enqueue(b"two", n, ack=b"\x00\x02")
+    keyed = [e.step(np.zeros(BLOCK))[1] for _ in range(int(60 * FS / BLOCK))]
+    first = keyed.index(True)
+    assert all(keyed[first:first + keyed[first:].index(False)]) and not any(keyed[first + keyed[first:].index(False):])
+    assert not e.kiss.queue and e.kiss.take_acks() == [(0, b"\x00\x01"), (n, b"\x00\x02")]
+
+
 def test_kiss_stations_queued_under_one_burst_do_not_all_collide():
     """Both queue under the same burst: p-persistence spreads them over
     1 s slots (longer than our 0.44-0.79 s to sense a burst). A reply on a

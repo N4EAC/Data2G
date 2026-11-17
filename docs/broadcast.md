@@ -178,6 +178,10 @@ and reads any codeword. A mask only decides whose CRC check passes.
     hold ends about 2-3 s after the burst does.
   - It is bounded by `--kiss-busy-limit` (60 s) like any BUSY.
   - The host reports it as BUSY too, with nothing locked, so VARA clients wait as well.
+- **One PTT for the queue:** nothing is heard between queued bursts, so they all go
+  back to back on one key-up, and every frame's ack comes when the last has gone.
+  While a HAND LISTEN waits for its named frame's burst, each burst goes alone: the
+  window opens at that burst's end, and nothing of mine may run into it.
 
 ## 5. Host interface
 
