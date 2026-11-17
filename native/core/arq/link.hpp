@@ -292,16 +292,30 @@ public:
     bool keep_peer = false;
     bool keep_told_ = false;
     std::set<std::int64_t> keep_in_;
+    // the peer keeps T_REPLY as I read its controls (peer_keeping): its latest burst carried T_KEEP; my
+    // bns that acted on one that did; it has acted on one of those
+    bool peer_said_keep_ = false;
+    std::set<std::int64_t> keep_acks_;
+    bool keep_seen_ = false;
+    // ... and the peer reads my controls so (reply_held): every bn of mine that carried T_KEEP; its latest
+    // burst acted on one; my bns that acted on such a burst; it has acted on one of those
+    std::set<std::int64_t> keep_all_;
+    bool peer_acked_keep_ = false;
+    std::set<std::int64_t> keep_acks2_;
+    bool keep_sure_ = false;
     std::map<std::int64_t, int> reply_by_bn_;
     int reply_known_ = REPLY_UNKNOWN;
     std::int64_t reply_conf_ = -1;
-    bool reply_same_ = false;  // this build left T_REPLY out as the peer's
-    std::optional<int> reply_was_;  // peer_reply_recommend before the control being handled
     // Both stations keep T_REPLY and know the other does (link.Station._keeping).
     bool keeping() const { return keep_default() && keep && keep_peer && keep_told_; }
+    // The peer was keeping T_REPLY when it built the bursts I have from it (link.Station._peer_keeping).
+    bool peer_keeping() const { return keep_default() && keep && keep_told_ && keep_seen_; }
+    // Drop the least useful optional TLV from ext, or cut T_REPLY's value where both keep it
+    // (link.Station._shed). -> whether anything went.
+    bool shed(Ext& ext) const;
     // The peer holds `reply` whichever of my bursts before bn it has heard (link.Station._reply_held).
     bool reply_held(std::int64_t bn, std::optional<int> reply) const;
-    using Kept = std::tuple<int, std::optional<int>, bool>;  // size_hint, T_REPLY, T_CHAT
+    using Kept = std::tuple<int, int, bool>;  // size_hint, the reply the peer holds (reply_by_bn_), T_CHAT
     struct SentCtl {
         std::int64_t cum;
         int rec, acted;
@@ -368,9 +382,10 @@ private:
     bool data_allowed(bool fresh, const std::string& submode);
     std::optional<std::pair<int, nod::FamilyKey>> nod_of(std::int64_t bn, const std::string& submode, const Core& core,
                                                          const Ext& ext) const;
-    Kept kept(const Core& core, const Ext& ext, int said) const;
+    static Kept kept(const Core& core, int said, const Ext& ext);
     void start_abandon(int reset);
-    Ext control_tlvs(std::int64_t bn, std::optional<int> reply);
+    // -> (the TLVs, whether T_REPLY was left out as the peer's)
+    std::pair<Ext, bool> control_tlvs(std::int64_t bn, std::optional<int> reply);
     Fit fit(Ext& ext, int cum, const std::vector<std::int64_t>& missing, bool has_new, int max_cw,
             const std::string& submode, bool fresh);
     std::vector<const Codeword*> new_codewords(const std::string& submode, int room, int k, std::int64_t spare,

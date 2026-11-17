@@ -854,25 +854,41 @@ off (Python and native) for A/B runs.
 
 - **Who keeps it** (no session version bump). A station that keeps `T_REPLY` says so with
   `T_KEEP` (empty) until the peer acts on a burst that carried it: in its control's
-  padding, or, where a control is full with `T_REPLY` (an OFDM ACK mode's), in
-  `T_REPLY`'s place (the peer falls back to its own reply mode for that burst, as when
-  the TLV is shed). A link keeps `T_REPLY` for a station once it has heard the peer's
-  `T_KEEP` and the peer has acted on its own (`Station._keeping`); the peer gets there no
-  later than its first control read that way, since it acts on my `T_KEEP` before it
-  leaves anything out. A peer without it ignores the TLV and never says it, so nothing
-  changes for it: `T_REPLY` in every control, and a control without one means none.
-  Drop `T_KEEP` at the next session version bump.
-- **Rule.** Where both keep it, a control without `T_REPLY` leaves the reply
-  recommendation as it was. A station leaves `T_REPLY` out when the peer holds the value
-  whichever of its bursts the peer has heard (`Station._reply_held`): the last burst of
-  mine it acted on left it so, and none since says otherwise. A burst that shed
-  `T_REPLY`, or left it out before both kept it, makes what the peer holds unknown, and
-  the next control says it in full. "None" is said as an empty `T_REPLY`.
-- **Nods (§3b)** already keep `T_REPLY`; their "kept fields" test now compares what the
-  peer holds after each control (the value said or kept), so a control that left it out
-  as unchanged still nods. **Primed controls (§3a)**: where both keep it, each
-  hypothesis is also tried with `T_REPLY` the other way (absent, or present with its
-  value unknown).
+  padding, or in `T_REPLY`'s place where the two together would cost a control codeword
+  more (an OFDM ACK mode's control, full with `T_REPLY`). A control that cannot grow
+  (CPM's one codeword) keeps its `T_REPLY` and waits for room. A peer without it ignores
+  the TLV and never says it, so nothing changes for it: `T_REPLY` in every control, and
+  a control without one means none. Drop `T_KEEP` at the next session version bump.
+- **The handshake**, by acted-on alone (`Station._keeping`, `_peer_keeping`,
+  `_reply_held`). Each step is a burst of the peer's that acts on one of mine, so it is
+  known to have been heard:
+  1. *I keep it* once I have heard the peer's `T_KEEP` and the peer has acted on a burst
+     of mine that carried `T_KEEP`. From then on I say none in so many words (an empty
+     `T_REPLY`) and never just leave it out.
+  2. *I read the peer's controls as kept* (one without `T_REPLY` leaves the
+     recommendation as it was) once the peer has acted on a burst of mine that carried
+     `T_KEEP` and on one that acted on a `T_KEEP` of its own. That is never before the
+     peer's step 1; until then a control without `T_REPLY` means none, as ever.
+  3. *I leave `T_REPLY` out as unchanged* only once I know the peer is at step 2 for me:
+     it has acted on a burst of mine that acted on its `T_KEEP`, and on one that acted
+     on a burst of its own which acted on mine. Before that, `T_REPLY` goes in full.
+  With step 2 alone a station could be read as "none" where it meant "unchanged" (its
+  peer heard a burst and never acted on it), and stay so until its recommendation moved;
+  step 3 closes that. tests/test_keep.py holds the two ends to the same value through
+  600 random loss patterns with nods and both control sizes.
+- **Rule.** A station at step 3 leaves `T_REPLY` out when the peer holds the value
+  whichever of its bursts the peer has heard: the last burst of mine it acted on left it
+  so, and none since says otherwise.
+- **Shed.** `T_REPLY` is still among the TLVs a full control sheds (`OPTIONAL_TLVS`), but
+  once I keep it its value goes first (an empty `T_REPLY`, a byte less: none, said, and
+  the peer falls back to its own reply mode). With not a byte to spare it is dropped
+  altogether: then a peer at step 2 keeps its last value for that burst, what it holds
+  is unknown to me, and my next control says it in full.
+- **Nods (§3b)** already keep `T_REPLY`; their "kept fields" test compares what the peer
+  holds after each control (the value said, the value kept, none; never an unknown one).
+  **Primed controls (§3a)**: from a peer at step 2 the likeliest control has no
+  `T_REPLY`, so that is the first hypothesis, and the second is the same with one, its
+  value unknown.
 - **Measured** (shift+cpm, DATA2G_PEP_REF_DB=5, paired by seed against `DATA2G_KEEP=0`).
   Bulk (`scripts/loss_study.py`, 16 seeds x 300 s, delivered bps): awgn -10 +1.3% (SE
   0.7; 3 seeds better, 0 worse), awgn -6 +3.9% (0.4; 16/0), awgn -4 +4.9% (0.7; 14/0),
