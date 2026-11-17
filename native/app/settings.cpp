@@ -97,6 +97,7 @@ QVariantMap settings_map(const Args& a) {
     m["rig_model"] = a.rig_model;
     m["rig_baud"] = a.rig_baud;
     for (const auto& [key, field] : RIG_STRINGS) m[key] = qs(a.*field);
+    m["ptt_gpio"] = a.ptt_gpio;
     m["rig_timeout_ms"] = a.rig_timeout_ms;
     m["rig_retries"] = a.rig_retries;
     m["rig_poll_interval"] = a.rig_poll_interval;
@@ -132,6 +133,7 @@ Args from_settings(const QVariantMap& m, Args a) {
     a.rig_model = m.value("rig_model", a.rig_model).toInt();
     a.rig_baud = m.value("rig_baud", a.rig_baud).toInt();
     for (const auto& [key, field] : RIG_STRINGS) a.*field = str(key, a.*field);
+    a.ptt_gpio = m.value("ptt_gpio", a.ptt_gpio).toInt();
     a.rig_timeout_ms = m.value("rig_timeout_ms", a.rig_timeout_ms).toInt();
     a.rig_retries = m.value("rig_retries", a.rig_retries).toInt();
     a.rig_poll_interval = m.value("rig_poll_interval", a.rig_poll_interval).toDouble();

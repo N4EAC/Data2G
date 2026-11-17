@@ -342,13 +342,14 @@ def test_cli_rig_flags(request, tmp_path):
     assert "NET rigctl" in rows[2] and "Dummy" in rows[1] and "IC-7300" in rows[3073]
     helptext = run("--help").stdout
     for flag in ("--rig-model", "--rig-device", "--rig-baud", "--rig-parity", "--rig-handshake", "--rig-dtr", "--ptt-method",
-                 "--ptt-device", "--ptt-audio", "--rig-mode", "--rig-timeout-ms", "--rig-retries", "--rig-poll-interval",
+                 "--ptt-device", "--ptt-gpio", "--ptt-audio", "--rig-mode", "--rig-timeout-ms", "--rig-retries", "--rig-poll-interval",
                  "--rig-debug", "--list-rigs", "--no-rig"):
         assert flag in helptext, flag
     for args, says in [
         (("--no-rig", "--rig-model", "1"), "--no-rig with a rig"),
         (("--no-record", "--record-dir", "x"), "--no-record with a directory"),
-        (("--ptt-device", "/dev/ttyUSB1"), "--ptt-method dtr or rts"),
+        (("--ptt-device", "/dev/ttyUSB1"), "--ptt-method dtr, rts or cm108"),
+        (("--ptt-gpio", "4"), "--ptt-gpio is the CM108's keying pin"),
         (("--rig-model", "999999"), "not a model this Hamlib knows"),
         (("--rig-parity", "mark"), "invalid choice"),
     ]:

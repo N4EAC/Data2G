@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "app/options.hpp"
+#include "app/settings.hpp"
 #include "codes/codes.hpp"
 #include "check.hpp"
 
@@ -100,6 +101,32 @@ void test_every_flag() {
     check::is_true(app::hamlib_config(parse({"--ptt-method", "vox"})).ptt_method == rig::PttMethod::Vox, "vox");
 }
 
+void test_cm108() {
+    check::current_step = "cm108";
+    const app::Args a = parse({"--rig-model", "1", "--ptt-method", "cm108", "--ptt-device", "/dev/hidraw4", "--ptt-gpio", "4"});
+    const rig::HamlibConfig h = app::hamlib_config(a);
+    check::is_true(h.ptt_method == rig::PttMethod::Cm108 && h.ptt_device == "/dev/hidraw4" && h.ptt_gpio == 4,
+                   "--ptt-method cm108 with its device and pin");
+    const rig::HamlibConfig d = app::hamlib_config(parse({"--ptt-method", "cm108"}));
+    check::is_true(d.ptt_device.empty() && d.ptt_gpio == 3, "cm108 defaults: found device, GPIO3");
+#ifdef __linux__
+    check::is_true(!app::check(a), "cm108 is valid on Linux: " + app::check(a).value_or(""));
+#else
+    check::is_true(app::check(a).has_value(), "cm108 is refused off Linux");
+#endif
+    app::Args bad = a;
+    bad.ptt_method = "cat";  // the range is checked for every method, and cm108 is refused off Linux first
+    bad.ptt_gpio = 9;        // a hand-edited settings file
+    check::equal(app::check(bad).value_or(""), std::string("--ptt-gpio: must be 1 to 8 (GPIO1-GPIO8)"), "pin out of range");
+    bad.ptt_gpio = 0;
+    check::is_true(app::check(bad).has_value(), "pin 0 refused");
+    app::Args saved;
+    saved.ptt_method = "cm108";
+    saved.ptt_gpio = 2;
+    const app::Args back = app::from_settings(app::settings_map(saved), app::Args{});
+    check::is_true(back.ptt_method == "cm108" && back.ptt_gpio == 2, "ptt_gpio survives the settings file");
+}
+
 void test_check() {
     check::current_step = "check";
     app::Args a;
@@ -176,6 +203,7 @@ int main() {
     test_record();
     test_every_flag();
     test_check();
+    test_cm108();
     test_noise_rule();
     test_decoder_effort();
     test_dd_budget();

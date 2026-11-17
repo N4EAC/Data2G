@@ -31,6 +31,7 @@
 #include <utility>
 
 #include "app/web_password.hpp"
+#include "rig/cm108.hpp"
 
 #ifdef DATA2G_HAVE_RIG
 #include "rig/hamlib/hamlib.hpp"
@@ -412,13 +413,17 @@ QWidget* SettingsDialog::rig_tab(const app::Args& a, const QStringList& inputs, 
     lines_row_->setToolTip(tr("Held for the whole session: how an interface powered from the control lines stays fed"));
     form->addRow(tr("Control lines"), lines_row_);
 
-    ptt_method_ = choice("ptt_method", a.ptt_method, {tr("VOX"), tr("CAT"), tr("DTR"), tr("RTS")});
+    ptt_method_ = choice("ptt_method", a.ptt_method, {tr("VOX"), tr("CAT"), tr("DTR"), tr("RTS"), tr("CM108 GPIO")});
     ptt_device_ = new QLineEdit(qs(a.ptt_device));
-    ptt_device_->setPlaceholderText(tr("(the device above)"));
-    form->addRow(tr("PTT"), row({ptt_method_, new QLabel(tr("Port")), ptt_device_}));
+    ptt_gpio_ = spin(1, rig::MAX_CM108_GPIO, a.ptt_gpio);
+    ptt_gpio_->setPrefix(tr("GPIO"));
+    ptt_gpio_->setToolTip(tr("The CM108's pin that keys the radio: GPIO3 on the TOADs DI and most interfaces"));
+    form->addRow(tr("PTT"), row({ptt_method_, new QLabel(tr("Port")), ptt_device_, ptt_gpio_}));
     ptt_audio_ = choice("ptt_audio", a.ptt_audio, {tr("Mic / front"), tr("Data / rear")});
     form->addRow(tr("Transmit audio"), ptt_audio_);
     auto* note = new QLabel(tr("VOX: never key (the rig keys on the audio). DTR and RTS may use another port. "
+                               "CM108 GPIO: a pin of a CM108 USB sound interface such as the TOADs DI (Linux); "
+                               "the port is its /dev/hidrawN, found by itself when only one is plugged in. "
                                "Transmit audio: the input CAT keying selects, on rigs with two."));
     note->setWordWrap(true);
     form->addRow(note);
@@ -507,7 +512,21 @@ void SettingsDialog::sync_rig() {
                                                                      : tr("(Hamlib's default)"));
     for (QWidget* w : {serial_row_, serial_row2_, lines_row_}) set_row_visible(rig_form_, w, serial);
     const std::string method = chosen(ptt_method_);
-    ptt_device_->setEnabled(method == "dtr" || method == "rts");
+    const bool cm108 = method == "cm108";
+    ptt_device_->setEnabled(method == "dtr" || method == "rts" || cm108);
+    ptt_gpio_->setVisible(cm108);
+    if (cm108) {
+        const auto found = rig::find_cm108_devices();
+        ptt_device_->setPlaceholderText(found.size() == 1 ? tr("(auto: %1)").arg(qs(found.front().path))
+                                        : found.empty()   ? tr("(none found: /dev/hidrawN)")
+                                                          : tr("(%1 found: choose one)").arg(found.size()));
+        QStringList list;
+        for (const auto& d : found) list << tr("%1: %2").arg(qs(d.path), qs(d.name));
+        ptt_device_->setToolTip(list.isEmpty() ? tr("No CM108 sound interface is plugged in") : list.join(QLatin1Char('\n')));
+    } else {
+        ptt_device_->setPlaceholderText(tr("(the device above)"));
+        ptt_device_->setToolTip(QString());
+    }
     ptt_audio_->setEnabled(method == "cat" && micdata);
 }
 
@@ -578,6 +597,7 @@ void SettingsDialog::apply_to(app::Args& a) const {
     a.rig_rts = chosen(rts_);
     a.ptt_method = chosen(ptt_method_);
     a.ptt_device = ptt_device_->text().trimmed().toStdString();
+    a.ptt_gpio = ptt_gpio_->value();
     a.ptt_audio = chosen(ptt_audio_);
     a.rig_mode = chosen(rig_mode_);
     a.rig_timeout_ms = timeout_->value();

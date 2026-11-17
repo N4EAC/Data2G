@@ -13,9 +13,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "rig/cm108.hpp"
 
 namespace data2g::rig {
 
@@ -146,6 +149,8 @@ public:
     void open() override {
         load_backends_once();
         if (rig_ != nullptr) return;
+        // Before rig_init: a CM108 that can't be found throws with nothing to clean up.
+        if (config_.ptt_method == PttMethod::Cm108) cm108_device_ = resolve_cm108_device(config_.ptt_device);
         rig_ = rig_init(static_cast<rig_model_t>(config_.model));
         if (rig_ == nullptr) throw RigError("Hamlib does not know rig model " + std::to_string(config_.model));
         // Tokens, not the port structs: those are Hamlib internals (IN_HAMLIB).
@@ -159,7 +164,11 @@ public:
         set_conf("poll_interval", "0");
         const int rc = rig_open(rig_);
         if (rc != RIG_OK) {
-            const std::string msg = hamlib_error("could not open the rig", rc);
+            std::string msg = hamlib_error("could not open the rig", rc);
+            // Hamlib opens the PTT port last and says only "I/O error": name the likely cause.
+            if (config_.ptt_method == PttMethod::Cm108 && rc == -RIG_EIO)
+                msg += "; if that is the CM108's " + cm108_device_ +
+                       ", check that it can be opened for writing (a udev rule; see the User's Guide)";
             rig_cleanup(rig_);
             rig_ = nullptr;
             throw RigError(msg);
@@ -200,6 +209,9 @@ public:
         const char* name = rig_get_caps_cptr(model, RIG_CAPS_MODEL_NAME_CPTR);
         std::string out = mfg && name ? std::string(mfg) + " " + name : "model " + std::to_string(config_.model);
         if (!config_.device.empty()) out += " at " + config_.device;
+        if (config_.ptt_method == PttMethod::Cm108)
+            out += ", PTT on GPIO" + std::to_string(config_.ptt_gpio) + " of " +
+                   (cm108_device_.empty() ? std::string("a CM108") : cm108_device_);
         return out;
     }
 
@@ -262,6 +274,19 @@ private:
             case PttMethod::Cat: set_conf("ptt_type", "RIGMICDATA"); break;
             case PttMethod::Dtr: set_conf("ptt_type", "DTR"); break;
             case PttMethod::Rts: set_conf("ptt_type", "RTS"); break;
+            // GPIO1..8 is Hamlib's ptt_bitnum 0..7; open() found the device.
+            case PttMethod::Cm108: {
+                set_conf("ptt_type", "CM108");
+                set_conf("ptt_pathname", cm108_device_);
+                // Hamlib 4.7.2's conf.c stores ptt_bitnum in the CAT port's
+                // parm union too, over parm.serial.rate: a serial rig would
+                // open at "2 baud" and fail with "Invalid configuration".
+                // Put the speed back (get_conf: none on a network rig).
+                const std::optional<std::string> speed = get_conf("serial_speed");
+                set_conf("ptt_bitnum", std::to_string(config_.ptt_gpio - 1));
+                if (speed) set_conf("serial_speed", *speed);
+                break;
+            }
         }
         if (!config_.ptt_device.empty() && (config_.ptt_method == PttMethod::Dtr || config_.ptt_method == PttMethod::Rts))
             set_conf("ptt_pathname", config_.ptt_device);
@@ -278,6 +303,15 @@ private:
         rig_set_mode(rig_, RIG_VFO_CURR, mode, RIG_PASSBAND_NOCHANGE);
     }
 
+    // nullopt: a token the backend lacks, or one its port doesn't have.
+    std::optional<std::string> get_conf(const char* name) const {
+        const hamlib_token_t token = rig_token_lookup(rig_, name);
+        if (token == RIG_CONF_END) return std::nullopt;
+        char buf[128] = {};
+        if (rig_get_conf2(rig_, token, buf, sizeof buf) != RIG_OK) return std::nullopt;
+        return std::string(buf);
+    }
+
     // A token the backend lacks is skipped (netrigctl has no serial retry).
     void set_conf(const char* name, const std::string& value) {
         const hamlib_token_t token = rig_token_lookup(rig_, name);
@@ -286,6 +320,7 @@ private:
     }
 
     HamlibConfig config_;
+    std::string cm108_device_;  // PttMethod::Cm108: the hidraw device open() resolved
     RIG* rig_ = nullptr;
     bool open_ = false;
 };

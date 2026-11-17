@@ -16,6 +16,11 @@ namespace data2g::rig {
 inline constexpr int MODEL_DUMMY = 1;
 inline constexpr int MODEL_NET_RIGCTL = 2;
 
+// CM108 PTT: GPIO3 (Hamlib's ptt_bitnum 2), as on the TOADs DI and
+// most CM108 interfaces; the chip has GPIO1..GPIO8 (CM119: all eight).
+inline constexpr int DEFAULT_CM108_GPIO = 3;
+inline constexpr int MAX_CM108_GPIO = 8;
+
 // What the model's rig_pathname names, so a settings page shows only the
 // fields that mean something: a serial device and its line settings, a
 // host:port, some other device path, or nothing (the dummy).
@@ -37,8 +42,10 @@ struct RigModel {
     }
 };
 
-// Vox: do not key at all (the rig keys on its own audio).
-enum class PttMethod { Vox, Cat, Dtr, Rts };
+// Vox: do not key at all (the rig keys on its own audio). Cm108: a GPIO pin
+// of a CM108-family USB sound chip (the TOADs DI, the DRA series and many other
+// interfaces), through its HID device: Hamlib's RIG_PTT_CM108, Linux only.
+enum class PttMethod { Vox, Cat, Dtr, Rts, Cm108 };
 // Which input CAT keying selects on a rig with two (RIG_PTT_RIG_MICDATA).
 enum class PttAudio { Mic, Data };
 // Serial line settings. Default: leave the token unset, the backend's own.
@@ -70,7 +77,8 @@ inline constexpr std::array HANDSHAKE_NAMES{Named<Handshake>{Handshake::Default,
 inline constexpr std::array LINE_STATE_NAMES{Named<LineState>{LineState::Default, "default"}, Named<LineState>{LineState::High, "high"},
                                              Named<LineState>{LineState::Low, "low"}};
 inline constexpr std::array PTT_METHOD_NAMES{Named<PttMethod>{PttMethod::Vox, "vox"}, Named<PttMethod>{PttMethod::Cat, "cat"},
-                                             Named<PttMethod>{PttMethod::Dtr, "dtr"}, Named<PttMethod>{PttMethod::Rts, "rts"}};
+                                             Named<PttMethod>{PttMethod::Dtr, "dtr"}, Named<PttMethod>{PttMethod::Rts, "rts"},
+                                             Named<PttMethod>{PttMethod::Cm108, "cm108"}};
 inline constexpr std::array PTT_AUDIO_NAMES{Named<PttAudio>{PttAudio::Mic, "mic"}, Named<PttAudio>{PttAudio::Data, "data"}};
 inline constexpr std::array RIG_MODE_NAMES{Named<RigMode>{RigMode::None, "none"}, Named<RigMode>{RigMode::Usb, "usb"},
                                            Named<RigMode>{RigMode::PktUsb, "pkt_usb"}};
@@ -110,7 +118,12 @@ struct HamlibConfig {
 
     PttMethod ptt_method = PttMethod::Cat;
     PttAudio ptt_audio = PttAudio::Mic;
-    std::string ptt_device;  // DTR/RTS keying on another port; empty: the CAT device
+    // DTR/RTS: keying on another port; empty: the CAT device.
+    // Cm108: the chip's HID device (/dev/hidraw3); empty: the only CM108 found.
+    std::string ptt_device;
+    // Cm108: the GPIO pin that keys, as the chip's datasheet numbers them
+    // (GPIO1..GPIO8). 3 is the one nearly every interface wires to PTT.
+    int ptt_gpio = DEFAULT_CM108_GPIO;
 
     RigMode mode = RigMode::None;
 
