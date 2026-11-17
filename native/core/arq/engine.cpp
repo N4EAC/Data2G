@@ -802,9 +802,9 @@ Engine::Done Engine::process(Block& b) {
             }
         }
         if (bursts.empty() && cfg_.kiss && free && (idle() || session_->idle_connected())) {  // KISS between ARQ sessions, or while one is idle
-            if (auto kb = kiss_burst(k, busy)) {
-                bursts = cw_ahead({kb}, t);
-                main = kb;
+            if (auto kb = kiss_burst(k, busy); !kb.empty()) {
+                main = kb.back();
+                bursts = cw_ahead(kb, t);
             }
             tx_kiss_ = !bursts.empty();
         } else kiss_busy_ = 0;
@@ -1356,34 +1356,39 @@ void Engine::hear_burst(receiver::BurstEvent& ev, double t) {
     session_->on_rx(rx, t);
 }
 
-// The next KISS burst if it may go now: after waiting on BUSY, p-persistent
-// slots; on a free channel at once; BUSY holds it, but not past
-// busy_limit_s of it unbroken.
-TxBurstPtr Engine::kiss_burst(std::int64_t k, bool busy) {
+// The queued KISS bursts if they may go now, back to back on one PTT (nothing is
+// heard between them); just the next while a HAND LISTEN waits for its frame's
+// burst to end. After waiting on BUSY, p-persistent slots; on a free channel at
+// once; BUSY holds it, but not past busy_limit_s of it unbroken.
+std::vector<TxBurstPtr> Engine::kiss_burst(std::int64_t k, bool busy) {
     auto& link = *cfg_.kiss;
     if (link.queue.empty()) {
         kiss_busy_ = 0;
         kiss_deferred_ = false;
-        return nullptr;
+        return {};
     }
     if (busy) {
         kiss_busy_ += k;
         kiss_deferred_ = true;
-        if (static_cast<double>(kiss_busy_) < link.busy_limit_s * config::FS) return nullptr;
+        if (static_cast<double>(kiss_busy_) < link.busy_limit_s * config::FS) return {};
         log_write(LOG, WARNING, format("KISS: BUSY for %.0f s, sending anyway", static_cast<double>(kiss_busy_) / config::FS));
     } else {
         kiss_busy_ = 0;
         if (kiss_deferred_) {
-            if (n_ < kiss_slot_) return nullptr;
+            if (n_ < kiss_slot_) return {};
             if (rng_->uniform(0.0, 1.0) >= (link.persist + 1) / 256.0) {
                 kiss_slot_ = n_ + static_cast<std::int64_t>(link.slot_s * config::FS);
-                return nullptr;
+                return {};
             }
         }
     }
     kiss_busy_ = 0;
     kiss_deferred_ = false;
-    return link.next_burst();
+    if (hand_listen_ && !hand_listen_->open) {
+        if (auto b = link.next_burst()) return {b};
+        return {};
+    }
+    return link.next_bursts();
 }
 
 // A CQ frame (notified: CQFRAME call cap) or an ID frame (ID call key)? Then

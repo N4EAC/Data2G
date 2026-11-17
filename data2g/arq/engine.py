@@ -678,9 +678,9 @@ class Engine:
                     bursts = self._cw_ahead([main], t)
             if (bursts is None and self.kiss is not None and free
                     and (self.session.state in (S.IDLE, S.LISTEN, S.CLOSED) or self.session.idle())):
-                burst = self._kiss_burst(k, busy)  # KISS between ARQ sessions, or while one is idle
-                bursts, main = (self._cw_ahead([burst], t), burst) if burst is not None else (None, None)
-                self._tx_kiss = burst is not None
+                kb = self._kiss_burst(k, busy)  # KISS between ARQ sessions, or while one is idle
+                bursts, main = (self._cw_ahead(kb, t), kb[-1]) if kb else (None, None)
+                self._tx_kiss = bool(kb)
             else:
                 self._kiss_busy = 0
             if bursts is None and self._cw_due(t, free and not busy and not held):
@@ -924,8 +924,10 @@ class Engine:
         start = self._tx_end + EXPECT_REPLY_S
         self._energy(start, start + exp[1], exp[0], self.now, MISSED_MIN_DB)
 
-    def _kiss_burst(self, k: int, busy: bool):
-        """The next KISS burst if it may go now. A burst that waited on BUSY
+    def _kiss_burst(self, k: int, busy: bool) -> list | None:
+        """The queued KISS bursts if they may go now, back to back on one PTT
+        (nothing is heard between them); just the next while a HAND LISTEN
+        waits for its frame's burst to end (its window opens there). A burst that waited on BUSY
         is p-persistent after it: each slot (SLOTTIME) is taken with
         probability (P + 1) / 256, so stations that queued under the same
         burst don't all key up as it ends. One queued on a free channel (a
@@ -951,7 +953,11 @@ class Engine:
                     self._kiss_slot = self.n + int(link.slot_s * FS)
                     return None
         self._kiss_busy, self._kiss_deferred = 0, False
-        return link.next_burst()
+        hl = self._hand_listen
+        if hl is not None and not hl["open"]:
+            b = link.next_burst()
+            return [b] if b is not None else None
+        return link.next_bursts()
 
     def _cq(self, rx) -> bool:
         """A CQ frame (notified: CQFRAME call cap) or an ID frame (ID call key)?
