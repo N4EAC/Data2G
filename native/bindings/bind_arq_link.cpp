@@ -246,6 +246,7 @@ protected:
     std::shared_ptr<Station> make_station(int direction, bool master_, int key) override {
         auto st = std::make_shared<PyStation>(direction, policy, master_, key, std::nullopt, cap, chat);
         st->nod = true;  // as Session::make_station
+        st->keep = true;
         return st;
     }
 };
@@ -475,14 +476,25 @@ void bind_arq_link(py::module_& m) {
 
     py::class_<Station, std::shared_ptr<Station>>(a, "Station", py::dynamic_attr())
         .def(py::init([](int direction, py::object policy, bool master, int key, std::optional<int> max_misses, int cap, bool chat,
-                         bool nod) {
+                         bool nod, bool keep) {
                  auto s = std::make_shared<PyStation>(direction, policy_of(std::move(policy)), master, key, max_misses, cap, chat);
                  s->nod = nod;
+                 s->keep = keep;
                  return std::shared_ptr<Station>(s);
              }),
              py::arg("direction"), py::arg("policy"), py::arg("master") = false, py::arg("key") = 0,
-             py::arg("max_misses") = LINK_LOST_MISSES, py::arg("cap") = 2, py::arg("chat") = false, py::arg("nod") = false)
+             py::arg("max_misses") = LINK_LOST_MISSES, py::arg("cap") = 2, py::arg("chat") = false, py::arg("nod") = false,
+             py::arg("keep") = false)
         .def_readwrite("nod", &Station::nod)
+        .def_readwrite("keep", &Station::keep)
+        .def_readwrite("keep_peer", &Station::keep_peer)
+        .def_readonly("_keep_told", &Station::keep_told_)
+        .def_property_readonly("_keeping", &Station::keeping)
+        .def_property_readonly("_reply_by_bn", [](const Station& s) {
+            py::dict d;
+            for (const auto& [bn, v] : s.reply_by_bn_) d[py::int_(bn)] = v == REPLY_NONE ? py::object(py::none()) : py::object(py::int_(v));
+            return d;
+        })
         .def_readwrite("nod_peer", &Station::nod_peer)
         .def_readonly("_nods_told", &Station::nods_told_)
         .def("nod_family", [](const Station& s) -> py::object {

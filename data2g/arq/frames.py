@@ -53,6 +53,11 @@ T_INLINE = 18
 # the peer acts on a burst that carried it; nods go only to a peer that sent it.
 # Drop it (everyone hears nods) at the next session version bump.
 T_NODS = 19
+# empty: the sender keeps T_REPLY (docs/arq.md §8a): a control without it leaves the reply
+# recommendation as it was. In control padding only, until the peer acts on a burst that
+# carried it; a station leaves T_REPLY out as unchanged only once both have said so.
+# Drop it (everyone keeps it) at the next session version bump.
+T_KEEP = 20
 
 
 def inline_check(mask_id: tuple, payload: bytes) -> bytes:

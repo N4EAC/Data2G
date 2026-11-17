@@ -43,7 +43,11 @@ inline constexpr int T_PAD = 0, T_NEW = 1, T_ABANDON = 2, T_RV = 3, T_BITMAP = 4
                      T_INLINE = 18,
                      // empty: the sender hears nods (docs/arq.md §3b), in control padding until the peer
                      // acted on it; nods go only to a peer that sent it. Dropped at the next version bump.
-                     T_NODS = 19;
+                     T_NODS = 19,
+                     // empty: the sender keeps T_REPLY (docs/arq.md §8a), in control padding until the peer
+                     // acted on it; T_REPLY is left out as unchanged only once both said so. Dropped at the
+                     // next version bump.
+                     T_KEEP = 20;
 // An extension type's short name ("ext N" for one not listed): monitor/'s
 // dumps. A new T_* gets its name here too. (Native only.)
 std::string ext_name(int t);

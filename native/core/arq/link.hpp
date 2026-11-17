@@ -42,6 +42,9 @@ bool prime_default();
 bool repeat_default();
 // link.NOD: DATA2G_NOD=0 turns nods off (docs/arq.md §3b; read once).
 bool nod_default();
+// link.KEEP: DATA2G_KEEP=0 sends T_REPLY in every control and never keeps it (T_KEEP, docs/arq.md §8a; read once).
+bool keep_default();
+inline constexpr int REPLY_UNKNOWN = -1, REPLY_NONE = -2;  // link._UNKNOWN, None: what the peer holds of T_REPLY
 inline constexpr const char* NOD_MODE = "fsk16r25-r1/3";  // the mode a nod's control is packed and named in
 
 // Python's logging, by logger name ("data2g.link", "data2g.session") and
@@ -281,6 +284,23 @@ public:
     bool nod_peer = false;
     bool nods_told_ = false;
     std::set<std::int64_t> nods_in_;
+    // T_KEEP (docs/arq.md §8a): on for this session (a session's station); the peer keeps T_REPLY (its
+    // T_KEEP); the peer acted on a burst of mine carrying T_KEEP, my bursts that did. The reply
+    // recommendation the peer holds once it has my burst bn (a mode code, REPLY_NONE or REPLY_UNKNOWN),
+    // what it holds as of the last burst it acted on, and that burst.
+    bool keep = false;
+    bool keep_peer = false;
+    bool keep_told_ = false;
+    std::set<std::int64_t> keep_in_;
+    std::map<std::int64_t, int> reply_by_bn_;
+    int reply_known_ = REPLY_UNKNOWN;
+    std::int64_t reply_conf_ = -1;
+    bool reply_same_ = false;  // this build left T_REPLY out as the peer's
+    std::optional<int> reply_was_;  // peer_reply_recommend before the control being handled
+    // Both stations keep T_REPLY and know the other does (link.Station._keeping).
+    bool keeping() const { return keep_default() && keep && keep_peer && keep_told_; }
+    // The peer holds `reply` whichever of my bursts before bn it has heard (link.Station._reply_held).
+    bool reply_held(std::int64_t bn, std::optional<int> reply) const;
     using Kept = std::tuple<int, std::optional<int>, bool>;  // size_hint, T_REPLY, T_CHAT
     struct SentCtl {
         std::int64_t cum;
@@ -348,7 +368,7 @@ private:
     bool data_allowed(bool fresh, const std::string& submode);
     std::optional<std::pair<int, nod::FamilyKey>> nod_of(std::int64_t bn, const std::string& submode, const Core& core,
                                                          const Ext& ext) const;
-    static Kept kept(const Core& core, const Ext& ext);
+    Kept kept(const Core& core, const Ext& ext, int said) const;
     void start_abandon(int reset);
     Ext control_tlvs(std::int64_t bn, std::optional<int> reply);
     Fit fit(Ext& ext, int cum, const std::vector<std::int64_t>& missing, bool has_new, int max_cw,

@@ -75,6 +75,7 @@ Session::Session(std::string call_, std::shared_ptr<Policy> policy_, double t_tu
 std::shared_ptr<Station> Session::make_station(int direction, bool master_, int key) {
     auto st = std::make_shared<Station>(direction, policy, master_, key, std::nullopt, cap, chat);
     st->nod = nods;  // nods (docs/arq.md §3b): a session's station, unless the host turned them off
+    st->keep = true;  // T_REPLY only on change, once the peer keeps it too (T_KEEP, docs/arq.md §8a)
     return st;
 }
 

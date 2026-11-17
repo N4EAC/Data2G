@@ -27,6 +27,7 @@ data2g/arq/__init__.py lists the modules and how they layer. By section (Python 
 | §6, §6a turns, timers, idle | `session.py` |
 | §7 session frames, §7a ID frames, §7b CW ID | `frames.py` (`Connect`, `ConnectAck`, `ConnectNak`, `pack_cq`, `pack_id`); `session.py`; `engine.py`; `cwid.py` |
 | §8 gear shifter | `policy.py` (`GearShifter`); `predictor.py`; `modes.py` (the recommendation code) |
+| §8a T_REPLY only on change | `frames.py` (`T_KEEP`); `link.py` (`Station._keeping`, `_reply_held`, `keep_peer`) |
 | §9 host interface | `data2g/host.py` (native: `native/core/host/`) |
 | §9a stream framing, compression | `frames.py` (`to_records`, `deflate`); `link.py` (`TxSide`, `RxSide`) |
 | §3a primed reception | `link.py` (`Station.expect`, `_primed`, `_implausible`, `expected_modes`), `phy.py` (`ModemRx.decode_known`), `session.py` (`_primed_frame`, `expecting`), `cpm.py` (`prime_lock`), `receiver.py` (`ReplySlot`, `Receiver.expect`), `engine.py` (`_expect_reply`) |
@@ -506,6 +507,7 @@ Where the rest comes from:
 | comp (15) | 1 bit per data slot (resends, then new), MSB first, cut after the last set byte: the codeword is deflated (§9a) | a compressed new codeword, or a compressed resend the peer may not know is one |
 | drained (17) | empty: this burst's new codewords end the sender's queued data (a hint, §6a reply hold) | the burst that slices the last queued byte, only if it fits the control's padding |
 | inline (18) | seq (7 bits) and comp flag, a data codeword's payload with trailing zeros cut, its 2-byte check (§5a) | the burst's last new codeword, when it fits the control's padding |
+| keep (20) | empty: the sender keeps `T_REPLY` (§8a) | until the peer acts on a burst that carried it |
 
 ## 5a. Inline codewords (session version 4)
 
@@ -841,6 +843,47 @@ As built (data2g/arq/policy.py):
   This absorbs what the predictor gets wrong on the actual link.
 - Switching away from the mode of the peer's outstanding codewords abandons them (§4).
   The recommender charges a switch with the bytes it holds beyond its cumulative ACK.
+
+## 8a. T_REPLY only on change (`T_KEEP`, 2026-11)
+
+`T_REPLY` (3 B) rides in nearly every control though it changes in about a quarter of
+them (§3b's census), and it is what makes the usual OFDM ACK two codewords: the core is
+4 B and an ACK mode's codeword holds 4 B, so core + `T_REPLY` is ack-4f x2 (1.62 s) or
+ack-1f x2 (0.76 s) where the core alone is x1 (1.05 s, 0.43 s). `DATA2G_KEEP=0` turns it
+off (Python and native) for A/B runs.
+
+- **Who keeps it** (no session version bump). A station that keeps `T_REPLY` says so with
+  `T_KEEP` (empty) until the peer acts on a burst that carried it: in its control's
+  padding, or, where a control is full with `T_REPLY` (an OFDM ACK mode's), in
+  `T_REPLY`'s place (the peer falls back to its own reply mode for that burst, as when
+  the TLV is shed). A link keeps `T_REPLY` for a station once it has heard the peer's
+  `T_KEEP` and the peer has acted on its own (`Station._keeping`); the peer gets there no
+  later than its first control read that way, since it acts on my `T_KEEP` before it
+  leaves anything out. A peer without it ignores the TLV and never says it, so nothing
+  changes for it: `T_REPLY` in every control, and a control without one means none.
+  Drop `T_KEEP` at the next session version bump.
+- **Rule.** Where both keep it, a control without `T_REPLY` leaves the reply
+  recommendation as it was. A station leaves `T_REPLY` out when the peer holds the value
+  whichever of its bursts the peer has heard (`Station._reply_held`): the last burst of
+  mine it acted on left it so, and none since says otherwise. A burst that shed
+  `T_REPLY`, or left it out before both kept it, makes what the peer holds unknown, and
+  the next control says it in full. "None" is said as an empty `T_REPLY`.
+- **Nods (§3b)** already keep `T_REPLY`; their "kept fields" test now compares what the
+  peer holds after each control (the value said or kept), so a control that left it out
+  as unchanged still nods. **Primed controls (§3a)**: where both keep it, each
+  hypothesis is also tried with `T_REPLY` the other way (absent, or present with its
+  value unknown).
+- **Measured** (shift+cpm, DATA2G_PEP_REF_DB=5, paired by seed against `DATA2G_KEEP=0`).
+  Bulk (`scripts/loss_study.py`, 16 seeds x 300 s, delivered bps): awgn -10 +1.3% (SE
+  0.7; 3 seeds better, 0 worse), awgn -6 +3.9% (0.4; 16/0), awgn -4 +4.9% (0.7; 14/0),
+  awgn 5 +4.5% (16/0); mpp -6 +8.0% (5.8; 11/4), mpp -3 +6.6% (3.8; 11/4), mpp 0 +2.2%
+  (2.7; 9/3); mpd -6 -0.7% (2.7; 4/4), mpd -3 +4.0% (1.7; 10/4), mpd 0 -1.8% (3.5;
+  5/11). The steady cells gain; each fading cell is within about two SE. Besides the
+  shorter ACK, a data burst's control drops from two codewords to one, a data codeword
+  more in the same burst. linksim winlink (`scripts/chat_probe.py`, 24 seeds x 900 s,
+  per-seed mean latency of every message): awgn 10 -0.16 s (SE 0.05; 23/1), awgn -4
+  -2.65 s (0.41; 23/1), mpp 0 +0.14 s (0.66; 10/14), mpp -3 -2.90 s (1.72; 16/7), mpd
+  -3 -1.69 s (0.61; 17/5).
 
 ## 9. Host interface (VARA-style TCP)
 
