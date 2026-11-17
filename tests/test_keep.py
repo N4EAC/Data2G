@@ -28,7 +28,7 @@ def run(seed, a_keep=True, b_keep=True, nods=False, max_turns=3000):
         receiver = b if sender is a else a
         ok = False
         if rng.random() >= 0.15:
-            said = sender._reply_by_bn[sender._latest]
+            said = sender._said(sender._latest)
             if burst.nod is not None:
                 before = receiver.peer_reply_recommend
                 ok = receiver.handle(receiver.nod_rx(burst.nod[0]))
@@ -75,7 +75,7 @@ def test_a_peer_that_never_said_gets_t_reply(a_keep, b_keep):
     a, b, n, bare = run(1, a_keep, b_keep)
     assert not a._keeping and not b._keeping
     assert a.keep_peer == b_keep and b.keep_peer == a_keep
-    assert a._keep_told == a_keep and b._keep_told == b_keep
+    assert bool(a._keep_told) == a_keep and bool(b._keep_told) == b_keep
 
 
 def test_t_keep_until_acted_on_then_t_reply_only_on_change():
@@ -240,7 +240,7 @@ def run_mixed(seed, turns=400):
         receiver = b if sender is a else a
         ok = False
         if rng.random() >= 0.2:
-            said = sender._reply_by_bn[sender._latest]
+            said = sender._said(sender._latest)
             if burst.nod is not None:
                 ok = receiver.handle(receiver.nod_rx(burst.nod[0]))
             else:
@@ -300,7 +300,7 @@ def test_a_shed_t_reply_says_none_where_that_fits(size, left):
     ext = _whole(x).ext
     assert F.T_INLINE in ext and ext.get(F.T_REPLY) == left
     assert b.handle(FullRx(x)) and b.peer_reply_recommend == {b"": 5, b"": None, None: 3}[left]
-    assert a._reply_by_bn[a._latest] == {b"": 5, b"": None, None: L._UNKNOWN}[left]
+    assert a._said(a._latest) == {b"": 5, b"": None, None: L._UNKNOWN}[left]
     y = b.build()
     b.answered()
     assert a.handle(FullRx(y))

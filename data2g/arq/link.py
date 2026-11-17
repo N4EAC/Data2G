@@ -455,6 +455,27 @@ class ProtocolError(Exception):
 # --- one station ------------------------------------------------------------------
 
 @dataclass
+class Told:
+    """Something my controls say until the peer has it: my bns that said it, and
+    whether the peer has acted on one of them."""
+
+    bns: set = field(default_factory=set)
+    done: bool = False
+
+    def __bool__(self) -> bool:
+        return self.done
+
+    def mark(self, bn: int):
+        self.bns.add(bn)
+
+    def acted(self, bn: int) -> bool:
+        """The peer acted on my burst bn. -> whether that was one of them."""
+        hit = bn in self.bns
+        self.done = self.done or hit
+        return hit
+
+
+@dataclass
 class Station:
     direction: int  # 0 caller, 1 callee: this station's data direction
     policy: Policy
@@ -526,31 +547,19 @@ class Station:
     # same as decoded and which burst of mine it acted on
     nod: bool = False
     nod_peer: bool = False  # the peer hears nods (its T_NODS): mine may go to it
-    _nods_told: bool = False  # the peer acted on a burst of mine carrying T_NODS: no more of it
-    _nods_in: set = field(default_factory=set)  # my bns that carried T_NODS
+    _nods_told: Told = field(default_factory=Told)  # my bursts carrying T_NODS: no more of it once acted on
     keep: bool = False  # T_REPLY only when it changes, once the peer keeps it too (T_KEEP: a session's station)
     keep_peer: bool = False  # the peer keeps T_REPLY (its T_KEEP)
-    _keep_told: bool = False  # the peer acted on a burst of mine carrying T_KEEP: no more of it
-    _keep_in: set = field(default_factory=set)  # my bns that carried T_KEEP
+    _keep_told: Told = field(default_factory=Told)  # my bursts carrying T_KEEP: no more of it once acted on
     # the peer keeps T_REPLY as I read its controls (_peer_keeping): its latest burst carried
-    # T_KEEP; my bns that acted on one that did; it has acted on one of those (so it knows
-    # I heard its T_KEEP: its own _keep_told)
+    # T_KEEP; my bursts that acted on one that did (acted on, it knows I heard its T_KEEP:
+    # its own _keep_told)
     _peer_said_keep: bool = False
-    _keep_acks: set = field(default_factory=set)
-    _keep_seen: bool = False
-    # ... and the peer reads my controls so (its own _peer_keeping; _reply_held): every bn of
-    # mine that carried T_KEEP; its latest burst acted on one; my bns that acted on such a
-    # burst; it has acted on one of those
-    _keep_all: set = field(default_factory=set)
+    _keep_seen: Told = field(default_factory=Told)
+    # ... and the peer reads my controls so (its own _peer_keeping; _reply_held): its latest
+    # burst acted on a T_KEEP burst of mine; my bursts that acted on such a burst
     _peer_acked_keep: bool = False
-    _keep_acks2: set = field(default_factory=set)
-    _keep_sure: bool = False
-    # the reply recommendation the peer holds once it has my burst bn (a mode code, None, or
-    # _UNKNOWN: T_REPLY shed while both keep it); what it holds as of the last burst it
-    # acted on, and that burst
-    _reply_by_bn: dict = field(default_factory=dict)
-    _reply_known: int | None = _UNKNOWN
-    _reply_conf: int = -1
+    _keep_sure: Told = field(default_factory=Told)
     _sent_ctl: dict = field(default_factory=dict)  # my bn -> (cum, recommend, acted-on seq, new end | None, _kept)
     _peer_ctl_core: dict = field(default_factory=dict)  # seq -> (cum 7-bit, recommend, my bn acted on, new end | None)
     _rx_new_end: int | None = None  # the last peer burst's new data end (1 + its highest new seq)
@@ -668,12 +677,11 @@ class Station:
             said = reply
         else:  # left out: none to a peer that does not keep it yet; shed while it does, it keeps its last
             said = _UNKNOWN if self._keeping else None
-        self._reply_by_bn[bn] = said
         self._asked = (rec, None if said == _UNKNOWN else said)  # (no reply mode to expect that the peer does not hold)
         if self._peer_said_keep:
-            self._keep_acks.add(bn)  # it acts on a peer burst that carried T_KEEP
+            self._keep_seen.mark(bn)  # it acts on a peer burst that carried T_KEEP
         if self._peer_acked_keep:
-            self._keep_acks2.add(bn)  # ... on one that acted on a T_KEEP of mine
+            self._keep_sure.mark(bn)  # ... on one that acted on a T_KEEP of mine
         ctl = F.Control(core, ext).pack(cpb)
         assert core.n_ctl <= n_ctl, (core.n_ctl, n_ctl)  # T_COMP stayed in the padding
         self._asked_dup = F.T_DUPCTL in ext
@@ -681,12 +689,11 @@ class Station:
         burst = TxBurst(submode, self._slots(ctl, dup, resend, rvs, new), self.bursts_sent, self.cap)
         news = [c.seq for c in new] + ([inline.seq] if inline else [])
         if nod and fresh and not (resend or news) and dup == 1 and len(ctl) == 1:
-            burst.nod = self._nod_of(bn, submode, core, ext)
+            burst.nod = self._nod_of(bn, submode, core, said, ext)
         if burst.nod is None and F.T_NODS in ext:
-            self._nods_in.add(bn)
+            self._nods_told.mark(bn)
         if burst.nod is None and F.T_KEEP in ext:
-            self._keep_in.add(bn)
-            self._keep_all.add(bn)
+            self._keep_told.mark(bn)
         self._sent_ctl[bn] = (self.rx.cum, core.recommend, core.acted_on, max(news) + 1 if news else None,
                               self._kept(core, said, ext))
         self._record(bn, burst, conveyed, resend, new + [inline] * bool(inline))
@@ -765,13 +772,20 @@ class Station:
         control without it leaves the recommendation as it was. The peer gets there no
         later than its first burst I read that way: it acts on my T_KEEP before it leaves
         T_REPLY out, and I acted on its own before it could."""
-        return KEEP and self.keep and self.keep_peer and self._keep_told
+        return KEEP and self.keep and self.keep_peer and self._keep_told.done
+
+    def _said(self, bn: int) -> int | None:
+        """The reply recommendation the peer holds once it has my burst bn (_kept): a mode
+        code, None, or _UNKNOWN (T_REPLY shed while both keep it; a burst from before the
+        last two the peer acted on)."""
+        c = self._sent_ctl.get(bn)
+        return _UNKNOWN if c is None else c[4][1]
 
     def _reply_held(self, bn: int, reply: int | None) -> bool:
         """The peer holds `reply` whichever of my bursts before bn it has heard: the last
         it acted on left it so, and none since says otherwise."""
-        return (self._keeping and self._keep_seen and self._keep_sure and self._reply_known == reply
-                and all(self._reply_by_bn.get(b, _UNKNOWN) == reply for b in range(self._reply_conf + 1, bn)))
+        return (self._keeping and self._keep_seen.done and self._keep_sure.done
+                and all(self._said(b) == reply for b in range(self._confirmed, bn)))
 
     @property
     def _peer_keeping(self) -> bool:
@@ -782,7 +796,7 @@ class Station:
         heard and never acted on), which is why the peer leaves T_REPLY out as unchanged
         only once it has seen both of these of me (_reply_held: _keep_seen, _keep_sure),
         and until then says none in so many words."""
-        return KEEP and self.keep and self._keep_told and self._keep_seen
+        return KEEP and self.keep and self._keep_told.done and self._keep_seen.done
 
     def _shed(self, ext: dict) -> bool:
         """Drop the least useful optional TLV from `ext`, or cut T_REPLY's value where
@@ -899,7 +913,7 @@ class Station:
     # kept, carried (T_DUPCTL), or dropped (T_NODS, T_KEEP)
     NOD_EXT = frozenset((F.T_REPLY, F.T_CHAT, F.T_DUPCTL, F.T_NODS, F.T_KEEP))
 
-    def _nod_of(self, bn: int, submode: str, core, ext: dict) -> tuple | None:
+    def _nod_of(self, bn: int, submode: str, core, said, ext: dict) -> tuple | None:
         """Control-only reply bn as a nod: (meaning, family key), or None
         when the peer does not hear nods or its content is not in the
         codebook against anchors the peer holds too. It acts on peer burst
@@ -918,8 +932,8 @@ class Station:
                "unchanged" if self.rx.cum == r_cum else None)
         step = (core.recommend & 15) - (r_rec & 15)
         if (ack is None or core.recommend >> 4 != r_rec >> 4 or step not in nodmod.REPLY_STEPS
-                or _UNKNOWN in (self._reply_by_bn[bn], r_kept[1])
-                or self._kept(core, self._reply_by_bn[bn], ext) != r_kept):  # the peer keeps R's
+                or _UNKNOWN in (said, r_kept[1])
+                or self._kept(core, said, ext) != r_kept):  # the peer keeps R's
             return None
         dup = int(F.T_DUPCTL in ext)
         return nodmod.INDEX[(ack, step, dup)], (self.key, self.direction, bn % F.BURST_MOD, core.acted_on)
@@ -929,7 +943,7 @@ class Station:
         """What a nod leaves as the peer has it from my last control (its
         size_hint, T_REPLY, T_CHAT: absolute, so a nod may only repeat them).
         `said`: the reply recommendation the peer holds after this control
-        (_reply_by_bn: T_REPLY's, the value kept, or _UNKNOWN, which no nod matches)."""
+        (T_REPLY's, the value kept, or _UNKNOWN, which no nod matches)."""
         return core.size_hint, said, F.T_CHAT in ext
 
     def nod_family(self) -> tuple | None:
@@ -1081,10 +1095,12 @@ class Station:
         try:
             # never guess on a protocol error: a blind resync can corrupt
             acted, progress = self._take_ack(core, ext)
+            self._peer_acked_keep = self._keep_told.acted(acted)
+            self._keep_seen.acted(acted)
+            self._keep_sure.acted(acted)
             # without T_REPLY: none (_note_peer), or as it was where the peer keeps it (T_KEEP),
             # this burst's acted-on counted
-            if (F.T_REPLY not in ext and KEEP and self.keep and (self._keep_told or acted in self._keep_in)
-                    and (self._keep_seen or acted in self._keep_acks)):
+            if F.T_REPLY not in ext and self._peer_keeping:
                 self.peer_reply_recommend = reply_was
             abandoned = self._take_abandon(rx, ext)
             slots, n_dec, n_old, delivered = self._take_data(rx, core, ext, dup, acted)
@@ -1099,18 +1115,10 @@ class Station:
         self._peer_ctl_core[core.burst_seq] = (core.cum, core.recommend, acted, self._rx_new_end)
         if F.T_NODS in ext:
             self.nod_peer = True  # latched for the session
-        if acted in self._nods_in:
-            self._nods_told, self._nods_in = True, set()
+        self._nods_told.acted(acted)
         self._peer_said_keep = F.T_KEEP in ext
         if F.T_KEEP in ext:
             self.keep_peer = True  # latched for the session
-        if acted in self._keep_in:
-            self._keep_told, self._keep_in = True, set()
-        if acted in self._keep_acks:
-            self._keep_seen, self._keep_acks = True, set()
-        if acted in self._keep_acks2:
-            self._keep_sure, self._keep_acks2 = True, set()
-        self._peer_acked_keep = acted in self._keep_all
         self._peer_ctl[bool(slots)] = self._last_stream
         self._peer_last = (self._last_stream, (rx.submode, rx.n_cw))
         self._answered = False
@@ -1399,10 +1407,6 @@ class Station:
             raise ProtocolError(f"acted-on {core.acted_on} outside my bursts {self._confirmed}..{self._latest}")
         acted = acted[0]
         self._confirmed = acted
-        if acted > self._reply_conf:  # what the peer holds of my reply recommendation (T_KEEP)
-            self._reply_known, self._reply_conf = self._reply_by_bn.get(acted, _UNKNOWN), acted
-            for b in [b for b in self._reply_by_bn if b < acted]:
-                del self._reply_by_bn[b]
         if self._abandon is not None and acted in self._abandon_bursts:
             self._abandon = None  # the peer has applied it
         cum = unwrap(core.cum, self.tx.base)

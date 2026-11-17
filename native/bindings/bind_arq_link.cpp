@@ -488,15 +488,14 @@ void bind_arq_link(py::module_& m) {
         .def_readwrite("nod", &Station::nod)
         .def_readwrite("keep", &Station::keep)
         .def_readwrite("keep_peer", &Station::keep_peer)
-        .def_readonly("_keep_told", &Station::keep_told_)
+        .def_property_readonly("_keep_told", [](const Station& s) { return s.keep_told_.done; })
         .def_property_readonly("_keeping", &Station::keeping)
-        .def_property_readonly("_reply_by_bn", [](const Station& s) {
-            py::dict d;
-            for (const auto& [bn, v] : s.reply_by_bn_) d[py::int_(bn)] = v == REPLY_NONE ? py::object(py::none()) : py::object(py::int_(v));
-            return d;
+        .def("_said", [](const Station& s, std::int64_t bn) -> py::object {
+            const int v = s.said(bn);
+            return v == REPLY_NONE ? py::object(py::none()) : py::object(py::int_(v));
         })
         .def_readwrite("nod_peer", &Station::nod_peer)
-        .def_readonly("_nods_told", &Station::nods_told_)
+        .def_property_readonly("_nods_told", [](const Station& s) { return s.nods_told_.done; })
         .def("nod_family", [](const Station& s) -> py::object {
             const auto k = s.nod_family();
             if (!k) return py::none();
