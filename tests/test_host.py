@@ -232,7 +232,7 @@ def test_txpower_gets_and_sets_the_output_volume():
     h.command("TXPOWER")
     h.command("TXPOWER -1.2")
     h.command("TXPOWER")
-    for bad in ("-60.1", "20.5", "abc", "nan", "1 2"):
+    for bad in ("-60.1", "0.1", "abc", "nan", "1 2"):
         h.command("TXPOWER " + bad)
     h.command("TXPOWER")
     assert h.out_cmd == ["WRONG", "OK", "TXPOWER 0.0", "OK", "TXPOWER -1.2"] + ["WRONG"] * 5 + ["TXPOWER -1.2"]

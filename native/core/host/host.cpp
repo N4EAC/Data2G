@@ -237,7 +237,8 @@ void Host::command(std::string_view line, std::string_view peer) {
             ok = false;
         }
     } else if (cmd == "HAND" && !args.empty() && (upper(args[0]) == "SEND" ? args.size() == 6
-               : upper(args[0]) == "LISTEN" ? args.size() >= 5 : upper(args[0]) == "CANCEL" && args.size() == 1)) {
+               : upper(args[0]) == "LISTEN" ? args.size() >= 5 : upper(args[0]) == "OVERHEAR" ? args.size() >= 4
+               : upper(args[0]) == "CANCEL" && args.size() == 1)) {
         hand_ = true;
         // HAND args are strict (engine.py's _hand_arg): ints [0-9]+, a delay [0-9.]+,
         // a payload [0-9a-fA-F]{1,16}; anything else is WRONG without asking the Engine
@@ -282,6 +283,10 @@ void Host::command(std::string_view line, std::string_view peer) {
                 std::vector<int> channels;
                 for (std::size_t i = 4; i < args.size(); ++i) channels.push_back(channel(args[i]));
                 e.hand_listen(whole(args[1]), num(args[2]), ack(args[3]), channels);
+            } else if (upper(args[0]) == "OVERHEAR") {  // HAND OVERHEAR ref d channel [channel...]
+                std::vector<int> channels;
+                for (std::size_t i = 3; i < args.size(); ++i) channels.push_back(channel(args[i]));
+                e.hand_overhear(num(args[1]), whole(args[2]), channels);
             } else e.hand_cancel();  // HAND CANCEL: always OK (docs/arq.md §9)
         } catch (const std::invalid_argument&) {
             ok = false;

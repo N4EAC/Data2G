@@ -234,3 +234,26 @@ def test_a_narrower_bands_burst_is_no_copy_lock():
     x = modem.modulate([rng.bytes(codes.payload_bytes(s)) for _ in range(6)], s)
     y = hfchannel.awgn(np.pad(x, (FS // 2, FS)), 10, seed=4, s_power=hfchannel.active_power(x))
     assert modem.find_copy(y, "w") is None
+
+
+def test_a_preamble_cfo_off_by_a_pilot_alias_is_put_right(monkeypatch):
+    """Fading's random FM puts the preamble's CFO estimate past half the
+    pilot rate now and then (1 burst in 10 on mpp, 6.8 Hz off); the
+    pilots measure it only modulo 6.94 Hz, and the header's coarse estimate
+    picks the alias (modem.receive). A local named `known` once shadowed
+    the argument of that name, so the alias nearest no change was taken
+    instead and such bursts were lost (Python only; native was right)."""
+    spec = SUBMODES["qpsk-r1/2"]
+    sent = _payloads(spec, 2, 5)
+    x = np.concatenate([np.zeros(FS // 2), modem.modulate(sent, spec), np.zeros(FS // 2)])
+    y = hfchannel.apply_channel(x, snr_db=20, seed=5)
+    best = modem._best_header
+
+    def off(*a, **k):
+        hd, acq, z = best(*a, **k)
+        acq.freq_offset += 5.5
+        return hd, acq, modem.dsp.freq_correct(z, 5.5)
+
+    monkeypatch.setattr(modem, "_best_header", off)
+    b = modem.decode_received(modem.receive(y))
+    assert b.payloads == sent and all(b.crc_ok)

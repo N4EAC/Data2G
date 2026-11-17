@@ -108,7 +108,11 @@ struct Tci::Worker : QObject {
             last_error.clear();
         });
         connect(ws, &QWebSocket::disconnected, this, [this] { lost(); });
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
         connect(ws, &QWebSocket::errorOccurred, this, [this](QAbstractSocket::SocketError) {
+#else  // errorOccurred is Qt 6.5+; Ubuntu 24.04 ships 6.4
+        connect(ws, qOverload<QAbstractSocket::SocketError>(&QWebSocket::error), this, [this](QAbstractSocket::SocketError) {
+#endif
             if (ws->errorString() != last_error && !closing) {
                 last_error = ws->errorString();
                 logf(WARNING, "TCI %s: %s (retrying every %d s)", url.toString().toStdString().c_str(),
