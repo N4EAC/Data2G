@@ -26,7 +26,7 @@ inline constexpr double COPY_PATTERN = 0.6;
 inline constexpr double COPY_DETECT = 14.0;
 inline constexpr std::array<int, 3> COPY_EARLIER = {0, 16, 32};
 inline constexpr std::array<std::string_view, 5> SYNC_BANDS = {"w", "n10", "w48", "f55", "f108"};
-inline constexpr std::array<std::pair<std::string_view, double>, 5> HEADER_MIN_SCORE = {{{"w", 0.33}, {"n10", 0.3}, {"w48", 0.26}, {"f55", 0.23}, {"f108", 0.16}}};
+inline constexpr std::array<std::pair<std::string_view, double>, 5> HEADER_MIN_SCORE = {{{"w", 0.33}, {"n10", 0.3}, {"w48", 0.26}, {"f55", 0.28}, {"f108", 0.18}}};
 inline constexpr std::array<std::pair<std::string_view, double>, 6> PILOT_NOISE = {{{"w", 0.24}, {"n10", 0.38}, {"n4", 0.59}, {"w48", 0.18}, {"f55", 0.19}, {"f108", 0.14}}};
 inline constexpr std::array<std::pair<std::string_view, double>, 6> PILOT_PATTERN = {{{"w", 0.318}, {"n10", 0.504}, {"n4", 0.876}, {"w48", 0.226}, {"f55", 0.208}, {"f108", 0.148}}};
 

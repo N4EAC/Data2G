@@ -851,11 +851,18 @@ PILOT_PATTERN = {"w": 0.318, "n10": 0.504, "n4": 0.876, "w48": 0.226}
 # FM's bands, measured as the others were (scripts/band_consts.py, 3000 reads each,
 # 2026-11-17): pilot pattern 90% / coherence 99% on white noise f55 0.208 / 0.191,
 # f108 0.148 / 0.142; header reads on noise top out at 0.222 (f55) and 0.153 (f108),
-# off other bands' bursts 0.218 and 0.153 (the longer codes read lower), so the
-# floors sit just over them as w48's does. Not yet checked against true
-# headers at low CNR (w48's 0.26 was).
+# off other bands' bursts 0.218 and 0.153 (the longer codes read lower).
+# Header floors re-measured on what an FM receiver hands the modem
+# (scripts/fm_header_floor.py, 2026-11-17, blanked: 12000 reads per band over
+# mic and flat hiss and idle carriers at 8 dB, plus 12348 off other bands'
+# bursts): FM audio reads higher than white noise, max f55 0.276 (flat, idle
+# carrier), f108 0.175, so white noise's 0.23 / 0.16 let noise through. The
+# floors sit just over those maxima, as w48's does. True headers (lowest rung,
+# 60 trials, genie start): none lost at +2 dB static on either path; f55 mic
+# static at 0 dB loses 43% (0.23: 5%), under that rung's 1.25 dB 10% knee;
+# near the mobile knees (8 dB up) no change.
 if "f55" in BANDS:
-    HEADER_MIN_SCORE.update({"f55": 0.23, "f108": 0.16})
+    HEADER_MIN_SCORE.update({"f55": 0.28, "f108": 0.18})
     PILOT_NOISE.update({"f55": 0.19, "f108": 0.14})
     PILOT_PATTERN.update({"f55": 0.208, "f108": 0.148})
 

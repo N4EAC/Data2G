@@ -428,7 +428,7 @@ void listen(double seconds, bool cpm_only, int expect) {
     const auto q = [&](double p) { return 1e6 * ts[static_cast<std::size_t>(p * (ts.size() - 1))]; };
     std::printf("listen %s%s%s%d: %.0f us per 20 ms feed (%.2f%% of a core), p50 %.0f p99 %.0f p99.9 %.0f max %.0f us over "
                 "%zu feeds, %d windows\n",
-                cpm_only ? "cpm only" : "all bands", cwsense_on ? " +cwsense" : "", expect ? " +expect " : "", expect,
+                cpm_only ? "cpm only" : engine_rx ? "engine bands" : "all bands", cwsense_on ? " +cwsense" : "", expect ? " +expect " : "", expect,
                 1e6 * sum / ts.size(), 100 * sum / (ts.size() * 0.02), q(0.5), q(0.99), q(0.999), 1e6 * ts.back(),
                 ts.size(), windows);
 }

@@ -18,6 +18,11 @@ fails, and the session disconnects when the far end closes it; LISTEN ON|OFF
 ends it), CONNECT from to, DISCONNECT, ABORT,
 CQFRAME call bw (a CQ frame at 500 | 1200 | 2300 | 2750 Hz: no session;
 one heard is notified the same way, the sender's call and bandwidth),
+PING call [NARROW|WIDE] (FM: a level / TX path check, arq.ping, no session;
+-> PINGACK call far <how ours arrived there> near <how theirs arrived here>,
+then PINGVERDICT call <advice> lines; a ping to us: PING from to <measurement>,
+answered automatically when no session is under way; measurements are
+snr= rms= peak= clip= thirds=a/b/c dist= noise_tilt= words, dB),
 BW500 | BW1200 | BW2300 | BW2750 (session bandwidth cap: BW500 keeps a
 session inside a 500 Hz band-plan segment; BW2300/BW2750 are the full
 2400 Hz; BW1200 is a Data2G extension), CHAT ON|OFF, VERSION, SN (-> SN
@@ -196,6 +201,11 @@ class Host:
             try:
                 e.send_cq(args[0], BW["BW" + args[1]])
             except (RuntimeError, ValueError):  # a session under way; a callsign that won't pack
+                ok = False
+        elif cmd == "PING" and 1 <= len(args) <= 2:
+            try:
+                e.send_ping(args[0], 2 if len(args) == 2 and args[1].upper() == "WIDE" else 1)
+            except (RuntimeError, ValueError):  # HF, a session under way, a callsign that won't pack
                 ok = False
         elif cmd == "HAND" and args and args[0].upper() == "SEND" and len(args) == 6:
             self._hand = True
@@ -394,6 +404,8 @@ class Host:
                 self.out_cmd.append(f"CONNECTED {src} {dst} {BW_NAME[e.session.cap]}")
                 self._up = True
             elif ev in ("PENDING", "CANCELPENDING"):
+                self.out_cmd.append(ev)
+            elif ev.startswith(("PING ", "PINGACK ", "PINGVERDICT ")):
                 self.out_cmd.append(ev)
             elif ev.startswith("CQFRAME"):
                 _, call, cap = ev.split()
@@ -759,9 +771,12 @@ def main():
     ap.add_argument("--tx-lead-ms", type=int, default=100,
                     help="TX audio queued ahead of the sound card: slack for a late audio step")
     ap.add_argument("--min-header-score", type=float, default=0.0)
-    ap.add_argument("--pending", choices=("off", "fsk", "ofdm", "all"), default="fsk",
+    # "robust" names what "fsk" always meant: the robust connect mode, FSK on HF but n10 OFDM on FM
+    ap.add_argument("--pending", choices=("off", "fsk", "robust", "ofdm", "all"), default="fsk",
+                    type=lambda v: "fsk" if v == "robust" else v,
                     help="PENDING (CANCELPENDING after) on a header that may be a CONNECT while listening: "
-                         "fsk, the robust connect mode only; ofdm, the first-try connect modes; all, both")
+                         "robust (alias fsk), the robust connect mode only (HF: FSK; FM: n10 OFDM); "
+                         "ofdm, the first-try connect modes; all, both")
     ap.add_argument("--buffer-credit", type=int, default=-1,
                     help="bytes queued for the next burst that BUFFER leaves out, at most, so VARA clients "
                          "that throttle on it (Pat) keep a whole burst queued; -1: the next burst's full "
