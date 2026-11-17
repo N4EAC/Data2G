@@ -166,6 +166,10 @@ and reads any codeword. A mask only decides whose CRC check passes.
 - **One queue for all ports:** the next burst takes the first queued frame's port and
   mode, then every queued frame of that port that fits. KISS p-persistence and
   SLOTTIME apply to all ports. Broadcast still goes only between ARQ sessions.
+- **One PTT for the queue:** nothing is heard between queued bursts, so they all go
+  back to back on one key-up, and every frame's ack comes when the last has gone.
+  While a HAND LISTEN waits for its named frame's burst, each burst goes alone: the
+  window opens at that burst's end, and nothing of mine may run into it.
 
 ## 5. Host interface
 

@@ -391,7 +391,7 @@ private:
     Done process(Block& b);  // the session stage
     Done process_safe(Block& b);  // process(); a throw drops the session and plays silence
     void hear(std::vector<receiver::Receiver::Item>& items, double t);
-    TxBurstPtr kiss_burst(std::int64_t k, bool busy);
+    std::vector<TxBurstPtr> kiss_burst(std::int64_t k, bool busy);
     bool cq(ModemRx& rx);
     TxBurstPtr id_frame(const Session& s) const;
     void id_check(double t);
