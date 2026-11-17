@@ -775,6 +775,9 @@ Engine::Done Engine::process(Block& b) {
         cw_heard_ = cw;
         id_check(t);
         const bool busy = (fresh && b.busy) || cw;
+        // the peer's trailing ID runs past ID_GUARD_S: its CW after its ID frame (cw_id
+        // "add"), which CwSense needs ~1 s to hear, so a gap opened there (engine.py)
+        if (busy && id_pending_) id_pending_t_ = std::max(id_pending_t_, t + ID_GUARD_S);
         std::vector<TxBurstPtr> bursts;
         TxBurstPtr main;
         const bool held = t < hold_ && session_->state != SessionState::CLOSED;  // a closed session's DISC_ACK goes
