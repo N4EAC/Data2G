@@ -142,6 +142,30 @@ inline constexpr double PRESENCE_MIN_S = 1.0;
 double presence(const Grid& g, std::span<const double> x, double reach_hz = 150.0);
 bool present(const Grid& g, std::span<const double> x);
 
+// cpm.PresenceTrack: presence over a stream, each symbol read once (per timing on the stream's own T / PRESENCE_PHASES
+// grid, CFO fraction and whole-bin shift: its strongest share and tone).
+class PresenceTrack {
+public:
+    explicit PresenceTrack(const Grid& g, double reach_hz = 150.0);
+    void reset();
+    // x: the receiver's audio, x[0] at stream index off; the window: symbols from stream index lo (>= off) to x's end
+    void feed(std::span<const double> x, std::int64_t off, std::int64_t lo);
+    double value() const;  // presence over the window
+    bool present() const;  // present()'s verdict on the window
+    const Grid& grid() const { return *g_; }
+    std::int64_t n = 0;  // symbols in the window
+
+private:
+    struct Rows {
+        std::int64_t s = 0;                  // stream index of the first kept symbol
+        std::vector<std::vector<double>> tops;  // per shift
+        std::vector<std::vector<int>> tones;
+    };
+    const Grid* g_;
+    int extra_;
+    std::vector<Rows> rows_;  // per (phase, frac)
+};
+
 inline constexpr double CONFIRM_LLR = -2.0;
 double confirm(const Grid& g, std::span<const double> x, const Lock& lock);
 std::int64_t confirm_end(const Grid& g, const Lock& lock);

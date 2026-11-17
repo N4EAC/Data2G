@@ -118,6 +118,27 @@ def test_presence_matches(native, reference):
             assert native.cpm.present(g.name, y) == ref(reference, "present")(g, y)
 
 
+def test_presence_track_matches(native):
+    """The streaming tracker, fed alike with the buffer's start jumping:
+    the same window, value and verdict."""
+    rng = np.random.default_rng(12)
+    for g in GRIDS:
+        s = cpm.bandpass(g, cpm.tones(g, rng.integers(0, g.m, int(4 * g.rate))))
+        y = np.concatenate([rng.normal(size=3 * FS), s + rng.normal(scale=2.0, size=len(s)), rng.normal(size=2 * FS)])
+        a, c = cpm.PresenceTrack(g), native.cpm.PresenceTrack(g.name)
+        end = off = 0
+        while end < len(y):
+            end = min(len(y), end + int(rng.integers(500, 4000)))
+            if rng.random() < 0.1:
+                off = max(off, end - int(rng.integers(FS, 3 * FS)))
+            lo = max(off, end - 3 * FS)
+            a.feed(y[off:end], off, lo)
+            c.feed(y[off:end], off, lo)
+            assert c.n == a.n
+            np.testing.assert_allclose(c.value(), a.value(), rtol=1e-12)
+            assert c.present() == a.present()
+
+
 @pytest.mark.parametrize("case", CASES, ids=[c[0] for c in CASES])
 def test_receive_chain(native, reference, case):
     name, n_data, dup, cfo, sigma = case

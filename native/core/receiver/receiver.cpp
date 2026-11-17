@@ -146,6 +146,7 @@ Receiver::Receiver(modem::Accept accept, std::vector<std::string_view> cpm_grids
     // mid block and second header copy are in (find_mid)
     hold_ = keep_;
     for (const auto* g : grids_) hold_ = std::max(hold_, cpm::hdr_span(*g, 2) + config::FS);
+    for (const auto* g : grids_) tracks_.emplace_back(*g);
     detectors_.reserve(bands_.size());
     for (const auto b : bands_) detectors_.push_back({b, waveform::StreamDetector(waveform::band(b))});
     if (blank) blanker_.emplace();
@@ -170,6 +171,7 @@ void Receiver::reset() {
     cpm_wait_.clear();
     expected_.reset();
     present_ = false;
+    for (auto& t : tracks_) t.reset();
     for (auto& d : detectors_) d.d.reset();
 }
 
@@ -226,22 +228,23 @@ bool Receiver::on_air() const {
 
 void Receiver::read_presence() {
     const auto n = static_cast<int64_t>(PRESENCE_S * config::FS);
-    for (const auto& det : detectors_) {
-        const auto& d = det.d;
+    constexpr int64_t PF = static_cast<int64_t>(modem::COPY_PAIRS) * config::FRAME_SAMPLES;
+    for (auto& det : detectors_) {
+        auto& d = det.d;
         const auto level = d.level();
         if (!level) continue;
-        const auto c = d.outputs_from(off_);
+        const auto c = d.products_from(off_, config::FRAME_SAMPLES, modem::COPY_PAIRS);
         const auto cols = static_cast<std::size_t>(std::max<int64_t>(
-            0, std::min(static_cast<int64_t>(c.cols), off_ + len() - c.start - config::M + 1)));
+            0, std::min(static_cast<int64_t>(c.cols), off_ + len() - c.start - config::M + 1 - PF)));
         if (modem::pilot_presence(c.rows, cols, *level, n).present()) {
             present_ = true;
             return;
         }
     }
-    const auto nc = static_cast<int64_t>(CPM_PRESENCE_S * config::FS);
-    const auto x = std::span<const double>(buf_).last(static_cast<std::size_t>(std::min(nc, len())));
-    for (const auto* g : grids_)
-        if (cpm::present(*g, x)) {
+    const int64_t lo = std::max(off_, off_ + len() - static_cast<int64_t>(CPM_PRESENCE_S * config::FS));
+    for (auto& t : tracks_) t.feed(buf_, off_, lo);
+    for (const auto& t : tracks_)
+        if (t.present()) {
             present_ = true;
             return;
         }
@@ -326,20 +329,22 @@ void Receiver::searched() {
     }
 }
 
-std::optional<modem::Lock> Receiver::find_copy() const {
+std::optional<modem::Lock> Receiver::find_copy() {
     std::optional<modem::Lock> best;
     int64_t best_k = 0;
+    constexpr int64_t PF = static_cast<int64_t>(modem::COPY_PAIRS) * config::FRAME_SAMPLES;
     for (const auto band : config::HEADER_COPY_BANDS) {
         const auto it = std::find_if(detectors_.begin(), detectors_.end(), [&](const Detector& d) { return d.band == band; });
         if (it == detectors_.end()) continue;
-        const auto& d = it->d;
+        auto& d = it->d;
         const auto level = d.level();
         if (!level) continue;
-        const auto c = d.outputs_from(off_);  // from the stream index both the buffer and C cover
+        // from the stream index both the buffer and the products cover
+        const auto c = d.products_from(off_, config::FRAME_SAMPLES, modem::COPY_PAIRS);
         const int64_t a = c.start;
         const auto x = std::span<const double>(buf_).subspan(static_cast<std::size_t>(a - off_));
         const auto cols = static_cast<std::size_t>(std::max<int64_t>(
-            0, std::min(static_cast<int64_t>(c.cols), static_cast<int64_t>(x.size()) - config::M + 1)));
+            0, std::min(static_cast<int64_t>(c.cols), static_cast<int64_t>(x.size()) - config::M + 1 - PF)));
         const auto lock = modem::find_copy(x, band, &accept_, c.rows, cols, level);
         if (lock && (!best || lock->score > best->score)) {
             best = lock;

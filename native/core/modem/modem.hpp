@@ -153,20 +153,20 @@ std::vector<double> pilot_coherence(std::span<const double> x, const Lock& lock,
 // neither. peak: the normalized pilot peak, if one was computed (find_copy.peak).
 std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, const Accept* accept = nullptr,
                               const Mat<cd>* C = nullptr, std::optional<double> level = {}, double* peak = nullptr);
-// The same with C as row pointers (C_rows empty: compute C, as C == nullptr),
-// each row `cols` long: StreamDetector.C rows, used in place.
+// The same from C's pair products (modem.find_copy's D: StreamDetector::products_from rows, each `dcols` long, used
+// in place; empty: compute them, as C == nullptr).
 std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, const Accept* accept,
-                              std::span<const cd* const> C_rows, std::size_t cols, std::optional<double> level,
+                              std::span<const cd* const> D_rows, std::size_t dcols, std::optional<double> level,
                               double* peak = nullptr);
-// modem.pilot_presence: over the newest `window` of a sync band's matched filter outputs C (rows, `cols` long;
-// `level` their noise level), the normalized frame-pilot fold peak and its contrast (over the fold's median
+// modem.pilot_presence: over the newest `window` of a sync band's matched filter outputs, from their pair products
+// (D rows, `dcols` long; `level` the outputs' noise level), the normalized frame-pilot fold peak and its contrast (over the fold's median
 // over frame phases), folded over m frames (0: too short).
 struct Presence {
     double peak = 0.0, contrast = 0.0;
     int m = 0;
     bool present() const;  // modem.pilot_present
 };
-Presence pilot_presence(std::span<const cd* const> C_rows, std::size_t cols, double level, std::int64_t window);
+Presence pilot_presence(std::span<const cd* const> D_rows, std::size_t dcols, double level, std::int64_t window);
 std::vector<double> cfo_aliases(cd d, double centre);
 HeaderRead copy_header(std::span<const cd> z, const Lock& lock);
 

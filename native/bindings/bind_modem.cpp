@@ -343,33 +343,41 @@ void bind_modem(py::module_& m) {
         return py::cast(c);
     }, py::arg("x"), py::arg("lock"), py::arg("n_max") = 8, py::arg("latest") = false, py::arg("pattern") = false);
     d.def("find_copy", [](const In<double>& x, const std::string& band, const py::object& accept,
-                          const std::optional<In<cd>>& C, std::optional<double> level) {
+                          const std::optional<In<cd>>& C, std::optional<double> level,
+                          const std::optional<In<cd>>& D) {
         const auto a = accept_of(accept);
-        std::optional<Mat<cd>> c;
+        std::optional<Mat<cd>> c, dm;
         if (C) c = mat(*C);
+        if (D) dm = mat(*D);
         double peak = std::numeric_limits<double>::quiet_NaN();
         std::optional<mo::Lock> l;
         {
             py::gil_scoped_release nogil;
-            l = mo::find_copy(view(x), band_view(band), a ? &*a : nullptr, c ? &*c : nullptr, level, &peak);
+            if (dm) {  // the pair products (modem.find_copy's D)
+                std::vector<const cd*> rows;
+                for (std::size_t i = 0; i < dm->rows; ++i) rows.push_back((*dm)[i]);
+                l = mo::find_copy(view(x), band_view(band), a ? &*a : nullptr, rows, dm->cols, level, &peak);
+            } else {
+                l = mo::find_copy(view(x), band_view(band), a ? &*a : nullptr, c ? &*c : nullptr, level, &peak);
+            }
         }
         return py::make_tuple(l ? py::object(lock_dict(*l)) : py::object(py::none()),
                               std::isnan(peak) ? py::object(py::none()) : py::object(py::float_(peak)));
     }, py::arg("x"), py::arg("band"), py::arg("accept") = py::none(), py::arg("C") = py::none(),
-       py::arg("level") = py::none());
-    d.def("pilot_presence", [](const In<cd>& C, double level, std::int64_t window) {
-        const auto c = mat(C);
+       py::arg("level") = py::none(), py::arg("D") = py::none());
+    d.def("pilot_presence", [](const In<cd>& D, double level, std::int64_t window) {
+        const auto c = mat(D);
         std::vector<const cd*> rows;
         for (std::size_t i = 0; i < c.rows; ++i) rows.push_back(c[i]);
         const auto p = mo::pilot_presence(rows, c.cols, level, window);
         return py::make_tuple(p.peak, p.contrast);
-    }, py::arg("C"), py::arg("level"), py::arg("window"));
-    d.def("pilot_present", [](const In<cd>& C, double level, std::int64_t window) {
-        const auto c = mat(C);
+    }, py::arg("D"), py::arg("level"), py::arg("window"));
+    d.def("pilot_present", [](const In<cd>& D, double level, std::int64_t window) {
+        const auto c = mat(D);
         std::vector<const cd*> rows;
         for (std::size_t i = 0; i < c.rows; ++i) rows.push_back(c[i]);
         return mo::pilot_presence(rows, c.cols, level, window).present();
-    }, py::arg("C"), py::arg("level"), py::arg("window"));
+    }, py::arg("D"), py::arg("level"), py::arg("window"));
     d.def("cfo_aliases", &mo::cfo_aliases);
     d.def("copy_header", [](const In<cd>& z, const py::dict& lock) {
         return header_dict(mo::copy_header(view(z), lock_of(lock)));

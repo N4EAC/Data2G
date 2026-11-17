@@ -93,6 +93,10 @@ Acquisition acquire(std::span<const cdouble> z, const Band& band, std::optional<
                     double reach = config::ACQUIRE_REACH_HZ,
                     std::optional<std::pair<std::int64_t, std::int64_t>> search = {}, const Mat<double>* S = nullptr);
 
+// sync.pair_products: D[:, t] = sum over j < P of C[:, t + (j + 1) F] conj(C[:, t + j F]) for every start with all
+// P pairs in C (rows, each `cols` long).
+Mat<cdouble> pair_products(std::span<const cdouble* const> rows, std::size_t cols, int F, int P);
+
 // detection_stat for a stream, each start's statistic computed once
 // (sync.StreamDetector). The noise level is the median of the last CHUNKS
 // fed chunks' per-bin levels, then the lowest bin's. Matched filter
@@ -126,6 +130,9 @@ public:
         std::size_t cols;
     };
     Outputs outputs_from(std::int64_t start) const;
+    // sync.StreamDetector.products_from: outputs_from for pair_products(C, F, P) (the same F and P every call),
+    // the starts not yet computed computed now.
+    Outputs products_from(std::int64_t start, int F, int P);
 
     const Band& band;
     double reach;
@@ -140,7 +147,8 @@ private:
     // hop's trim moves no memory (C is ~8 MB on the live receiver)
     std::vector<std::vector<double>> S_;
     std::vector<std::vector<cdouble>> C_;
-    std::size_t s_off_ = 0, c_off_ = 0;
+    std::vector<std::vector<cdouble>> D_;  // pair_products of C, from c0 (products_from)
+    std::size_t s_off_ = 0, c_off_ = 0, d_off_ = 0;
 };
 
 }  // namespace data2g::waveform

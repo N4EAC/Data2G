@@ -257,3 +257,29 @@ def test_a_preamble_cfo_off_by_a_pilot_alias_is_put_right(monkeypatch):
     monkeypatch.setattr(modem, "_best_header", off)
     b = modem.decode_received(modem.receive(y))
     assert b.payloads == sent and all(b.crc_ok)
+
+
+def test_stream_products_are_pair_products_of_its_outputs():
+    """StreamDetector.products_from, extended chunk by chunk and trimmed as
+    the receiver does, is pair_products of the kept outputs (find_copy and
+    the presence fold read it instead of recomputing)."""
+    from data2g.config import FRAME_SAMPLES
+    from data2g.waveform import dsp, ofdm, sync
+
+    rng = np.random.default_rng(5)
+    y = rng.normal(size=6 * FS)
+    d = sync.StreamDetector(ofdm.band("w"))
+    fed = 0
+    while fed < len(y):
+        n = int(rng.integers(300, 5000))
+        d.feed(dsp.to_baseband(y[fed:fed + n], fed))
+        fed += n
+        if rng.random() < 0.3:
+            d.trim(fed - int(rng.integers(FS, 3 * FS)))
+        if rng.random() < 0.5:
+            a, D = d.products_from(d.c0 + 7, FRAME_SAMPLES, modem.COPY_PAIRS)
+            _, C = d.outputs_from(d.c0)
+            want = sync.pair_products(C, FRAME_SAMPLES, modem.COPY_PAIRS)[:, a - d.c0:]
+            assert a == d.c0 + 7 and D.shape == want.shape
+            # (bit for bit in Python; native rounds its products its own way)
+            np.testing.assert_allclose(D, want, rtol=0, atol=1e-12 * max(1.0, float(np.abs(want).max(initial=0.0))))

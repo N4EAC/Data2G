@@ -298,10 +298,16 @@ def test_pilot_presence_matches(native, py):
         for y in sigs:
             C = sync.repeat_corrs(dsp.to_baseband(y), sync.unit_template(ofdm.band(band)), list(sync.cfo_grid()))
             level = sync.noise_level(C)
+            D = sync.pair_products(C, config.FRAME_SAMPLES, modem.COPY_PAIRS)
+            close(native.waveform.pair_products(C, config.FRAME_SAMPLES, modem.COPY_PAIRS), D, CORR_TOL)
             for w in (config.FS, 3 * config.FS // 2, 10 * config.FS):
-                close(native.modem.pilot_presence(C, level, w), py.pilot_presence(C, level, w), CORR_TOL)
-                assert native.modem.pilot_present(C, level, w) == py.pilot_present(C, level, w)
-    assert native.modem.pilot_presence(C[:, :1000], level, config.FS) == (0.0, 0.0)
+                close(native.modem.pilot_presence(D, level, w), py.pilot_presence(D, level, w), CORR_TOL)
+                assert native.modem.pilot_present(D, level, w) == py.pilot_present(D, level, w)
+            lock, peak = native.modem.find_copy(y, band, None, C, level)  # from C, and from its products
+            lock_d, peak_d = native.modem.find_copy(y, band, None, None, level, D)
+            assert lock == lock_d
+            close(peak_d, peak, CORR_TOL)
+    assert native.modem.pilot_presence(D[:, :1000], level, config.FS) == (0.0, 0.0)
 
 
 def test_demodulate_matches(native, py):

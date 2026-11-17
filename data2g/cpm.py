@@ -498,6 +498,68 @@ def present(g: Grid, x: np.ndarray) -> bool:
     return presence(g, x) >= a + b / np.sqrt(n)
 
 
+class PresenceTrack:
+    """presence over a stream, each symbol read once: per timing (T /
+    PRESENCE_PHASES apart on the stream's own grid, from index 0), CFO
+    fraction and whole-bin shift, every symbol's strongest share and tone
+    are kept, and present() sums the window's. On a window starting at a
+    multiple of T / PRESENCE_PHASES it reads presence(g, the window's audio)."""
+
+    def __init__(self, g: Grid, reach_hz: float = 150.0):
+        self.g, self.extra = g, int(np.ceil(reach_hz / g.rate))
+        self.reset()
+
+    def reset(self):
+        # (phase, frac) -> [stream index of the first kept symbol, tops (shifts, n), tones (shifts, n)]
+        self.rows: dict = {}
+        self.n = 0  # symbols in the window (the threshold's)
+
+    def feed(self, x: np.ndarray, off: int, lo: int):
+        """x: the receiver's audio, x[0] at stream index `off`; the window is
+        symbols from stream index lo (>= off) to x's end. Reads the new ones,
+        drops those before lo."""
+        g, T = self.g, self.g.T
+        K = 2 * self.extra + 1
+        end = off + len(x)
+        self.n = max(0, end - lo) // T
+        for ph in range(PRESENCE_PHASES):
+            base = ph * T // PRESENCE_PHASES
+            first = lo + (base - lo) % T  # the window's first symbol on this timing
+            for fr in range(PRESENCE_FRACS):
+                s, tops, tones = self.rows.get((ph, fr), (first, np.zeros((K, 0)), np.zeros((K, 0), int)))
+                if s < first:  # (whole symbols: s and first share the timing)
+                    k = min(tops.shape[1], (first - s) // T)
+                    s, tops, tones = s + k * T, tops[:, k:], tones[:, k:]
+                if not tops.shape[1]:
+                    s = first
+                nxt = s + tops.shape[1] * T
+                nn = (end - nxt) // T
+                if nn > 0:
+                    E = _energies(g, x, nxt - off, nn, fr * g.rate / PRESENCE_FRACS, self.extra)
+                    S = [_shares(E[:, k:k + g.m]) for k in range(K)]
+                    tops = np.concatenate([tops, np.stack([v.max(axis=1) for v in S])], axis=1)
+                    tones = np.concatenate([tones, np.stack([v.argmax(axis=1) for v in S])], axis=1)
+                self.rows[ph, fr] = (s, tops, tones)
+
+    def value(self) -> float:
+        """presence over the window."""
+        best = 0.0
+        for _, tops, tones in self.rows.values():
+            n = tops.shape[1]
+            if n < 2:
+                continue
+            t = np.where(tones[:, 1:] != tones[:, :-1], np.minimum(tops[:, 1:], tops[:, :-1]), 0.0)
+            best = max(best, float(np.max(np.sum(t, axis=1) / (n - 1))))
+        return best
+
+    def present(self) -> bool:
+        """present()'s verdict on the window."""
+        if self.n < PRESENCE_MIN_S * self.g.rate:
+            return False
+        a, b = PRESENCE[self.g.name]
+        return self.value() >= a + b / np.sqrt(self.n)
+
+
 def detect(g: Grid, x: np.ndarray, reach_hz: float = 150.0, fine=True, front_only: bool = False, n_sym: int = 0,
            floor: float = -1.0, mid: bool = False):
     """-> (score, burst start sample, cfo Hz): the sync pattern's best

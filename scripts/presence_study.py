@@ -47,7 +47,8 @@ def ofdm_stats(x, band):
     a, C = d.outputs_from(0)
     xs = x[a:]
     C = C[:, :max(0, len(xs) - modem.M + 1)]
-    return {w: modem.pilot_presence(C, d.level(), int(w * FS)) for w in OFDM_WINDOWS}
+    D = sync.pair_products(C, modem.FRAME_SAMPLES, modem.COPY_PAIRS)
+    return {w: modem.pilot_presence(D, d.level(), int(w * FS)) for w in OFDM_WINDOWS}
 
 
 def cpm_stats(x, grid):
@@ -118,8 +119,9 @@ def curve_job(args):
             d.feed(dsp.to_baseband(x, 0))
             a, C = d.outputs_from(0)
             C = C[:, :max(0, len(x) - a - modem.M + 1)]
+            D = sync.pair_products(C, modem.FRAME_SAMPLES, modem.COPY_PAIRS)
             for m in CURVE_M:
-                row[f"{band} {m}"] = modem.pilot_presence(C, d.level(), (m + modem.COPY_PAIRS) * modem.FRAME_SAMPLES)
+                row[f"{band} {m}"] = modem.pilot_presence(D, d.level(), (m + modem.COPY_PAIRS) * modem.FRAME_SAMPLES)
         for g in GRIDS:
             for s in CURVE_S:
                 row[f"{g} {s}"] = cpm.presence(cpm.GRIDS[g], x[-int(s * FS):])

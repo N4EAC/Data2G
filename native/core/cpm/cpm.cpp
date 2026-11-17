@@ -315,6 +315,80 @@ double presence(const Grid& g, std::span<const double> x, double reach_hz) {
     return best;
 }
 
+PresenceTrack::PresenceTrack(const Grid& g, double reach_hz)
+    : g_(&g), extra_(static_cast<int>(std::ceil(reach_hz / g.rate))) {
+    reset();
+}
+
+void PresenceTrack::reset() {
+    const std::size_t K = static_cast<std::size_t>(2 * extra_ + 1);
+    rows_.assign(PRESENCE_PHASES * PRESENCE_FRACS, Rows{0, std::vector<std::vector<double>>(K),
+                                                        std::vector<std::vector<int>>(K)});
+    for (auto& r : rows_) r.s = -1;  // (none yet)
+    n = 0;
+}
+
+void PresenceTrack::feed(std::span<const double> x, std::int64_t off, std::int64_t lo) {
+    const Grid& g = *g_;
+    const std::int64_t T = g.T, end = off + static_cast<std::int64_t>(x.size());
+    const std::size_t m = static_cast<std::size_t>(g.m), K = static_cast<std::size_t>(2 * extra_ + 1);
+    n = std::max<std::int64_t>(0, end - lo) / T;
+    for (int ph = 0; ph < PRESENCE_PHASES; ++ph) {
+        const std::int64_t base = ph * T / PRESENCE_PHASES;
+        const std::int64_t first = lo + (((base - lo) % T) + T) % T;  // the window's first symbol on this timing
+        for (int fr = 0; fr < PRESENCE_FRACS; ++fr) {
+            Rows& r = rows_[static_cast<std::size_t>(ph * PRESENCE_FRACS + fr)];
+            std::size_t have = r.tops[0].size();
+            if (r.s < 0) r.s = first;
+            if (r.s < first) {  // (whole symbols: s and first share the timing)
+                const auto k = std::min<std::size_t>(have, static_cast<std::size_t>((first - r.s) / T));
+                for (std::size_t j = 0; j < K; ++j) {
+                    r.tops[j].erase(r.tops[j].begin(), r.tops[j].begin() + static_cast<std::ptrdiff_t>(k));
+                    r.tones[j].erase(r.tones[j].begin(), r.tones[j].begin() + static_cast<std::ptrdiff_t>(k));
+                }
+                r.s += static_cast<std::int64_t>(k) * T;
+                have -= k;
+            }
+            if (!have) r.s = first;
+            const std::int64_t nxt = r.s + static_cast<std::int64_t>(have) * T;
+            if (end - nxt < T) continue;
+            const int nn = static_cast<int>((end - nxt) / T);
+            const Mat<double> E = energies(g, x, nxt - off, nn, fr * g.rate / PRESENCE_FRACS, extra_);
+            for (std::size_t k = 0; k < K; ++k)
+                for (std::size_t row = 0; row < E.rows; ++row) {
+                    const double* e = E[row] + k;
+                    const double tot = np_sum(e, m) + 1e-30;
+                    std::size_t a = 0;
+                    for (std::size_t j = 1; j < m; ++j)
+                        if (e[j] / tot > e[a] / tot) a = j;
+                    r.tops[k].push_back(e[a] / tot);
+                    r.tones[k].push_back(static_cast<int>(a));
+                }
+        }
+    }
+}
+
+double PresenceTrack::value() const {
+    double best = 0.0;
+    std::vector<double> terms;
+    for (const auto& r : rows_) {
+        const std::size_t cnt = r.tops[0].size();
+        if (cnt < 2) continue;
+        terms.resize(cnt - 1);
+        for (std::size_t k = 0; k < r.tops.size(); ++k) {
+            for (std::size_t j = 1; j < cnt; ++j)
+                terms[j - 1] = r.tones[k][j] != r.tones[k][j - 1] ? std::min(r.tops[k][j], r.tops[k][j - 1]) : 0.0;
+            best = std::max(best, np_sum(terms.data(), terms.size()) / static_cast<double>(cnt - 1));
+        }
+    }
+    return best;
+}
+
+bool PresenceTrack::present() const {
+    if (static_cast<double>(n) < PRESENCE_MIN_S * g_->rate) return false;
+    return value() >= g_->presence_a + g_->presence_b / std::sqrt(static_cast<double>(n));
+}
+
 bool present(const Grid& g, std::span<const double> x) {
     const auto n = static_cast<std::int64_t>(x.size()) / g.T;
     if (static_cast<double>(n) < PRESENCE_MIN_S * g.rate) return false;

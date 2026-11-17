@@ -313,6 +313,7 @@ class Receiver:
 
         self.accept, self.bands = accept, accept.bands
         self.grids = [cpm.GRIDS[g] for g in cpm_grids]
+        self.tracks = [cpm.PresenceTrack(g) for g in self.grids]  # data2g_on_air's CPM reading, per grid
         # the least audio worth searching (a whole preamble and header), and
         # what a trim keeps (so one still arriving survives it)
         self.min_search = search_span(self.bands, cpm_grids)
@@ -364,6 +365,8 @@ class Receiver:
         self._present = False  # data2g_on_air's latest reading with nothing locked
         for d in getattr(self, "detectors", {}).values():
             d.reset()
+        for t in getattr(self, "tracks", ()):
+            t.reset()
 
     def expect(self, grids, lo: int, hi: int, cfo: float):
         """The expected slot (docs/arq.md §3a): a burst of one of these CPM
@@ -460,16 +463,18 @@ class Receiver:
             level = d.level()
             if level is None:
                 continue
-            a, C = d.outputs_from(self.off)
-            C = C[:, :max(0, self.off + len(self.buf) - a - modem.M + 1)]
-            if modem.pilot_present(C, level, int(self.PRESENCE_S * FS)):
+            a, D = d.products_from(self.off, modem.FRAME_SAMPLES, modem.COPY_PAIRS)
+            D = D[:, :max(0, self.off + len(self.buf) - a - modem.M + 1 - modem.COPY_PAIRS * modem.FRAME_SAMPLES)]
+            if modem.pilot_present(D, level, int(self.PRESENCE_S * FS)):
                 log.debug("data2g on air: %s pilots", band)
                 self._present = True
                 return
-        x = self.buf[-int(self.CPM_PRESENCE_S * FS):]
-        for g in self.grids:
-            if cpm.present(g, x):
-                log.debug("data2g on air: %s tones", g.name)
+        lo = max(self.off, self.off + len(self.buf) - int(self.CPM_PRESENCE_S * FS))
+        for t in self.tracks:
+            t.feed(self.buf, self.off, lo)
+        for t in self.tracks:
+            if t.present():
+                log.debug("data2g on air: %s tones", t.g.name)
                 self._present = True
                 return
         self._present = False
@@ -662,10 +667,11 @@ class Receiver:
             level = d.level() if d is not None else None
             if level is None:
                 continue
-            a, C = d.outputs_from(self.off)  # from the stream index both the buffer and C cover
+            # from the stream index both the buffer and the products cover
+            a, D = d.products_from(self.off, modem.FRAME_SAMPLES, modem.COPY_PAIRS)
             x = self.buf[a - self.off:]
-            C = C[:, :max(0, len(x) - modem.M + 1)]
-            lock = modem.find_copy(x, band, self.accept, C, level)
+            D = D[:, :max(0, len(x) - modem.M + 1 - modem.COPY_PAIRS * modem.FRAME_SAMPLES)]
+            lock = modem.find_copy(x, band, self.accept, level=level, D=D)
             if lock is not None and (best is None or lock["score"] > best[0]["score"]):
                 best = (lock, a - self.off)
         if best is None:

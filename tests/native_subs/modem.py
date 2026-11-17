@@ -145,8 +145,8 @@ def substitutions(native):
         return N.pilot_coherence(f64(x), lock, int(n_max), bool(latest), bool(pattern))
 
     @guarded("find_copy")
-    def find_copy(x, band, accept=None, C=None, level=None):
-        lock, peak = N.find_copy(f64(x), band, accept, C, level)
+    def find_copy(x, band, accept=None, C=None, level=None, D=None):
+        lock, peak = N.find_copy(f64(x), band, accept, C, level, D)
         if peak is not None:
             py["find_copy"].peak = find_copy.peak = peak
         return specs(lock)
