@@ -116,6 +116,30 @@ def test_tx_samples_is_the_burst_on_air_with_its_ptt_delay():
     assert a.tx_samples == a.ptt_delay + len(PHY.tx_audio(a.tx[0]))
 
 
+def test_a_nod_behind_an_id_goes_as_its_control():
+    """An ID due ahead of a turn that is a nod: the nod would start past its
+    slot (on air 2026-11-15: 3.1 s past the peer's burst, its window ended at
+    1.8), so the turn goes as the control it stands for."""
+    from data2g.arq import burst as B
+
+    a, b = Engine("W1AW", seed=31), Engine("K2XYZ", seed=32)
+    if not hasattr(a, "_with_id"):
+        pytest.skip("the Python engine's internals (native Engine::with_id is private)")
+    b.listen()
+    a.connect("K2XYZ", 2)
+    assert link(a, b, 12, 60, lambda: a.session.state == S.CONNECTED and b.session.state == S.CONNECTED)
+    st = a.session.station
+    ctl = B.Slot(B.ctl_mask(st.direction, 0, st.key), 0, bytes(8))
+    nod = B.TxBurst("fsk16r25-r1/3", [ctl], 5, cap=2, nod=(0, (st.key, st.direction, 5, 4)))
+    a._id_for, a._id_due = a.session, 1e9
+    bursts, main = a._with_id(nod, 0.0)
+    assert bursts == [nod] and main is nod  # no ID due: the nod as built
+    a._id_due = 0.0
+    bursts, main = a._with_id(nod, 0.0)
+    assert bursts[-1] is main and main.nod is None and main.slots == nod.slots and len(bursts) > 1
+    assert nod.nod is not None  # the session's burst itself is untouched
+
+
 def test_malformed_cq_and_id_frames_are_dropped():
     """A CRC-valid CQ or ID frame that can't be read (callsign codes past the
     alphabet, a short body) is dropped, not raised out of the receiver; a

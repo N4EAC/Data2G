@@ -238,6 +238,8 @@ public:
     int esc_floor = 0;
     int clean_ = 0;     // clean turns since the floor last moved
     int sent_esc_ = 0;  // the escalation my last built burst went at
+    // link.Station.recovering: my last burst went escalated (a poll), or the peer repeats one I answered
+    bool recovering() const { return sent_esc_ > 0 || reply_escalation > 0; }
     int no_progress = 0;
     int resyncs = 0;
     bool resync_due = false;

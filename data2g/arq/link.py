@@ -656,6 +656,14 @@ class Station:
             d[F.T_COMP] = comp
         return d
 
+    @property
+    def recovering(self) -> bool:
+        """In a recovery: my last burst went escalated (a poll), or the peer repeats one I
+        answered (my reply was lost). The peer then holds its data back for my answer
+        (its reply to a poll is control only): idling would leave it to wake me
+        ~8 s later (on air 2026-11-15: 16-32 s per lost reply)."""
+        return bool(self._sent_esc or self.reply_escalation)
+
     def _escalation(self) -> int:
         """My own timeouts (master), or the peer telling me my replies are
         lost (it repeats or polls: §6), climbing from the last recovery's floor."""

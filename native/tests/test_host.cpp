@@ -177,7 +177,7 @@ void txpower() {
     host::Host h(e);
     h.command("TXPOWER");  // Data2G only
     h.command("DATA2G ON");
-    for (const char* line : {"TXPOWER", "TXPOWER -1.2", "TXPOWER", "TXPOWER -60.1", "TXPOWER 20.5", "TXPOWER abc", "TXPOWER nan",
+    for (const char* line : {"TXPOWER", "TXPOWER -1.2", "TXPOWER", "TXPOWER -60.1", "TXPOWER 0.1", "TXPOWER abc", "TXPOWER nan",
                              "TXPOWER 1 2", "TXPOWER 1x", "TXPOWER"})
         h.command(line);
     const std::vector<std::string> want = {"WRONG", "OK", "TXPOWER 0.0", "OK", "TXPOWER -1.2", "WRONG", "WRONG", "WRONG", "WRONG",

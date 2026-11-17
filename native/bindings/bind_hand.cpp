@@ -15,12 +15,13 @@ void bind_hand(py::module_& m) {
     h.def("tx_audio", [](int tag, std::uint64_t payload, int channel, double cfo) {
         return np(hand::tx_audio(tag, payload, channel, cfo));
     });
-    h.def("decode_window", [](const In<double>& y, int tag, const std::vector<int>& channels, std::int64_t nominal,
-                              const std::string& round) {
+    h.def("decode_window", [](const In<double>& y, std::optional<int> tag, const std::vector<int>& channels, std::int64_t nominal,
+                              const std::string& round) {  // tag None: any (hand.decode_window's)
         const hand::Round grids = round == "cheap" ? hand::ROUND_CHEAP : hand::ROUND_FULL;
         py::list out;
-        for (const auto& r : hand::decode_window(vec(y), tag, channels, nominal, grids))
-            out.append(py::dict(py::arg("c") = r.c, py::arg("payload") = r.payload, py::arg("snr") = r.snr, py::arg("dt_ms") = r.dt_ms));
+        for (const auto& r : hand::decode_window(vec(y), tag.value_or(-1), channels, nominal, grids))
+            out.append(py::dict(py::arg("c") = r.c, py::arg("payload") = r.payload, py::arg("snr") = r.snr, py::arg("dt_ms") = r.dt_ms,
+                                py::arg("tag") = r.tag));
         return out;
     }, py::arg("y"), py::arg("tag"), py::arg("channels"), py::arg("nominal"), py::arg("round") = "full");
 }

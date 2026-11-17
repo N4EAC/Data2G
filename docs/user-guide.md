@@ -203,7 +203,7 @@ Start with **Radio interface**. The most common configuration is **Sound card + 
 - **Input**: the sound device that carries the radio's receive audio.
 - **Output**: the sound device that feeds the radio's transmit audio.
 - **Sample rate**: leave it at 48000 unless your device needs something else.
-- **Output volume**: Data2G's transmit level in dB. At 0 dB, the loudest peak of each transmission is at the sound card's full scale. Lower it to bring your radio's drive down, or if your sound card distorts when driven to full scale.
+- **Output volume**: Data2G's transmit level in dB, at most 0. At 0 dB, the loudest peak of each transmission is at the sound card's full scale. Lower it to bring your radio's drive down, or if your sound card distorts when driven to full scale.
 
 For a radio with a built-in USB sound card, both devices usually have "USB Audio" in their names. Pick the radio's device for both, not your computer's speakers and microphone.
 
@@ -218,6 +218,7 @@ Data2G uses the Hamlib library, which is built in, to control the radio. You don
 - **PTT**: how to key the transmitter.
   - **CAT**: a command over the CAT link. The usual choice for modern radios.
   - **DTR** or **RTS**: a serial control line, as used by many interface boxes. If the line is on a different serial port from CAT, enter it under **Port**.
+  - **CM108 GPIO**: a pin of the USB sound chip in a CM108-based interface, such as the TOADs Digital Interface and its daughterboards, the DRA series, or a home-built CM108 board. Linux only for now. **Port** is the chip's `/dev/hidrawN`; leave it empty and Data2G finds it, as long as only one CM108 is plugged in (hover over the field to see the ones it found). **GPIO** is the pin that keys: 3 on almost every interface. The rig can still be your radio's model for CAT, or Hamlib's Dummy if there is no CAT cable. See "CM108 interfaces on Linux" below for the one-time permission setup.
   - **VOX**: Data2G never keys. The radio (or an interface such as a SignaLink) keys itself when it hears transmit audio.
 - **Transmit audio**: on radios with both a microphone input and a rear data input, which one a CAT key-up selects.
 - **Frequency poll**: if set above zero, Data2G reads the dial frequency this often and shows it in the main window. It is only for display.
@@ -225,6 +226,23 @@ Data2G uses the Hamlib library, which is built in, to control the radio. You don
 If another program already controls the radio, there are two ways to share it. Run `rigctld` (Hamlib's network daemon) and choose the rig **Hamlib NET rigctl** (model 2) in Data2G, with the device left empty for `localhost:4532`. This is the default rig on a fresh install. Or let the other program own the radio and set Data2G's PTT to VOX.
 
 The **Test CAT** button connects to the radio and reports its dial frequency. **Test PTT** keys the transmitter for half a second. Both act on the real radio at once, so have it on a dummy load or a clear frequency. If the modem is already running and using the same serial port, the test may report that the port is busy.
+
+### CM108 interfaces on Linux
+
+Data2G keys a CM108 interface through its HID device, `/dev/hidrawN`, which most distributions let only root write to. Add a udev rule once that gives it to the `dialout` group, the one section 2 already puts you in for serial ports:
+
+```
+echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0d8c", GROUP="dialout", MODE="0660"' | \
+    sudo tee /etc/udev/rules.d/99-data2g-cm108.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+Then unplug the interface and plug it back in. (`0d8c` is C-Media's vendor id; Direwolf users may already have a rule like this.) On the headless host the same settings are `--ptt-method cm108`, with `--ptt-device /dev/hidrawN` and `--ptt-gpio N` if the defaults don't fit. For example, a Xiegu G90 with a TOADs DI8 and the G90's CAT cable:
+
+```
+data2g-host --mycall W1AW --input-device "USB Audio" --output-device "USB Audio" \
+            --rig-model 3088 --rig-device /dev/ttyUSB0 --rig-baud 19200 --ptt-method cm108
+```
 
 ### Transmit options
 
@@ -239,6 +257,7 @@ Software-defined radios driven by ExpertSDR, Thetis, AetherSDR and similar progr
 
 - Use upper sideband, or your radio's USB data mode.
 - Open the filters. Full-speed modes use audio from about 350 to 2700 Hz. A receive or transmit filter narrower than that will slow you down or stop the wide modes working at all. A 500 Hz session sits between about 1250 and 1800 Hz.
+- Both stations must be tuned to within 150 Hz of each other. The modem searches no further than that, so a station further off is not heard at all. Closer is better: an offset pushes the edge of a wide signal into the filter skirts, and a radio that drifts during a session uses up the rest of the margin.
 - Turn off speech processing, transmit equalisation, noise reduction, noise blankers and notch filters for the data input. They are built for voice and damage data signals.
 - Set the transmit level so that the radio reaches the power you want with little or no ALC action. Overdriving makes your signal wider and harder to decode, not stronger.
 - Set the receive level using the meter on the right edge of the waterfall (section 7). Band noise should sit well up the bar in the green, and **CLIP** should never appear.
@@ -702,6 +721,7 @@ The receive audio is too hot. Lower the radio's data output level or the sound c
 
 - Use **Test CAT** first. If it fails, the model, serial port or baud rate is wrong, or another program has the serial port open. Only one program can use a serial port at a time.
 - If Test CAT works but **Test PTT** doesn't key, the PTT method is wrong for your setup. Try CAT, then RTS or DTR.
+- With **CM108 GPIO**, "IO error" when the rig opens means the `/dev/hidrawN` device can't be written: add the udev rule in section 4. "No CM108 sound interface found" means the interface isn't plugged in, or its chip isn't one Hamlib knows. With more than one CM108 plugged in, Data2G names them all and asks you to choose one as the **Port**.
 - On Linux, "permission denied" on the serial port means your user isn't in the `dialout` group (section 2).
 - If the rig is still set to **Hamlib NET rigctl**, the default, Data2G expects `rigctld` to be running. Choose your actual radio instead.
 - Rig errors are written to the log as lines starting `rig:`. Run Data2G from a terminal to see them. Ticking **Hamlib's trace in the log** adds the full conversation with the radio.

@@ -121,7 +121,7 @@ class ReplySlot:
     TOL_S = 0.15  # the window either side of the expected start
     GAPS = 8
     MAX_GAP_S = 3.0  # a later start was not a reply (an idle start, a wake)
-    NOD_HALF_S = 0.6  # nod_window's cap either side of the median
+    NOD_HALF_S = 0.6  # nod_window either side of the median
 
     def __init__(self):
         self.gaps: deque = deque(maxlen=self.GAPS)
@@ -144,17 +144,18 @@ class ReplySlot:
         return tx_end + g - self.TOL_S, tx_end + g + self.TOL_S
 
     def nod_window(self, tx_end: float) -> tuple[float, float] | None:
-        """window() for a nod (docs/arq.md §3b): the gaps' spread, +-TOL_S,
-        at most NOD_HALF_S either side of the median. On air (2026-11-12) a
-        peer's TX playout lag varied 0.2-1.3 s: its gaps spread 0.9 s and 11
-        of 21 nods fell outside window(). A nod has no blind fallback; a
-        primed lock keeps window() (its CPU grows with the width, nod.detect's
-        hardly: +9% at 0.6 s)."""
+        """window() for a nod (docs/arq.md §3b): NOD_HALF_S either side of
+        the median. On air a station's TX lag (its burst's end to its rig back
+        on receive) varied 0.3-1.35 s: its peer's reply gaps spread ~1 s.
+        2026-11-12: 11 of 21 nods outside window(). 2026-11-15: the last 8
+        gaps' spread +-TOL_S still missed 5 of 35 on the early side (nods
+        start ~0.15 s sooner than full replies); +-NOD_HALF_S caught all. A
+        nod has no blind fallback; a primed lock keeps window() (its CPU grows
+        with the width, nod.detect's hardly: +9% at 0.6 s)."""
         if not self.gaps or self.cfo is None:
             return None
         g = float(np.median(self.gaps))
-        return (tx_end + max(min(self.gaps) - self.TOL_S, g - self.NOD_HALF_S),
-                tx_end + min(max(self.gaps) + self.TOL_S, g + self.NOD_HALF_S))
+        return tx_end + g - self.NOD_HALF_S, tx_end + g + self.NOD_HALF_S
 
 
 class NoiseProfile:

@@ -3,6 +3,7 @@
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QFontDatabase>
 #include <QGridLayout>
