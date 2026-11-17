@@ -267,6 +267,11 @@ def test_stream_detector(native, py, name):
             assert pa == pc and Dc.shape == Da.shape
             if Da.size:
                 close(Dc, Da, SUM_TOL)
+            ka, Ka = a.kept_products(config.FRAME_SAMPLES, 3)
+            kc, Kc = c.kept_products(config.FRAME_SAMPLES, 3)
+            assert ka == kc and Kc.shape == Ka.shape
+            if Ka.size:
+                close(Kc, Ka, SUM_TOL)
         if k == 7:
             a.trim(fed - 5000)
             c.trim(fed - 5000)

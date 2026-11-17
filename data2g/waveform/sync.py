@@ -234,6 +234,7 @@ class StreamDetector:
     mid-burst search reuses them rather than filtering again."""
 
     CHUNKS = 8
+    KEEP_BEHIND = 4000  # pair products kept past a trim: two of the receiver's search hops
 
     def __init__(self, band, reach: float = ACQUIRE_REACH_HZ):
         self.band, self.reach = band, reach
@@ -248,9 +249,12 @@ class StreamDetector:
         self.levels: list = []  # per chunk, each bin's noise level
         self.C = np.zeros((len(cfo_grid(self.reach)), 0), dtype=np.complex128)  # c_f per stream start
         self.c0 = 0  # stream index of C[:, 0]
-        # pair_products of C, from c0 too, extended as asked for (products_from):
-        # each start's computed once, not once per search over it
+        # pair_products of C, extended as asked for (products_from): each
+        # start's computed once, not once per search over it. From d0: kept
+        # KEEP_BEHIND past C's trim (kept_products: a running fold subtracts
+        # what leaves its window, modem.FoldTrack)
         self.D = np.zeros((len(cfo_grid(self.reach)), 0), dtype=np.complex128)
+        self.d0 = 0
 
     def restart_at(self, pos: int):
         """reset(), the stream resuming at index `pos` (its audio before
@@ -285,7 +289,9 @@ class StreamDetector:
         k = min(max(0, start - self.s0), len(self.S[0]))
         self.S, self.s0 = self.S[:, k:], self.s0 + k
         k = min(max(0, start - self.c0), len(self.C[0]))
-        self.C, self.D, self.c0 = self.C[:, k:], self.D[:, k:], self.c0 + k
+        self.C, self.c0 = self.C[:, k:], self.c0 + k
+        k = min(max(0, start - self.KEEP_BEHIND - self.d0), self.D.shape[1])
+        self.D, self.d0 = self.D[:, k:], self.d0 + k
 
     def outputs_from(self, start: int) -> tuple[int, np.ndarray]:
         """(a, the kept matched filter outputs c_f for stream starts from
@@ -293,14 +299,25 @@ class StreamDetector:
         a = max(self.c0, start)
         return a, self.C[:, a - self.c0:]
 
+    def _extend(self, F: int, P: int):
+        if self.d0 + self.D.shape[1] < self.c0:  # not extended across a trim: start again at C's
+            self.D, self.d0 = self.D[:, :0], self.c0
+        have, want = self.d0 + self.D.shape[1] - self.c0, max(0, self.C.shape[1] - P * F)
+        if want > have:
+            self.D = np.concatenate([self.D, pair_products(self.C[:, have:], F, P)], axis=1)
+
     def products_from(self, start: int, F: int, P: int) -> tuple[int, np.ndarray]:
         """outputs_from for pair_products(C, F, P) (the same F and P every
         call): starts with all P pairs in C so far, the new ones computed now."""
-        have, want = self.D.shape[1], max(0, self.C.shape[1] - P * F)
-        if want > have:
-            self.D = np.concatenate([self.D, pair_products(self.C[:, have:], F, P)], axis=1)
+        self._extend(F, P)
         a = max(self.c0, start)
-        return a, self.D[:, a - self.c0:]
+        return a, self.D[:, a - self.d0:]
+
+    def kept_products(self, F: int, P: int) -> tuple[int, np.ndarray]:
+        """(d0, every pair product kept, from stream start d0): products_from's
+        and up to KEEP_BEHIND before them."""
+        self._extend(F, P)
+        return self.d0, self.D
 
     def level(self) -> float | None:
         """The noise level stat() normalizes by (None before any)."""

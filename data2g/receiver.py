@@ -478,7 +478,12 @@ class Receiver:
                 continue
             a, D = d.products_from(start, modem.FRAME_SAMPLES, modem.COPY_PAIRS)
             D = D[:, :max(0, self.off + len(self.buf) - a - modem.M + 1 - modem.COPY_PAIRS * modem.FRAME_SAMPLES)]
-            if modem.pilot_present(D, level, int(self.PRESENCE_S * FS), self.folds[band][1], a):
+            t0, m = modem.presence_window(D.shape[1], int(self.PRESENCE_S * FS))
+            if m < modem.PRESENCE_MIN_M:
+                continue
+            d0, kept = d.kept_products(modem.FRAME_SAMPLES, modem.COPY_PAIRS)
+            fold = self.folds[band][1].fold(kept, d0, a + t0, a + t0 + m * modem.FRAME_SAMPLES)
+            if modem.presence_verdict(*modem.fold_presence(fold, level, m), m):
                 log.debug("data2g on air: %s pilots", band)
                 self._present = True
                 return
@@ -688,7 +693,8 @@ class Receiver:
             m = D.shape[1] // modem.FRAME_SAMPLES
             fold = None
             if m >= 1:
-                R = self.folds[band][0].fold(D, a, a, a + m * modem.FRAME_SAMPLES)
+                d0, kept = d.kept_products(modem.FRAME_SAMPLES, modem.COPY_PAIRS)
+                R = self.folds[band][0].fold(kept, d0, a, a + m * modem.FRAME_SAMPLES)
                 fold = np.roll(R, -(a % modem.FRAME_SAMPLES), axis=1)
             lock = modem.find_copy(x, band, self.accept, level=level, D=D, fold=fold)
             if lock is not None and (best is None or lock["score"] > best[0]["score"]):

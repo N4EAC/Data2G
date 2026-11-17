@@ -828,12 +828,13 @@ void FoldTrack::acc(std::span<const cd* const> D_rows, int64_t a, int64_t u0, in
     for (int64_t u = u0; u < u1;) {
         const int64_t q = u % F, k = std::min(u1 - u, F - q);
         for (size_t f = 0; f < D_rows.size(); ++f) {
-            cd* r = R_[f] + q;
-            const cd* d = D_rows[f] + (u - a);
+            // as doubles (std::complex is two, array-compatible): the same sums, and the loop vectorizes
+            double* __restrict r = reinterpret_cast<double*>(R_[f] + q);
+            const double* __restrict d = reinterpret_cast<const double*>(D_rows[f] + (u - a));
             if (add)
-                for (int64_t i = 0; i < k; ++i) r[i] += d[i];
+                for (int64_t i = 0; i < 2 * k; ++i) r[i] += d[i];
             else
-                for (int64_t i = 0; i < k; ++i) r[i] -= d[i];
+                for (int64_t i = 0; i < 2 * k; ++i) r[i] -= d[i];
         }
         u += k;
     }
@@ -856,25 +857,29 @@ const Mat<cd>& FoldTrack::fold(std::span<const cd* const> D_rows, size_t dcols, 
     return R_;
 }
 
-Presence pilot_presence(std::span<const cd* const> D_rows, size_t dcols, double level, int64_t window,
-                        FoldTrack* track, int64_t a) {
+std::pair<int64_t, int64_t> presence_window(size_t dcols, int64_t window) {
+    const int64_t PF = static_cast<int64_t>(COPY_PAIRS) * FRAME_SAMPLES;
+    const int64_t n = static_cast<int64_t>(dcols) + PF;  // the outputs the products were made from
+    const int64_t W = std::min<int64_t>(n, window);
+    return {n - W, W < PF ? 0 : (W - PF) / FRAME_SAMPLES};
+}
+
+Presence fold_presence(const Mat<cd>& fold, double level, int64_t m) {
     Presence out;
-    const auto cols = static_cast<int64_t>(dcols) + static_cast<int64_t>(COPY_PAIRS) * FRAME_SAMPLES;  // outputs
-    const int64_t W = std::min<int64_t>(cols, window);
-    if (W < static_cast<int64_t>(COPY_PAIRS + 1) * FRAME_SAMPLES) return out;
-    const int64_t m = (W - static_cast<int64_t>(COPY_PAIRS) * FRAME_SAMPLES) / FRAME_SAMPLES;
-    const size_t FR = FRAME_SAMPLES;
-    Mat<cd> own;
-    if (!track) own = pilot_fold(D_rows, static_cast<size_t>(cols - W), static_cast<size_t>(m));
-    const Mat<cd>& fold = track ? track->fold(D_rows, dcols, a, a + cols - W, a + cols - W + m * FRAME_SAMPLES) : own;
-    std::vector<double> mag(FR, -equalizer::INF);
-    for (size_t f = 0; f < D_rows.size(); ++f)
-        for (size_t ph = 0; ph < FR; ++ph) mag[ph] = std::max(mag[ph], std::abs(fold[f][ph]));
+    std::vector<double> mag(fold.cols, -equalizer::INF);
+    for (size_t f = 0; f < fold.rows; ++f)
+        for (size_t ph = 0; ph < fold.cols; ++ph) mag[ph] = std::max(mag[ph], std::abs(fold[f][ph]));
     const double top = *std::max_element(mag.begin(), mag.end());
     out.m = static_cast<int>(m);
     out.peak = top / (level * std::sqrt(static_cast<double>(m * COPY_PAIRS)));
     out.contrast = top / (dsp::quantile(mag, 0.5) + 1e-300);
     return out;
+}
+
+Presence pilot_presence(std::span<const cd* const> D_rows, size_t dcols, double level, int64_t window) {
+    const auto [t0, m] = presence_window(dcols, window);
+    if (m < 1) return {};
+    return fold_presence(pilot_fold(D_rows, static_cast<size_t>(t0), static_cast<size_t>(m)), level, m);
 }
 
 bool Presence::present() const {

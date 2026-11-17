@@ -244,7 +244,12 @@ void Receiver::read_presence() {
         const auto c = d.products_from(start, config::FRAME_SAMPLES, modem::COPY_PAIRS);
         const auto cols = static_cast<std::size_t>(std::max<int64_t>(
             0, std::min(static_cast<int64_t>(c.cols), off_ + len() - c.start - config::M + 1 - PF)));
-        if (modem::pilot_presence(c.rows, cols, *level, n, &det.presence_fold, c.start).present()) {
+        const auto [t0, m] = modem::presence_window(cols, n);
+        if (m < modem::PRESENCE_MIN_M) continue;
+        const auto k = d.kept_products(config::FRAME_SAMPLES, modem::COPY_PAIRS);
+        const auto& R = det.presence_fold.fold(k.rows, k.cols, k.start, c.start + t0,
+                                               c.start + t0 + m * config::FRAME_SAMPLES);
+        if (modem::fold_presence(R, *level, m).present()) {
             present_ = true;
             return;
         }
@@ -358,7 +363,8 @@ std::optional<modem::Lock> Receiver::find_copy() {
         const int64_t FR = config::FRAME_SAMPLES, m = static_cast<int64_t>(cols) / FR;
         Mat<std::complex<double>> fold;
         if (m >= 1) {  // the running fold, rolled to the products' start
-            const auto& R = it->copy_fold.fold(c.rows, cols, a, a, a + m * FR);
+            const auto k = d.kept_products(config::FRAME_SAMPLES, modem::COPY_PAIRS);
+            const auto& R = it->copy_fold.fold(k.rows, k.cols, k.start, a, a + m * FR);
             fold = Mat<std::complex<double>>(R.rows, R.cols);
             const auto s = static_cast<std::size_t>(a % FR);
             for (std::size_t f = 0; f < R.rows; ++f)

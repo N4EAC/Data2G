@@ -133,13 +133,17 @@ public:
     // sync.StreamDetector.products_from: outputs_from for pair_products(C, F, P) (the same F and P every call),
     // the starts not yet computed computed now.
     Outputs products_from(std::int64_t start, int F, int P);
+    // sync.StreamDetector.kept_products: every pair product kept (start: d0), products_from's and up to
+    // KEEP_BEHIND before them (a running fold subtracts what leaves its window, modem::FoldTrack).
+    Outputs kept_products(int F, int P);
+    static constexpr std::int64_t KEEP_BEHIND = 4000;  // pair products kept past a trim: two search hops
 
     const Band& band;
     double reach;
     std::int64_t span;
     // State, public as in Python (read-only outside: restart_at / skip_to move `fed`).
     std::vector<cdouble> tail;  // the last span - 1 samples fed
-    std::int64_t s0 = 0, fed = 0, c0 = 0;
+    std::int64_t s0 = 0, fed = 0, c0 = 0, d0 = 0;
     std::vector<std::vector<double>> levels;  // per chunk, each bin's level
 
 private:
@@ -147,8 +151,9 @@ private:
     // hop's trim moves no memory (C is ~8 MB on the live receiver)
     std::vector<std::vector<double>> S_;
     std::vector<std::vector<cdouble>> C_;
-    std::vector<std::vector<cdouble>> D_;  // pair_products of C, from c0 (products_from)
+    std::vector<std::vector<cdouble>> D_;  // pair_products of C, from d0 (products_from, kept_products)
     std::size_t s_off_ = 0, c_off_ = 0, d_off_ = 0;
+    void extend_products(int F, int P);
 };
 
 }  // namespace data2g::waveform

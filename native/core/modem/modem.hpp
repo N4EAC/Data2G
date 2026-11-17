@@ -189,9 +189,11 @@ struct Presence {
     int m = 0;
     bool present() const;  // modem.pilot_present
 };
-// `track`: the fold kept running (D from stream start a); any rotation of a fold's phases reads the same.
-Presence pilot_presence(std::span<const cd* const> D_rows, std::size_t dcols, double level, std::int64_t window,
-                        FoldTrack* track = nullptr, std::int64_t a = 0);
+Presence pilot_presence(std::span<const cd* const> D_rows, std::size_t dcols, double level, std::int64_t window);
+// modem.presence_window: (t0, m), the newest `window` outputs' fold over m whole frames from pair product t0 (m < 1:
+// too few); modem.fold_presence: an m-frame fold's Presence (any rotation of its phases reads the same).
+std::pair<std::int64_t, std::int64_t> presence_window(std::size_t dcols, std::int64_t window);
+Presence fold_presence(const Mat<cd>& fold, double level, std::int64_t m);
 std::vector<double> cfo_aliases(cd d, double centre);
 HeaderRead copy_header(std::span<const cd> z, const Lock& lock);
 

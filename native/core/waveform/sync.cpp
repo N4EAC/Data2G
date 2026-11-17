@@ -523,7 +523,7 @@ void StreamDetector::reset() {
     C_.assign(n, {});
     D_.assign(n, {});
     s_off_ = c_off_ = d_off_ = 0;
-    s0 = c0 = fed = 0;
+    s0 = c0 = d0 = fed = 0;
     levels.clear();
 }
 
@@ -541,18 +541,35 @@ StreamDetector::Outputs StreamDetector::outputs_from(std::int64_t start) const {
     return o;
 }
 
-StreamDetector::Outputs StreamDetector::products_from(std::int64_t start, int F, int P) {
-    const std::size_t have = D_[0].size() - d_off_, nc = C(0).size();
+void StreamDetector::extend_products(int F, int P) {
+    if (d0 + static_cast<std::int64_t>(D_[0].size() - d_off_) < c0) {  // not extended across a trim: start at C's
+        for (auto& row : D_) row.clear();
+        d_off_ = 0;
+        d0 = c0;
+    }
+    const auto have = static_cast<std::size_t>(d0 + static_cast<std::int64_t>(D_[0].size() - d_off_) - c0);
+    const std::size_t nc = C(0).size();
     if (nc > have + static_cast<std::size_t>(P) * static_cast<std::size_t>(F)) {
         std::vector<const cdouble*> rows;
         for (std::size_t i = 0; i < bins(); ++i) rows.push_back(C(i).data() + have);
         const Mat<cdouble> D = pair_products(rows, nc - have, F, P);
         for (std::size_t i = 0; i < bins(); ++i) D_[i].insert(D_[i].end(), D[i], D[i] + D.cols);
     }
+}
+
+StreamDetector::Outputs StreamDetector::products_from(std::int64_t start, int F, int P) {
+    extend_products(F, P);
     Outputs o{std::max(c0, start), {}, 0};
-    const std::size_t nd = D_[0].size() - d_off_, k = clamp_to(o.start - c0, nd);
+    const std::size_t nd = D_[0].size() - d_off_, k = clamp_to(o.start - d0, nd);
     o.cols = nd - k;
     for (std::size_t i = 0; i < bins(); ++i) o.rows.push_back(D_[i].data() + d_off_ + k);
+    return o;
+}
+
+StreamDetector::Outputs StreamDetector::kept_products(int F, int P) {
+    extend_products(F, P);
+    Outputs o{d0, {}, D_[0].size() - d_off_};
+    for (std::size_t i = 0; i < bins(); ++i) o.rows.push_back(D_[i].data() + d_off_);
     return o;
 }
 
@@ -562,7 +579,7 @@ void StreamDetector::skip_to(std::int64_t pos) {
     for (auto& row : C_) row.clear();
     for (auto& row : D_) row.clear();
     s_off_ = c_off_ = d_off_ = 0;
-    s0 = c0 = fed = pos;
+    s0 = c0 = d0 = fed = pos;
 }
 
 void StreamDetector::feed(std::span<const cdouble> z_new) {
@@ -608,8 +625,10 @@ void StreamDetector::trim(std::int64_t start) {
     s0 += static_cast<std::int64_t>(k);
     const std::size_t kc = clamp_to(start - c0, C(0).size());
     drop_front(C_, c_off_, kc);
-    drop_front(D_, d_off_, std::min(kc, D_[0].size() - d_off_));
     c0 += static_cast<std::int64_t>(kc);
+    const std::size_t kd = clamp_to(start - KEEP_BEHIND - d0, D_[0].size() - d_off_);
+    drop_front(D_, d_off_, kd);
+    d0 += static_cast<std::int64_t>(kd);
 }
 
 std::optional<double> StreamDetector::level() const {
