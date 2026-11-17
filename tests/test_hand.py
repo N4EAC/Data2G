@@ -686,3 +686,113 @@ def test_kiss_refs():
     link(other, e, 12, 20, lambda: (h.after_step(False), bool(h.out_kiss_refs))[1])
     assert h.out_kiss_refs[0].startswith("REF 1 ")
     assert not any(x.startswith("REF") for x in h.out_cmd)  # a plain VARA client: no REF on the command port
+
+
+def test_hand_decode_any_tag():
+    """HAND OVERHEAR's decode (tag None, issue #210): two Hands sent under
+    different tags each come back with the tag their CRC passed under, and a
+    round seeded with one tag still finds only its own."""
+    sent = {5: (0x5A, 0x1111111111111), 7: (0xC3, 0x2222222222222)}
+    y = np.zeros(hand.WINDOW_SAMPLES)
+    for c, (tag, p) in sent.items():
+        x = hand.modulate(tag, hand.payload_bits(p), c)
+        y[hand.SEARCH_SAMPLES:hand.SEARCH_SAMPLES + len(x)] += x
+    y = hfchannel.awgn(y, 6.0, seed=6)
+    got = hand.decode_window(y, None, [5, 6, 7], hand.SEARCH_SAMPLES)
+    assert [(r["c"], r["payload"], r["tag"]) for r in got] == [(c, p, t) for c, (t, p) in sent.items()]
+    assert [(r["c"], r["tag"]) for r in hand.decode_window(y, 0x5A, [5, 6, 7], hand.SEARCH_SAMPLES)] == [(5, 0x5A)]
+
+
+def overhear(e: Engine, d_s: float, channels: list[int], hands=(), before=None):
+    """A bystander's round on a bare engine: ref 1 ends now, HAND OVERHEAR 1 d_s
+    channels, then the window runs to its end. `hands`: (channel, tag, payload)
+    of Hand audio landing on the slot, over noise at about 20 dB. `before(e)` runs
+    once the window is armed. -> (lines, keyed: any block keyed meanwhile)."""
+    ref_at(e, 0.0)
+    e.hand_overhear(1, d_s, channels)
+    if before:
+        before(e)
+    anchor, d = e.n, int(round(d_s * FS))
+    hi = anchor + d + hand.SEARCH_SAMPLES + hand.LEN_SAMPLES
+    y = np.random.default_rng(0).normal(0, 0.1, hi - anchor + 3 * BLOCK)
+    for c, tag, p in hands:
+        x = hand.modulate(tag, hand.payload_bits(p), c)
+        y[d:d + len(x)] += x
+    keyed = False
+    while e.n < hi + BLOCK:
+        i = e.n - anchor
+        keyed |= e.step(y[i:i + BLOCK])[1]
+    lines, end = [], time.monotonic() + 30  # the decode runs on its own thread
+    while "HAND END" not in lines:
+        lines += e.take_hand_events()
+        assert time.monotonic() < end, lines
+        time.sleep(0.02)
+    return lines, keyed
+
+
+def test_hand_overhear_round():
+    """A bystander's window (issue #210): Hands under two tags, d after a heard
+    burst, each reported with its tag and a dt near 0 (they land on the slot)."""
+    lines, _ = overhear(Engine("W1AW", seed=1), 3.0, [5, 7], [(5, 0x5A, 0x111), (7, 0xC3, 0x222)])
+    got = sorted(l.split() for l in lines if l.startswith("HAND ") and l != "HAND END")
+    assert [(w[1], int(w[2], 16), w[5]) for w in got] == [("5", 0x111, "90"), ("7", 0x222, "195")], lines
+    assert all(abs(float(w[4])) < 30 for w in got), lines
+
+
+def test_hand_overhear_is_passive():
+    """An overheard window holds none of my bursts: a CQ queued in it keys."""
+    lines, keyed = overhear(Engine("W1AW", seed=1), 1.0, [20], before=lambda e: e.send_cq("W1AW", 2))
+    assert keyed and lines[-1] == "HAND END", lines
+
+
+def test_hand_overhear_yields_and_refuses():
+    """My own HAND LISTEN or HAND SEND ends an overheard window (HAND END) and
+    goes ahead; a second window, an unknown ref or a slot already past is
+    refused (issue #210)."""
+    e = ref_at(Engine("W1AW", seed=1), 0.0)
+    e.hand_overhear(1, 3.0, [20])
+    with pytest.raises(ValueError):
+        e.hand_overhear(1, 3.0, [20])  # a window is already waiting
+    e.hand_listen(3.0, 0x5A, ACK, [20])
+    assert e.take_hand_events() == ["HAND END"]
+    e.hand_cancel()
+    e.take_hand_events()
+    e.hand_overhear(1, 3.0, [20])
+    e.hand_send(1, 0x5A, 3.0, 20, 1)
+    assert e.take_hand_events() == ["HAND END"]
+    e.hand_cancel()
+    with pytest.raises(ValueError):
+        e.hand_overhear(2, 3.0, [20])  # no ref 2
+    ref_at(e, -4.0)
+    with pytest.raises(ValueError):
+        e.hand_overhear(1, 3.0, [20])  # its slot was 1 s ago
+    h = Host(ref_at(Engine("W1AW", seed=1), 0.0))
+    for line, want in (("HAND OVERHEAR 1 3.0", "WRONG"), ("HAND OVERHEAR 1 3.0 40", "WRONG"),
+                       ("HAND OVERHEAR 1 -3 20", "WRONG"), ("HAND OVERHEAR 1 3.0 20 21", "OK")):
+        h.command(line)
+        assert h.out_cmd.pop() == want, line
+
+
+def test_lost_burst_is_a_ref():
+    """A burst whose header was heard but whose receive failed (behind BUSY and
+    BCAST * MISSED) is a Hand reference too, marked LOST: the case where a
+    bystander can't copy net control's call (issue #210)."""
+    b = Engine("K2XYZ", seed=2, kiss=KissLink())
+    b.kiss.enqueue(b"x" * 400)
+    out = []
+    while not out or b.tx is not None:
+        o, ptt = b.step(np.zeros(BLOCK))
+        if ptt:
+            out.append(o)
+    x = 2.2 * np.concatenate(out)
+    rng = np.random.default_rng(0)
+    y = np.concatenate([np.zeros(FS), x, np.zeros(2 * FS)])
+    y[FS + int(0.3 * FS):FS + len(x)] = 0.0  # gone after its header
+    y += rng.normal(0, 0.05, len(y))
+    a = Engine("W1AW", seed=1, kiss=KissLink())
+    lines = []
+    for i in range(0, len(y) - BLOCK, BLOCK):
+        a.step(y[i:i + BLOCK])
+        lines += a.take_hand_events()
+    assert len(lines) == 1 and lines[0].startswith("REF 1 ") and lines[0].endswith(" LOST"), lines
+    assert 1 in a.hand_refs

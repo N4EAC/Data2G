@@ -46,3 +46,8 @@ def test_decode_window(native):
     # 0x5B, not the 0x5A these were sent under, answers nothing in either language.
     assert hand.decode_window(y, 0x5B, [5, 6, 7], hand.SEARCH_SAMPLES) == []
     assert native.hand.decode_window(y, 0x5B, [5, 6, 7], hand.SEARCH_SAMPLES) == []
+    # any tag (HAND OVERHEAR): the same Hands, each with the tag it was sent under
+    py = hand.decode_window(y, None, [5, 6, 7], hand.SEARCH_SAMPLES)
+    nat = native.hand.decode_window(y, None, [5, 6, 7], hand.SEARCH_SAMPLES)
+    assert [(r["c"], r["payload"], r["tag"]) for r in py] == [(c, p, tag) for c, p in sent.items()]
+    assert [(r["c"], r["payload"], r["tag"]) for r in nat] == [(r["c"], r["payload"], r["tag"]) for r in py]

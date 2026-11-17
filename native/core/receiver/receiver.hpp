@@ -52,6 +52,7 @@ struct Pending {
     std::int64_t start() const;
     std::int64_t end() const;
     double score() const;
+    double cfo() const;
     int n_cw() const;  // CPM: slots, control included
     bool copy() const { return !is_cpm() && ofdm().copy.has_value(); }
     void shift(std::int64_t d);  // every position (but a CPM header_end) by d

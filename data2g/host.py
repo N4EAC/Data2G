@@ -39,16 +39,17 @@ seconds-at-1 seconds-at-max lines, then CHANNELS c... and THRESHOLD name dB...
 lines: mode_lines); show of hands (Data2G, docs/arq.md §9):
 HAND SEND ref tag d channel hex16 (send a Hand d seconds after the end of
 heard burst ref, shifted by its cfo), HAND LISTEN d tag ack channel [...]
-(decode the window after the burst carrying KISS ACKMODE tag ack ends) and
-HAND CANCEL (stop a waiting Hand and
+(decode the window after the burst carrying KISS ACKMODE tag ack ends),
+HAND OVERHEAR ref d channel [...] (a bystander's window after heard burst
+ref, any tag) and HAND CANCEL (stop a waiting Hand and
 any window). Replies OK / WRONG (MYCALL's
 OK followed by REGISTERED call for each call). Notifications: CONNECTED src
 dst bw, DISCONNECTED (DATA2G ON: DISCONNECTED reason [detail], docs/arq.md
 §9), PTT ON|OFF, BUSY ON|OFF, PENDING and CANCELPENDING (--pending), BUFFER n, IAMALIVE (every 60 s), and (Data2G)
 MODE submode; broadcast statuses (BCAST n HEARD [call] snr, BCAST n LOST k,
 BCAST * MISSED submode n_cw [snr], BCAST n DROPPED k) once the client has
-sent a BCAST command; hand lines (REF id end offset snr per decoded burst,
-HAND SENT/DROPPED c, HAND c hex16 snr dt, HAND SHORT ms, HAND END [EXPIRED]) once it has
+sent a BCAST command; hand lines (REF id end offset snr [LOST] per burst heard,
+HAND SENT/DROPPED c, HAND c hex16 snr dt [tag], HAND SHORT ms, HAND END [EXPIRED]) once it has
 sent a HAND command or DATA2G ON, so VARA clients never see them.
 
     data2g-host --mycall W1AW --input-device USB --output-device USB --rigctld-port 4532
@@ -209,6 +210,13 @@ class Host:
             try:  # HAND LISTEN d tag ack channel [channel...] (docs/arq.md §9); args strict, see _hand_arg
                 e.hand_listen(float(_hand_arg(args[1], "[0-9.]+")), int(_hand_arg(args[2], "[0-9]+")),
                               int(_hand_arg(args[3], "[0-9a-fA-F]{4}"), 16), [self._hand_channel(a) for a in args[4:]])
+            except (ValueError, OverflowError):
+                ok = False
+        elif cmd == "HAND" and args and args[0].upper() == "OVERHEAR" and len(args) >= 4:
+            self._hand = True
+            try:  # HAND OVERHEAR ref d channel [channel...] (docs/arq.md §9); args strict, see _hand_arg
+                e.hand_overhear(int(_hand_arg(args[1], "[0-9]+")), float(_hand_arg(args[2], "[0-9.]+")),
+                                [self._hand_channel(a) for a in args[3:]])
             except (ValueError, OverflowError):
                 ok = False
         elif cmd == "HAND" and args and args[0].upper() == "CANCEL" and len(args) == 1:

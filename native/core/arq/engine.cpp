@@ -1020,6 +1020,7 @@ void Engine::hand_send(int ref, int tag, double d_s, int channel, std::uint64_t 
     const auto it = hand_refs_.find(ref);
     if (it == hand_refs_.end()) throw std::invalid_argument("no ref " + std::to_string(ref));
     if (hand_tx_) throw std::invalid_argument("a Hand is already waiting");
+    overhear_end();  // my own Hand takes precedence over a bystander's window
     if (channel < 0 || channel >= hand::N_CHANNELS || tag < 0 || tag > 255) throw std::invalid_argument("bad channel or tag");
     if (!(d_s > 0 && d_s < HAND_ARM_EXPIRE_S)) throw std::invalid_argument("bad delay");
     payload &= (std::uint64_t{1} << hand::PAYLOAD) - 1;  // 16 hex digits, the top bit ignored (docs/arq.md §9)
@@ -1039,9 +1040,35 @@ void Engine::hand_listen(double d_s, int tag, int ack, const std::vector<int>& c
     std::vector<int> uniq;  // listed twice: decoded once
     for (const int c : channels)
         if (std::find(uniq.begin(), uniq.end(), c) == uniq.end()) uniq.push_back(c);
+    overhear_end();  // my own window takes precedence over a bystander's
     if (hand_listen_) throw std::invalid_argument("a Hand window is already waiting");  // its round still owes a HAND END
     hand_listen_ = HandListen{.d = static_cast<std::int64_t>(std::nearbyint(d_s * config::FS)), .tag = tag, .ack = ack,
                               .channels = std::move(uniq), .armed = n_};
+}
+
+void Engine::hand_overhear(int ref, double d_s, const std::vector<int>& channels) {
+    const auto it = hand_refs_.find(ref);
+    if (it == hand_refs_.end()) throw std::invalid_argument("no ref " + std::to_string(ref));
+    if (!(d_s > 0 && d_s < HAND_ARM_EXPIRE_S)) throw std::invalid_argument("bad delay");
+    if (channels.empty() || std::any_of(channels.begin(), channels.end(), [](int c) { return c < 0 || c >= hand::N_CHANNELS; }))
+        throw std::invalid_argument("bad channels");
+    if (hand_listen_) throw std::invalid_argument("a Hand window is already waiting");
+    const auto a = static_cast<std::int64_t>(std::nearbyint(it->second.end * config::FS));
+    const auto d = static_cast<std::int64_t>(std::nearbyint(d_s * config::FS));
+    if (n_ > a + d) throw std::invalid_argument("the slot has passed");  // no audio is kept: its head is gone
+    std::vector<int> uniq;
+    for (const int c : channels)
+        if (std::find(uniq.begin(), uniq.end(), c) == uniq.end()) uniq.push_back(c);
+    hand_listen_ = HandListen{.d = d, .tag = -1, .ack = -1, .channels = std::move(uniq), .armed = n_, .open = true, .passive = true,
+                              .lo = a + d - hand::SEARCH_SAMPLES, .hi = a + d + hand::SEARCH_SAMPLES + hand::LEN_SAMPLES,
+                              .anchor = a};
+}
+
+void Engine::overhear_end() {
+    if (hand_listen_ && hand_listen_->passive) {
+        hand_listen_.reset();
+        hand_event("HAND END");
+    }
 }
 
 void Engine::hand_cancel() {
@@ -1117,7 +1144,8 @@ void Engine::hand_collect(std::span<const double> x) {
             if (w.anchor + w.d - w.first >= 0)  // the slot lies before the capture: no decodes (a search past the head reads zeros)
                 try {
                     for (const auto& r : hand::decode_window(w.buf, w.tag, w.channels, w.anchor + w.d - w.first, round))
-                        lines.push_back(format("HAND %d %016llx %.1f %.0f", r.c, static_cast<unsigned long long>(r.payload), r.snr, r.dt_ms));
+                        lines.push_back(format("HAND %d %016llx %.1f %.0f", r.c, static_cast<unsigned long long>(r.payload), r.snr, r.dt_ms)
+                                        + (w.tag < 0 ? " " + std::to_string(r.tag) : ""));
                 } catch (const std::exception& e) {
                     log_write(LOG, 40, format("hand decode failed: %s", e.what()));
                     lines.clear();
@@ -1241,6 +1269,15 @@ void Engine::hear_burst(receiver::BurstEvent& ev, double t) {
     if (on_burst_) on_burst_({t, spec_name(ev.header), ev.header.n_cw(), !r, snr, r ? *r : Heard{}, soft});
     if (on_read_) handoff.b = {t, spec_name(ev.header), ev.header.n_cw(), !r, snr, Heard{}, nullptr};
     timing.mark("hook");
+    {  // every burst heard is a Hand reference (docs/arq.md §9); one whose header was heard but not its
+       // data (the bursts behind BUSY and BCAST * MISSED) is LOST, its snr from power alone
+        const double end = span ? span->end : t;
+        const double cfo = !r ? ev.header.cfo() : r->cpm ? r->cpm->cfo : r->ofdm ? r->ofdm->cfo : 0.0;
+        const double snr_ = meas ? meas->snr_est : span ? span_snr(*span).value_or(NAN) : NAN;
+        hand_refs_[++hand_ref_n_] = {end, cfo, snr_};
+        if (hand_refs_.size() > HAND_REFS_KEPT) hand_refs_.erase(hand_refs_.begin());
+        hand_event(format("REF %d %.2f %.1f %.1f%s", hand_ref_n_, end, cfo, snr_, r ? "" : " LOST"));
+    }
     if (!r) {
         if (log_enabled(LOG, INFO))
             log_write(LOG, INFO, format("RX %s x%d: header heard (score %.2f), burst lost", spec_name(ev.header).c_str(),
@@ -1248,13 +1285,6 @@ void Engine::hear_burst(receiver::BurstEvent& ev, double t) {
         if (cfg_.kiss && idle())  // maybe an open port's
             cfg_.kiss->missed(spec_name(ev.header), ev.header.n_cw(), span ? span_snr(*span) : std::nullopt);
         return;
-    }
-    {  // every decoded burst is a Hand reference (docs/arq.md §9)
-        const double end = span ? span->end : t;
-        const double cfo = r->cpm ? r->cpm->cfo : r->ofdm ? r->ofdm->cfo : 0.0;
-        hand_refs_[++hand_ref_n_] = {end, cfo, meas->snr_est};
-        if (hand_refs_.size() > HAND_REFS_KEPT) hand_refs_.erase(hand_refs_.begin());
-        hand_event(format("REF %d %.2f %.1f %.1f", hand_ref_n_, end, cfo, meas->snr_est));
     }
     const auto rxp = std::make_shared<ModemRx>(*r, &store_, cfg_.dd_budget_s, soft, cfg_.dd);
     ModemRx& rx = *rxp;

@@ -135,6 +135,7 @@ Roughly:
 - `HAND SEND ref channel payload`: transmit at the end of burst `ref` + D, shifted by that burst's offset.
 - `HAND LISTEN D ack channels`: decode the window after the burst that carries the KISS frame sent with ACKMODE tag `ack`, the one with `ANY TRAFFIC`. Naming it keeps a CQ, an ID or a session burst that goes first from moving the window. It reports `HAND channel payload snr offset` for each one decoded, then `HAND END`.
 - While a window is open the host holds its own CQ and broadcast transmissions.
+- `HAND OVERHEAR ref D channels`: a bystander's window after heard burst `ref` (a `LOST` one too), decoded under any tag and reporting the tag that passed. It holds nothing. A Hand decodes about 6 dB below what a bottom-rung burst needs, so a station that can't copy net control can often still hear who answered.
 
 The exact commands are in docs/arq.md §9.
 

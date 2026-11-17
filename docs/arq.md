@@ -880,11 +880,15 @@ As built (data2g/arq/policy.py):
     branch). Like the BCAST statuses, the hand lines go only to a client that
     has sent DATA2G ON or a HAND command. A command client that leaves
     cancels its waiting Hand and its window.
-    - Every burst this station decodes becomes a Hand reference, notified
+    - Every burst this station hears becomes a Hand reference, notified
       `REF id end offset snr`: id counts up from 1 (the last 64 stay usable),
       end is the burst's end in host seconds (the sound card's clock), offset
       its measured cfo (Hz, 0 for modes that don't measure one), snr its
-      snr_est (dB). The command port is a separate socket, so a client can't
+      snr_est (dB). A burst whose codewords failed is still a plain REF.
+      One whose header was heard but whose receive failed (the bursts behind
+      BUSY and `BCAST * MISSED`) is `REF id end offset snr LOST`: end as its
+      header claims, offset the header's cfo, snr from power alone (`nan`
+      before the noise floor has history). A false lock makes one too. The command port is a separate socket, so a client can't
       tell which KISS frames a REF line belongs to. A KISS client that needs
       the pairing asks for the same line on the KISS port instead
       (SETHARDWARE `REFS ON`, docs/broadcast.md §5): it arrives there as a
@@ -930,6 +934,21 @@ As built (data2g/arq/policy.py):
       `HAND END`; an armed listen whose burst never went out gives up after
       30 s with `HAND END EXPIRED`. Send the command before queuing the frame that
       anchors the window: the KISS port may send it at once.
+    - **HAND OVERHEAR ref d channel [channel...]** (issue #210): a
+      bystander's window, for a station that sat out a roll call or couldn't
+      copy it. It opens d seconds after heard burst `ref` ends (LOST refs
+      too), where the answerers time their Hands, and lasts as HAND LISTEN's.
+      Each channel is decoded under any tag: the CRC is linear in its seed,
+      so one check per list path tries all 256. Each Hand decoded:
+      `HAND c hex16 snr dt tag`. Losing the tag's 8 bits makes a false Hand
+      256 times likelier (about 6.7% per channel), so the client checks the
+      payload itself. Passive: it holds none of my bursts (they blank the
+      capture, as a session burst does a listen's), and my own HAND SEND or
+      HAND LISTEN ends it with `HAND END` and goes ahead. WRONG for a gone
+      ref, bad numbers, a channel outside the width, its slot already past
+      (no audio is kept), or another window armed or open. Ends with
+      `HAND SHORT ms` if the command came after the window's head, then
+      `HAND END`.
     - **HAND CANCEL**: stops a Hand waiting to go and an armed or open
       listen; the window ends with `HAND END`. Always OK.
   - BW500 caps at 500 Hz. This one matters: it keeps a session inside a 500 Hz

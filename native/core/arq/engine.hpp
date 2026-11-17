@@ -330,6 +330,9 @@ public:
     // throw std::invalid_argument on bad input (engine.py's ValueError).
     void hand_send(int ref, int tag, double d_s, int channel, std::uint64_t payload);
     void hand_listen(double d_s, int tag, int ack, const std::vector<int>& channels);
+    // A bystander's window (issue #210): d_s after heard burst `ref` ends (decoded or LOST), any tag.
+    // Passive: holds none of my bursts; hand_send / hand_listen end it (HAND END). engine.py's hand_overhear.
+    void hand_overhear(int ref, double d_s, const std::vector<int>& channels);
     // Stop a waiting Hand and an armed or open window (a gone client's must not hold the radio):
     // a window that existed ends with HAND END. Never throws (engine.py's hand_cancel).
     void hand_cancel();
@@ -521,10 +524,10 @@ private:
     std::optional<HandTx> hand_tx_;
     struct HandListen {
         std::int64_t d;
-        int tag, ack;
+        int tag, ack;  // tag < 0: any (an overheard window)
         std::vector<int> channels;
         std::int64_t armed;
-        bool open = false;
+        bool open = false, passive = false;  // passive: HAND OVERHEAR's
         std::vector<double> buf{};
         std::int64_t first = 0, next = 0, lo = 0, hi = 0, anchor = 0;  // next: the sample after buf's last
     };
@@ -547,6 +550,7 @@ private:
     std::thread hand_thread_;            // the last round's decoder; joined before the next and in stop()
     void hand_event(std::string line);
     void hand_collect(std::span<const double> x);
+    void overhear_end();
 };
 
 }  // namespace data2g::arq

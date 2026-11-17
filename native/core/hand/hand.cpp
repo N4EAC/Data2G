@@ -266,12 +266,32 @@ std::uint64_t payload_int(std::span<const std::uint8_t> bits) {
     return p;
 }
 
-std::vector<std::uint8_t> crc16(std::span<const std::uint8_t> bits, unsigned init) {
+namespace {
+unsigned crc_reg(std::span<const std::uint8_t> bits, unsigned init) {
     unsigned c = init;
     for (auto b : bits) {
         const unsigned fb = ((c >> 15) & 1) ^ (b & 1);
         c = ((c << 1) & 0xFFFF) ^ (fb ? 0x1021 : 0);
     }
+    return c;
+}
+
+// hand.seed_terms: each tag's term in channel c's CRC (the CRC is linear in its seed, so
+// crc(bits, seed) = crc(bits, 0) ^ crc(zeros, seed): one CRC per list path checks every tag).
+const std::array<unsigned, 256>& seed_terms(int c) {
+    static const auto all = [] {
+        std::array<std::array<unsigned, 256>, N_CHANNELS> t{};
+        const std::vector<std::uint8_t> z(PAYLOAD, 0);
+        for (int ch = 0; ch < N_CHANNELS; ++ch)
+            for (int tag = 0; tag < 256; ++tag) t[static_cast<std::size_t>(ch)][static_cast<std::size_t>(tag)] = crc_reg(z, crc_init(tag, ch));
+        return t;
+    }();
+    return all[static_cast<std::size_t>(c)];
+}
+}  // namespace
+
+std::vector<std::uint8_t> crc16(std::span<const std::uint8_t> bits, unsigned init) {
+    const unsigned c = crc_reg(bits, init);
     std::vector<std::uint8_t> out(16);
     for (int i = 0; i < 16; ++i) out[static_cast<std::size_t>(i)] = (c >> (15 - i)) & 1;
     return out;
@@ -332,12 +352,17 @@ std::vector<Decoded> decode_window(std::span<const double> y, int tag, std::span
                 llr[0][tables::HAND_INTERLEAVER[static_cast<std::size_t>(j)]] = static_cast<float>(l[static_cast<std::size_t>(j)]);
             const auto res = dec.decode(llr);
             bool done = false;
+            const auto& terms = seed_terms(c);
             for (int li = 0; li < dec.list_size() && !done; ++li) {
                 const std::span<const std::uint8_t> u(res.paths[0] + static_cast<std::size_t>(li) * K, K);
-                const auto crc = crc16(u.first(PAYLOAD), crc_init(tag, c));
-                if (!std::equal(crc.begin(), crc.end(), u.begin() + PAYLOAD)) continue;
+                unsigned diff = crc_reg(u.first(PAYLOAD), 0);
+                for (int i = 0; i < 16; ++i) diff ^= static_cast<unsigned>(u[static_cast<std::size_t>(PAYLOAD + i)] & 1) << (15 - i);
+                int t = -1;
+                if (tag >= 0) t = terms[static_cast<std::size_t>(tag)] == diff ? tag : -1;
+                else t = static_cast<int>(std::find(terms.begin(), terms.end(), diff) - terms.begin());
+                if (t < 0 || t > 255) continue;
                 out.push_back({c, payload_int(u), cpm::measure(g, En, N_DATA).snr_est,
-                               1000.0 * static_cast<double>(start - nominal) / config::FS});
+                               1000.0 * static_cast<double>(start - nominal) / config::FS, t});
                 done = true;
             }
             if (done) break;  // one Hand per channel: the other candidates are the same burst
