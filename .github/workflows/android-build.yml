@@ -91,6 +91,16 @@ jobs:
         with:
           path: native/.deps
           key: deps-android-${{ hashFiles('native/cmake/*.cmake') }}
+      # Gradle's downloads: Maven Central answers 429 when several runs fetch
+      # at once. The Gradle project comes from Qt's template, so Qt's version
+      # pins what it fetches.
+      - name: Cache Gradle
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-android-${{ env.QT_VERSION }}
       # Play rejects a version code it has seen, so a release derives one
       # that increases with the version: X.Y.Z -> X*1000000 + Y*1000 + Z.
       # The APK is signed with a debug key committed in the repo (password
