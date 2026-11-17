@@ -138,6 +138,7 @@ void bind_engine(py::module_& m) {
         .def("send_ping", &PyEngine::send_ping, py::arg("to"), py::arg("cap") = 1)
         .def("hand_send", &PyEngine::hand_send)
         .def("hand_listen", &PyEngine::hand_listen)
+        .def("hand_overhear", &PyEngine::hand_overhear)
         .def("hand_cancel", &PyEngine::hand_cancel)
         .def("hand_refs", &PyEngine::hand_refs)
         .def("hand_ref_set", &PyEngine::hand_ref_set)

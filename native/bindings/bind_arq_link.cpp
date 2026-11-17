@@ -527,6 +527,7 @@ void bind_arq_link(py::module_& m) {
         .def_readonly("reply_lost", &Station::reply_lost)
         .def_readonly("misses", &Station::misses)
         .def_readonly("reply_escalation", &Station::reply_escalation)
+        .def_property_readonly("recovering", &Station::recovering)
         .def_readonly("esc_floor", &Station::esc_floor)
         .def_readonly("_clean", &Station::clean_)
         .def_readonly("_sent_esc", &Station::sent_esc_)

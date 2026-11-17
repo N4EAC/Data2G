@@ -67,7 +67,7 @@ private:
     QFormLayout* audio_form_;
     QComboBox *input_, *output_, *rate_;
     QDoubleSpinBox* volume_;
-    QSpinBox *ptt_on_, *ptt_off_;
+    QSpinBox *ptt_on_, *ptt_off_, *ptt_gpio_;
     QFormLayout* rig_form_;
     QCheckBox *rig_on_, *rig_debug_;
     QComboBox *rig_model_, *baud_, *data_bits_, *stop_bits_, *parity_, *handshake_, *dtr_, *rts_, *ptt_method_, *ptt_audio_,

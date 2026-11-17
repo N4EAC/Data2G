@@ -112,6 +112,17 @@ def crc16(bits: np.ndarray, init: int) -> np.ndarray:
 
 
 @lru_cache(maxsize=None)
+def seed_terms(c: int) -> dict[bytes, int]:
+    """Each tag's term in channel c's CRC, keyed back to its tag. The CRC is
+    linear in its seed: crc16(bits, crc_init(t, c)) = crc16(bits, 0) ^
+    crc16(zeros, crc_init(t, c)). So one CRC per list path, and a lookup,
+    checks every tag (HAND OVERHEAR's any-tag decode). The map is one to one:
+    shifting the register is invertible."""
+    z = np.zeros(PAYLOAD, np.uint8)
+    return {crc16(z, crc_init(t, c)).tobytes(): t for t in range(256)}
+
+
+@lru_cache(maxsize=None)
 def code() -> polar.PolarCode:
     return polar.PolarCode(K, E, design_snr_db=POLAR_DESIGN_SNR_DB)
 
@@ -223,9 +234,11 @@ def nail(g: cpm.Grid, y: np.ndarray, start: int, cfo: float, rnd: dict = ROUND_F
     return best[0], best[1], best[2]
 
 
-def receive(g: cpm.Grid, y: np.ndarray, nominal: int, init: int, dec: polar.SCLDecoder, rnd: dict = ROUND_FULL):
-    """The first candidate and list path whose CRC passes -> (payload bits,
-    snr_est dB, start sample), or None. `init`: the CRC seed (crc_init's).
+def receive(g: cpm.Grid, y: np.ndarray, nominal: int, terms: dict[bytes, int], dec: polar.SCLDecoder,
+            rnd: dict = ROUND_FULL):
+    """The first candidate and list path whose CRC passes under one of the
+    tags in `terms` (seed_terms', or a subset) -> (payload bits, snr_est dB,
+    start sample, tag), or None.
     Candidates are nailed and decoded
     one at a time, as native/core/hand does: a Hand on the first candidate
     costs no further nails. The data-row energies serve twice: the soft bits,
@@ -236,16 +249,18 @@ def receive(g: cpm.Grid, y: np.ndarray, nominal: int, init: int, dec: polar.SCLD
         llr[0, interleaver()] = cpm.llrs(g, En)
         bits, _ = dec.decode(llr)
         for u in bits[0]:
-            if np.array_equal(crc16(u[:PAYLOAD], init), u[PAYLOAD:]):
-                return u[:PAYLOAD], cpm.measure(g, En, N_DATA)["snr_est"], start
+            tag = terms.get((crc16(u[:PAYLOAD], 0) ^ u[PAYLOAD:]).tobytes())
+            if tag is not None:
+                return u[:PAYLOAD], cpm.measure(g, En, N_DATA)["snr_est"], start, tag
     return None
 
 
-def decode_window(y: np.ndarray, tag: int, channels: list[int], nominal: int, rnd: dict = ROUND_FULL) -> list:
+def decode_window(y: np.ndarray, tag: int | None, channels: list[int], nominal: int, rnd: dict = ROUND_FULL) -> list:
     """Net control's round: decode every channel in the captured window.
     `nominal`: a Hand's expected start sample in y (its slot, as this host
-    sent it); the search covers +-SEARCH_S of it. -> dicts with c, payload
-    (63-bit int), snr (dB), dt_ms (start minus nominal).
+    sent it); the search covers +-SEARCH_S of it. `tag` None: any tag
+    (HAND OVERHEAR), 256 times the false passes. -> dicts with c, payload
+    (63-bit int), snr (dB), dt_ms (start minus nominal), tag.
 
     ponytail: a full grid search per channel, ~2.4 s of CPU for 40 measured on
     a desktop (the window is mixed once per cfo, not once per candidate:
@@ -255,9 +270,10 @@ def decode_window(y: np.ndarray, tag: int, channels: list[int], nominal: int, rn
     dec = polar.SCLDecoder(code(), POLAR_LIST)
     out = []
     for c in channels:
-        got = receive(grid(channel_freq(c)), y, nominal, crc_init(tag, c), dec, rnd)
+        terms = seed_terms(c) if tag is None else {k: t for k, t in seed_terms(c).items() if t == tag}
+        got = receive(grid(channel_freq(c)), y, nominal, terms, dec, rnd)
         if got is not None:
-            bits, snr, start = got
+            bits, snr, start, t = got
             out.append(dict(c=c, payload=payload_int(bits), snr=float(snr),
-                            dt_ms=1000.0 * (start - nominal) / FS))
+                            dt_ms=1000.0 * (start - nominal) / FS, tag=t))
     return out

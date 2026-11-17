@@ -3,6 +3,7 @@
 // running the dummy, as tnc.Rigctld reaches localhost:4532 today.
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <spawn.h>
@@ -14,6 +15,9 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <string>
 #include <mutex>
 #include <thread>
@@ -138,6 +142,44 @@ void test_serial_model_without_a_device() {
     check::is_true(rig->description().find("IC-7300") != std::string::npos, "description names the model: " + rig->description());
 }
 
+// PTT by a CM108's GPIO: Hamlib opens the given hidraw device at rig_open
+// and refuses one that isn't there or isn't a CM108, so a dummy rig that
+// opens cleanly without it fails here only if the settings reached Hamlib.
+void test_cm108() {
+    check::current_step = "cm108";
+    rig::HamlibConfig cfg;
+    cfg.model = rig::MODEL_DUMMY;
+    cfg.device = "";
+    cfg.ptt_method = rig::PttMethod::Cm108;
+    cfg.ptt_device = "/nonexistent/data2g-hidraw";
+    cfg.ptt_gpio = 3;
+    const auto open_error = [&] {
+        auto rig = rig::make_hamlib_backend(cfg);
+        try {
+            rig->open();
+        } catch (const rig::RigError& e) {
+            return std::string(e.what());
+        }
+        return std::string();
+    };
+    const std::string missing = open_error();
+    check::is_true(!missing.empty(), "cm108: a missing hidraw device fails the open");
+    check::is_true(missing.find("/nonexistent/data2g-hidraw") != std::string::npos && missing.find("udev") != std::string::npos,
+                   "cm108: the error names the device and the likely fix: " + missing);
+    check::is_true(missing.find('\n') == std::string::npos, "cm108: one line");
+#ifdef __linux__
+    // A file that opens but is no hidraw device: Hamlib's CM108 check (a
+    // Linux hidraw ioctl; elsewhere it opens any path) refuses it.
+    const std::string plain = (std::filesystem::temp_directory_path() / "data2g-test-not-hidraw").string();
+    std::fclose(std::fopen(plain.c_str(), "w"));
+    cfg.ptt_device = plain;
+    check::is_true(!open_error().empty(), "cm108: a device that isn't a CM108 is refused");
+    std::remove(plain.c_str());
+#endif
+    auto rig = rig::make_hamlib_backend(cfg);
+    check::is_true(rig->description().find("PTT on GPIO3") != std::string::npos, "description names the pin: " + rig->description());
+}
+
 int free_port() {
     const int s = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in a{};
@@ -159,6 +201,38 @@ bool listening(int port) {
     const bool ok = connect(s, reinterpret_cast<sockaddr*>(&a), sizeof a) == 0;
     close(s);
     return ok;
+}
+
+// The CAT port's speed survives CM108 PTT. Hamlib stores ptt_bitnum over
+// the rig port's parm.serial.rate as well as the PTT port's, so a serial
+// rig used to open at "2 baud": "Invalid configuration" before the PTT
+// port was ever tried. A pty stands in for the G90's CAT cable; the PTT
+// device is missing, so getting as far as it proves the serial port opened.
+void test_cm108_keeps_cat_baud() {
+    check::current_step = "cm108 keeps the CAT baud";
+    const int master = posix_openpt(O_RDWR | O_NOCTTY);
+    check::is_true(master >= 0 && grantpt(master) == 0 && unlockpt(master) == 0, "a pty for the CAT port");
+    if (master < 0) return;
+    rig::HamlibConfig cfg;
+    cfg.model = 3088;  // Xiegu G90: a serial Icom-protocol rig
+    cfg.device = ptsname(master);
+    cfg.baud = 19200;
+    cfg.timeout_ms = 200;
+    cfg.retries = 0;
+    cfg.ptt_method = rig::PttMethod::Cm108;
+    cfg.ptt_device = "/nonexistent/data2g-hidraw";
+    for (const int gpio : {3, 4}) {  // the default pin, and one that moves ptt_bitnum
+        cfg.ptt_gpio = gpio;
+        std::string error;
+        try {
+            rig::make_hamlib_backend(cfg)->open();
+        } catch (const rig::RigError& e) {
+            error = e.what();
+        }
+        check::is_true(error.find("Invalid configuration") == std::string::npos && error.find("udev") != std::string::npos,
+                       "GPIO" + std::to_string(gpio) + ": the serial port opens, then the missing CM108 fails: " + error);
+    }
+    close(master);
 }
 
 // (a) of the exit rule: a rigctld that isn't there (a free port, nothing
@@ -288,6 +362,8 @@ int main() {
     test_dummy();
     test_dummy_all_settings();
     test_serial_model_without_a_device();
+    test_cm108();
+    test_cm108_keeps_cat_baud();
     test_unreachable_rigctld_exit();
     test_net_rigctl();
     return check::report("rig hamlib");

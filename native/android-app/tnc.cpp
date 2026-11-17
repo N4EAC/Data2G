@@ -37,13 +37,20 @@ void call_static(const char* cls, const char* method) {
 }
 
 // Edits the saved settings in one place, so a field shown and a field saved
-// can't be spelled two ways.
+// can't be spelled two ways. A running modem takes the live ones (the transmit
+// level, the callsign) at once, even with a restart-only change saved earlier;
+// the rest wait for its next start.
 template <typename F>
 void edit(F f) {
     data2g::app::Args a = data2g::androidapp::load_args();
     f(a);
     QSettings s;
     data2g::app::save_settings(s, a);
+    if (auto* st = Modem::instance().station()) {
+        QVariantMap live = data2g::app::settings_map(a);
+        for (auto it = live.begin(); it != live.end();) it = data2g::app::LIVE_SETTINGS.contains(it.key()) ? std::next(it) : live.erase(it);
+        st->update(data2g::app::from_settings(live, st->args()));
+    }
 }
 
 QStringList with_default(const std::vector<data2g::audio::DeviceInfo>& devices) {

@@ -6,6 +6,7 @@
 #include <QSettings>
 #include <QStandardPaths>
 
+#include <algorithm>
 #include <string_view>
 
 #include <utility>
@@ -96,6 +97,7 @@ QVariantMap settings_map(const Args& a) {
     m["rig_model"] = a.rig_model;
     m["rig_baud"] = a.rig_baud;
     for (const auto& [key, field] : RIG_STRINGS) m[key] = qs(a.*field);
+    m["ptt_gpio"] = a.ptt_gpio;
     m["rig_timeout_ms"] = a.rig_timeout_ms;
     m["rig_retries"] = a.rig_retries;
     m["rig_poll_interval"] = a.rig_poll_interval;
@@ -125,13 +127,14 @@ Args from_settings(const QVariantMap& m, Args a) {
     a.tci = m.value("tci", a.tci).toBool();
     a.tci_host = str("tci_host", a.tci_host);
     a.sample_rate = m.value("sample_rate", a.sample_rate).toInt();
-    a.output_volume = m.value("output_volume", a.output_volume).toDouble();
+    a.output_volume = std::min(m.value("output_volume", a.output_volume).toDouble(), 0.0);  // above 0 dB only clips (an older save)
     a.ptt_on_delay_ms = m.value("ptt_on_delay_ms", a.ptt_on_delay_ms).toInt();
     a.ptt_off_delay_ms = m.value("ptt_off_delay_ms", a.ptt_off_delay_ms).toInt();
     a.rig = m.value("rig", a.rig).toBool();
     a.rig_model = m.value("rig_model", a.rig_model).toInt();
     a.rig_baud = m.value("rig_baud", a.rig_baud).toInt();
     for (const auto& [key, field] : RIG_STRINGS) a.*field = str(key, a.*field);
+    a.ptt_gpio = m.value("ptt_gpio", a.ptt_gpio).toInt();
     a.rig_timeout_ms = m.value("rig_timeout_ms", a.rig_timeout_ms).toInt();
     a.rig_retries = m.value("rig_retries", a.rig_retries).toInt();
     a.rig_poll_interval = m.value("rig_poll_interval", a.rig_poll_interval).toDouble();

@@ -269,12 +269,15 @@ everywhere (Python too) for A/B runs.
   burst's (all three are absolute: a nod leaving an old size hint in force shrank every
   data burst at awgn -18 to one codeword). `T_DUPCTL` is carried as an absolute bit.
 - **Where.** Only as the session's direct reply, in the peer's expected slot (§3a
-  `ReplySlot.nod_window`: the last 8 gaps' spread ±0.15 s, at most ±0.6 s about their
-  median); the listener searches there after each of its bursts. On air (2026-11-12,
-  KC2G -> K2CR) one station's TX playout lag varied 0.2-1.3 s, its peer's reply gaps
+  `ReplySlot.nod_window`: ±0.6 s about the last 8 gaps' median); the listener searches
+  there after each of its bursts. On air (2026-11-12, KC2G -> K2CR) one station's TX lag
+  (its burst's end to its rig back on receive) varied 0.2-1.3 s, its peer's reply gaps
   1.35-2.22 s: 11 of 21 nods fell outside the median ±0.15 s and 6 or more were missed,
-  though every one scored 89-176. The primed lock keeps ±0.15 s (a missed slot falls
-  back to the blind lock, and its CPU grows with the width). A nod is
+  though every one scored 89-176. 2026-11-15: the gaps' spread ±0.15 s (capped ±0.6 s)
+  still missed 5 of 35, all early (nods start ~0.15 s sooner than full replies, and 8
+  gaps undersample a ~1 s spread); ±0.6 s about the median caught all 35. The primed
+  lock keeps ±0.15 s (a missed slot falls back to the blind lock, and its CPU grows with
+  the width). A nod is
   never repeated on a timeout (its listener looks in its reply slot only): the master
   polls instead, in full.
 - **Why not polls.** A poll restates a burst its peer may not have heard, and then the
@@ -877,11 +880,15 @@ As built (data2g/arq/policy.py):
     branch). Like the BCAST statuses, the hand lines go only to a client that
     has sent DATA2G ON or a HAND command. A command client that leaves
     cancels its waiting Hand and its window.
-    - Every burst this station decodes becomes a Hand reference, notified
+    - Every burst this station hears becomes a Hand reference, notified
       `REF id end offset snr`: id counts up from 1 (the last 64 stay usable),
       end is the burst's end in host seconds (the sound card's clock), offset
       its measured cfo (Hz, 0 for modes that don't measure one), snr its
-      snr_est (dB). The command port is a separate socket, so a client can't
+      snr_est (dB). A burst whose codewords failed is still a plain REF.
+      One whose header was heard but whose receive failed (the bursts behind
+      BUSY and `BCAST * MISSED`) is `REF id end offset snr LOST`: end as its
+      header claims, offset the header's cfo, snr from power alone (`nan`
+      before the noise floor has history). A false lock makes one too. The command port is a separate socket, so a client can't
       tell which KISS frames a REF line belongs to. A KISS client that needs
       the pairing asks for the same line on the KISS port instead
       (SETHARDWARE `REFS ON`, docs/broadcast.md §5): it arrives there as a
@@ -927,6 +934,23 @@ As built (data2g/arq/policy.py):
       `HAND END`; an armed listen whose burst never went out gives up after
       30 s with `HAND END EXPIRED`. Send the command before queuing the frame that
       anchors the window: the KISS port may send it at once.
+    - **HAND OVERHEAR ref d channel [channel...]** (issue #210): a
+      bystander's window, for a station that sat out a roll call or couldn't
+      copy it. It opens d seconds after heard burst `ref` ends (LOST refs
+      too), where the answerers time their Hands, and lasts as HAND LISTEN's.
+      Each channel is decoded under any tag: the CRC is linear in its seed,
+      so one check per list path tries all 256. Each Hand decoded:
+      `HAND c hex16 snr dt tag`. Losing the tag's 8 bits makes a false Hand
+      256 times likelier (about 6.7% per channel), so the client checks the
+      payload itself. Passive: it holds none of my bursts (they blank the
+      capture, as a session burst does a listen's), and my own HAND SEND or
+      HAND LISTEN ends it with `HAND END` and goes ahead. It may come late:
+      the host keeps the last 30 s heard (`HAND_HISTORY_S`, zeros while it
+      transmits), and the window's past comes from there. A window already
+      over decodes at once. WRONG for a gone ref, bad numbers, a channel
+      outside the width, a slot older than those 30 s, or another window
+      armed or open. A window whose head is older than the 30 s gets
+      `HAND SHORT ms` before its `HAND END`.
     - **HAND CANCEL**: stops a Hand waiting to go and an armed or open
       listen; the window ends with `HAND END`. Always OK.
   - BW500 caps at 500 Hz. This one matters: it keeps a session inside a 500 Hz
@@ -947,7 +971,7 @@ As built (data2g/arq/policy.py):
     - BUFFER is the plain VARA count (no next-burst credit).
     - CLEANTXBUFFER reports host byte offsets (below).
     - TXPOWER gets the output volume, dB with one decimal (`TXPOWER -1.2`).
-      `TXPOWER dB` sets it, -60 to 20 (0 puts a burst's peak at full scale):
+      `TXPOWER dB` sets it, -60 to 0 (0 puts a burst's peak at full scale):
       OK, or WRONG out of range or not a number. Applies from the next audio
       block; the station's own setting (--output-volume, the GUI) is the start.
     - TIMEOUT gets the link idle timeout, seconds with one decimal

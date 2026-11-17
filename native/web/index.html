@@ -178,7 +178,7 @@ input[type=range] { flex: 1; min-width: 120px; }
       <div class="row" data-show="card"><label for="input_device">Input</label><select id="input_device" data-kind="str" class="grow"></select></div>
       <div class="row" data-show="card"><label for="output_device">Output</label><select id="output_device" data-kind="str" class="grow"></select></div>
       <div class="row"><label for="sample_rate">Sample rate (Hz)</label><select id="sample_rate" data-kind="num" title="TCI: 8000, 24000 or 48000"></select></div>
-      <div class="row"><label for="output_volume">Output volume</label><span class="inline"><input type="number" id="output_volume" data-kind="num" min="-60" max="20" step="0.1" title="0 dB puts a burst's peak at full scale"> dB</span></div>
+      <div class="row"><label for="output_volume">Output volume</label><span class="inline"><input type="number" id="output_volume" data-kind="num" min="-60" max="0" step="0.1" title="0 dB puts a burst's peak at full scale"> dB</span></div>
       <div class="note" id="audio-io" hidden></div>
     </fieldset>
 
@@ -190,9 +190,9 @@ input[type=range] { flex: 1; min-width: 120px; }
       <div class="row" data-port="serial"><label>Serial</label><span class="inline">Baud <select id="rig_baud" data-kind="num"></select> Data <select id="rig_data_bits" data-kind="str"></select> Stop <select id="rig_stop_bits" data-kind="str"></select></span></div>
       <div class="row" data-port="serial"><label></label><span class="inline">Parity <select id="rig_parity" data-kind="str"></select> Handshake <select id="rig_handshake" data-kind="str"></select></span></div>
       <div class="row" data-port="serial" title="Held for the whole session: how an interface powered from the control lines stays fed"><label>Control lines</label><span class="inline">DTR <select id="rig_dtr" data-kind="str"></select> RTS <select id="rig_rts" data-kind="str"></select></span></div>
-      <div class="row"><label for="ptt_method">PTT</label><span class="inline"><select id="ptt_method" data-kind="str"></select> Port <input id="ptt_device" data-kind="str" placeholder="(the device above)"></span></div>
+      <div class="row"><label for="ptt_method">PTT</label><span class="inline"><select id="ptt_method" data-kind="str"></select> Port <input id="ptt_device" data-kind="str" placeholder="(the device above)"> <span id="ptt_gpio-row" title="The CM108's pin that keys the radio: GPIO3 on the TOADs DI and most interfaces">GPIO <input type="number" id="ptt_gpio" data-kind="num" min="1" max="8"></span></span></div>
       <div class="row"><label for="ptt_audio">Transmit audio</label><select id="ptt_audio" data-kind="str"></select></div>
-      <div class="note">VOX: never key (the rig keys on the audio). DTR and RTS may use another port. Transmit audio: the input CAT keying selects, on rigs with two.</div>
+      <div class="note">VOX: never key (the rig keys on the audio). DTR and RTS may use another port. CM108 GPIO: a pin of a CM108 USB sound interface such as the TOADs DI (Linux); the port is its /dev/hidrawN, found by itself when only one is plugged in. Transmit audio: the input CAT keying selects, on rigs with two.</div>
       <div class="row"><label>Hamlib</label><span class="inline">Timeout <input type="number" id="rig_timeout_ms" data-kind="num" min="1" max="60000"> ms Retries <input type="number" id="rig_retries" data-kind="num" min="0" max="10"></span></div>
       <div class="row"><label for="rig_poll_interval">Frequency poll</label><span class="inline"><input type="number" id="rig_poll_interval" data-kind="num" min="0" max="3600" step="0.1" title="Read the dial frequency this often, for the monitor tab; 0: off (key only)"> s</span></div>
       <div class="check"><input type="checkbox" id="rig_debug" data-kind="bool"><label for="rig_debug">Hamlib's trace in the log</label></div>
@@ -453,7 +453,7 @@ function connect() {
 const LABELS = {  // in app::rig_choices' order, as the dialog's
   rig_data_bits: ["Default"], rig_stop_bits: ["Default"], rig_parity: ["Default", "None", "Odd", "Even"],
   rig_handshake: ["Default", "None", "XON/XOFF", "Hardware"], rig_dtr: ["Default", "High", "Low"], rig_rts: ["Default", "High", "Low"],
-  ptt_method: ["VOX", "CAT", "DTR", "RTS"], ptt_audio: ["Mic / front", "Data / rear"], rig_mode: ["None", "USB", "Data/Pkt"],
+  ptt_method: ["VOX", "CAT", "DTR", "RTS", "CM108 GPIO"], ptt_audio: ["Mic / front", "Data / rear"], rig_mode: ["None", "USB", "Data/Pkt"],
 };
 const PORT = {NONE: 0, SERIAL: 1, NETWORK: 2, OTHER: 3};
 let cfg = null, models = new Map();  // number -> [number, label, port, micdata]
@@ -496,7 +496,12 @@ function sync() {  // what shows, as the dialog's sync_interface and sync_rig
   document.querySelector("[data-port=device]").hidden = port === PORT.NONE;
   $("rig_device").placeholder = port === PORT.SERIAL ? "/dev/ttyUSB0 or COM5" : n === 2 ? "localhost:4532" : port === PORT.NETWORK ? "host:port" : "(Hamlib's default)";
   const method = $("ptt_method").value;
-  $("ptt_device").disabled = !(method === "dtr" || method === "rts");
+  const cm108 = method === "cm108", found = cfg.cm108 || [];
+  $("ptt_device").disabled = !(method === "dtr" || method === "rts" || cm108);
+  $("ptt_gpio-row").hidden = !cm108;
+  $("ptt_device").placeholder = !cm108 ? "(the device above)"
+    : found.length === 1 ? `(auto: ${found[0][0]})` : found.length ? `(${found.length} found: choose one)` : "(none found: /dev/hidrawN)";
+  $("ptt_device").title = cm108 ? (found.map(d => `${d[0]}: ${d[1]}`).join("\n") || "No CM108 sound interface is plugged in") : "";
   $("ptt_audio").disabled = !(method === "cat" && m && m[3]);
   $("record_dir").disabled = !$("record").checked;
   $("data-port").textContent = "data on " + (Number($("command_port").value) + 1);

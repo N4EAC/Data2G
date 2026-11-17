@@ -48,7 +48,8 @@ const char* USAGE =
     "                   [--rig-data-bits {default,7,8}] [--rig-stop-bits {default,1,2}]\n"
     "                   [--rig-parity {default,none,odd,even}] [--rig-handshake {default,none,xonxoff,hardware}]\n"
     "                   [--rig-dtr {default,high,low}] [--rig-rts {default,high,low}]\n"
-    "                   [--ptt-method {cat,dtr,rts,vox}] [--ptt-device DEVICE] [--ptt-audio {mic,data}]\n"
+    "                   [--ptt-method {cat,dtr,rts,cm108,vox}] [--ptt-device DEVICE] [--ptt-gpio N]\n"
+    "                   [--ptt-audio {mic,data}]\n"
     "                   [--rig-mode {none,usb,pkt_usb}] [--rig-timeout-ms MS] [--rig-retries N]\n"
     "                   [--rig-poll-interval S] [--rig-debug | --no-rig-debug]\n";
 
@@ -142,10 +143,13 @@ const char* HELP =
     "                        serial line settings; default: the model's\n"
     "  --rig-dtr, --rig-rts {default,high,low}\n"
     "                        hold a control line for the session (an interface powered from it)\n"
-    "  --ptt-method {cat,dtr,rts,vox}\n"
-    "                        cat: a CAT command; dtr/rts: a serial control line; vox: never key (the rig\n"
+    "  --ptt-method {cat,dtr,rts,cm108,vox}\n"
+    "                        cat: a CAT command; dtr/rts: a serial control line; cm108: a GPIO pin of a\n"
+    "                        CM108 USB sound interface (TOADs DI, DRA...; Linux); vox: never key (the rig\n"
     "                        keys on the audio) (default cat)\n"
-    "  --ptt-device DEVICE   the port whose DTR/RTS keys, if not --rig-device's\n"
+    "  --ptt-device DEVICE   dtr/rts: the port whose line keys, if not --rig-device's; cm108: its\n"
+    "                        /dev/hidrawN, if not the only CM108 plugged in\n"
+    "  --ptt-gpio N          cm108: the GPIO pin that keys, 1-8 (default 3)\n"
     "  --ptt-audio {mic,data}  the input CAT keying selects, on rigs with two (TS-480 and the like)\n"
     "                        (default mic)\n"
     "  --rig-mode {none,usb,pkt_usb}  set once the rig opens; none leaves it (default none)\n"
@@ -216,7 +220,7 @@ Args parse(int argc, char** argv, Args a, const char* prog, const char* extra_he
         {"--input-device", [&](auto&, auto& v) { a.input_device = v; }},
         {"--output-device", [&](auto&, auto& v) { a.output_device = v; }},
         {"--sample-rate", [&](auto& o, auto& v) { a.sample_rate = i_(o, v); }},
-        {"--output-volume", [&](auto& o, auto& v) { a.output_volume = d_(o, v); }},
+        {"--output-volume", [&](auto& o, auto& v) { a.output_volume = std::min(d_(o, v), 0.0); }},  // above 0 dB only clips
         {"--ptt-on-delay-ms", [&](auto& o, auto& v) { a.ptt_on_delay_ms = i_(o, v); }},
         {"--ptt-off-delay-ms", [&](auto& o, auto& v) { a.ptt_off_delay_ms = i_(o, v); }},
         {"--tx-lead-ms", [&](auto& o, auto& v) { a.tx_lead_ms = i_(o, v); }},
@@ -249,6 +253,7 @@ Args parse(int argc, char** argv, Args a, const char* prog, const char* extra_he
         {"--rig-rts", [&](auto&, auto& v) { a.rig_rts = v; }},
         {"--ptt-method", [&](auto&, auto& v) { a.ptt_method = v; }},
         {"--ptt-device", [&](auto&, auto& v) { a.ptt_device = v; }},
+        {"--ptt-gpio", [&](auto& o, auto& v) { a.ptt_gpio = i_(o, v); }},
         {"--ptt-audio", [&](auto&, auto& v) { a.ptt_audio = v; }},
         {"--rig-mode", [&](auto&, auto& v) { a.rig_mode = v; }},
         {"--rig-timeout-ms", [&](auto& o, auto& v) { a.rig_timeout_ms = i_(o, v); }},
@@ -257,7 +262,7 @@ Args parse(int argc, char** argv, Args a, const char* prog, const char* extra_he
     };
     // The flags on this command line that others depend on (value: the last one given).
     std::map<std::string, std::string> given;
-    static const std::set<std::string> tracked = {"--rig-model", "--rig-device", "--no-rig", "--ptt-device",
+    static const std::set<std::string> tracked = {"--rig-model", "--rig-device", "--no-rig", "--ptt-device", "--ptt-gpio",
                                                     "--record-dir", "--no-record"};
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -295,8 +300,10 @@ Args parse(int argc, char** argv, Args a, const char* prog, const char* extra_he
     if (given.count("--no-record") && given.count("--record-dir"))
         usage_error("--no-record with a directory to record to (--record-dir)", prog);
     if (given.count("--record-dir")) a.record = true;
-    if (given.count("--ptt-device") && a.ptt_method != "dtr" && a.ptt_method != "rts")
-        usage_error("--ptt-device is the port whose DTR or RTS keys: it needs --ptt-method dtr or rts, not " + a.ptt_method, prog);
+    if (given.count("--ptt-device") && a.ptt_method != "dtr" && a.ptt_method != "rts" && a.ptt_method != "cm108")
+        usage_error("--ptt-device is the port that keys: it needs --ptt-method dtr, rts or cm108, not " + a.ptt_method, prog);
+    if (given.count("--ptt-gpio") && a.ptt_method != "cm108")
+        usage_error("--ptt-gpio is the CM108's keying pin: it needs --ptt-method cm108, not " + a.ptt_method, prog);
     return a;
 }
 
@@ -331,6 +338,16 @@ E named(const std::array<rig::Named<E>, N>& table, const std::string& value) {
 
 }  // namespace
 
+// The PTT methods this platform can key with: CM108 is Linux only (Hamlib's
+// is a hidraw ioctl), so the GUI and web lists don't offer it elsewhere.
+std::vector<std::string> ptt_methods() {
+    std::vector<std::string> all = names(rig::PTT_METHOD_NAMES);
+#ifndef __linux__
+    all.erase(std::remove(all.begin(), all.end(), "cm108"), all.end());
+#endif
+    return all;
+}
+
 // The spellings are rig/config.hpp's name tables, in their order.
 const std::vector<std::string>& rig_choices(std::string_view field) {
     static const std::map<std::string, std::vector<std::string>, std::less<>> choices = {
@@ -340,7 +357,7 @@ const std::vector<std::string>& rig_choices(std::string_view field) {
         {"rig_handshake", names(rig::HANDSHAKE_NAMES)},
         {"rig_dtr", names(rig::LINE_STATE_NAMES)},
         {"rig_rts", names(rig::LINE_STATE_NAMES)},
-        {"ptt_method", names(rig::PTT_METHOD_NAMES)},
+        {"ptt_method", ptt_methods()},
         {"ptt_audio", names(rig::PTT_AUDIO_NAMES)},
         {"rig_mode", names(rig::RIG_MODE_NAMES)},
     };
@@ -360,6 +377,7 @@ rig::HamlibConfig hamlib_config(const Args& a) {
     h.rts = named(rig::LINE_STATE_NAMES, a.rig_rts);
     h.ptt_method = named(rig::PTT_METHOD_NAMES, a.ptt_method);
     h.ptt_device = a.ptt_device;
+    h.ptt_gpio = a.ptt_gpio;
     h.ptt_audio = named(rig::PTT_AUDIO_NAMES, a.ptt_audio);
     h.mode = named(rig::RIG_MODE_NAMES, a.rig_mode);
     h.timeout_ms = a.rig_timeout_ms;
@@ -379,12 +397,19 @@ bool list_rigs() {
 
 std::optional<std::string> check(const Args& a) {
     // Saved settings come through here too, so every value is checked, not only flags.
+#ifndef __linux__
+    // Hamlib's CM108 keying is a Linux hidraw ioctl; elsewhere it opens a path that isn't there.
+    if (a.rig && a.ptt_method == "cm108") return "--ptt-method cm108: only on Linux for now (choose cat, dtr, rts or vox)";
+#endif
     for (const auto& [flag, field, value] :
          {std::tuple{"--rig-data-bits", "rig_data_bits", &a.rig_data_bits}, {"--rig-stop-bits", "rig_stop_bits", &a.rig_stop_bits},
           {"--rig-parity", "rig_parity", &a.rig_parity}, {"--rig-handshake", "rig_handshake", &a.rig_handshake},
           {"--rig-dtr", "rig_dtr", &a.rig_dtr}, {"--rig-rts", "rig_rts", &a.rig_rts}, {"--ptt-method", "ptt_method", &a.ptt_method},
           {"--ptt-audio", "ptt_audio", &a.ptt_audio}, {"--rig-mode", "rig_mode", &a.rig_mode}}) {
-        const auto& c = rig_choices(field);
+        // Every PTT method name is valid (one this platform can't key with
+        // is refused above, when there's a rig); rig_choices is the menu.
+        static const std::vector<std::string> all_ptt = names(rig::PTT_METHOD_NAMES);
+        const auto& c = std::string_view(field) == "ptt_method" ? all_ptt : rig_choices(field);
         if (std::find(c.begin(), c.end(), *value) == c.end()) {
             std::string all;
             for (const auto& x : c) all += (all.empty() ? "" : ", ") + x;
@@ -392,6 +417,7 @@ std::optional<std::string> check(const Args& a) {
         }
     }
     if (a.rig_baud < 0) return "--rig-baud: must be 0 (the model's) or more";
+    if (a.ptt_gpio < 1 || a.ptt_gpio > rig::MAX_CM108_GPIO) return "--ptt-gpio: must be 1 to 8 (GPIO1-GPIO8)";
     if (a.rig_timeout_ms <= 0) return "--rig-timeout-ms: must be positive";
     if (a.rig_retries < 0) return "--rig-retries: must be 0 or more";
     if (a.rig_poll_interval < 0) return "--rig-poll-interval: must be 0 (key only) or more";

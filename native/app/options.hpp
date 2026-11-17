@@ -34,6 +34,7 @@ struct Args {
     std::string rig_data_bits = "default", rig_stop_bits = "default", rig_parity = "default",
                 rig_handshake = "default", rig_dtr = "default", rig_rts = "default";
     std::string ptt_method = "cat", ptt_device, ptt_audio = "mic";
+    int ptt_gpio = rig::DEFAULT_CM108_GPIO;  // --ptt-method cm108: the GPIO pin that keys
     std::string rig_mode = "none";
     int rig_timeout_ms = 1000, rig_retries = 1;
     double rig_poll_interval = 0.0;  // s; 0: key only (frequency not read)

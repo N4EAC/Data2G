@@ -134,6 +134,56 @@ void run(bool abort_midway) {
     }
 }
 
+// The output volume, changed while running (Station::update, as the settings dialog and the web UI do), and by
+// TXPOWER: each moves the next burst's peak by its dB.
+void volume() {
+    check::current_step = "output volume, live";
+    QTemporaryDir dir;
+    const std::string in = dir.filePath(QStringLiteral("in.f32")).toStdString();
+    const std::string out = dir.filePath(QStringLiteral("out.f32")).toStdString();
+    std::ofstream(in, std::ios::binary).close();
+
+    app::Args a{};
+    a.mycall = "N0TX";
+    a.audio_io = "pipe:" + in + "," + out;
+    a.rig = false;
+    a.command_port = free_port_triple();
+    a.kiss_port = a.command_port + 2;
+    app::Station st(a);
+    st.start();
+
+    QTcpSocket client;
+    client.connectToHost(QHostAddress::LocalHost, static_cast<quint16>(a.command_port));
+    check::is_true(client.waitForConnected(5000), "client connected");
+    client.write("LISTEN ON\r");
+    client.write("DATA2G ON\r");
+    std::size_t done = 0;
+    const auto burst_peak = [&](const char* what) {
+        client.write("CQFRAME N0TX 500\r");
+        check::is_true(wait_for([&] { return st.ptt(); }, 20000), std::string(what) + ": PTT up");
+        check::is_true(wait_for([&] { return !st.ptt(); }, 60000), std::string(what) + ": PTT down");
+        wait_for([] { return false; }, 300);  // the pipe thread writes its last period
+        const auto x = read_floats(out);
+        float peak = 0;
+        for (std::size_t i = done; i < x.size(); ++i) peak = std::max(peak, std::abs(x[i]));
+        done = x.size();
+        const double db = 20 * std::log10(std::max(peak, 1e-9f));
+        std::printf("  %s: peak %.2f dBFS\n", what, db);
+        return db;
+    };
+    const double p0 = burst_peak("0 dB");
+    app::Args b = st.args();
+    b.output_volume = -12.0;
+    check::is_true(st.update(b), "a volume change is live");
+    const double p1 = burst_peak("-12 dB live");
+    client.write("TXPOWER -6.0\r");
+    wait_for([] { return false; }, 300);
+    const double p2 = burst_peak("TXPOWER -6");
+    st.stop();
+    check::is_true(std::abs(p1 - p0 + 12) < 0.5, "a live -12 dB moves the peak 12 dB");
+    check::is_true(std::abs(p2 - p0 + 6) < 0.5, "TXPOWER -6 puts the peak 6 dB down");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -141,5 +191,6 @@ int main(int argc, char** argv) {
     check::Watchdog dog(300, "test_station_tx");
     run(false);
     run(true);
+    volume();
     return check::report("test_station_tx");
 }
