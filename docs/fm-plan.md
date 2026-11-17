@@ -130,7 +130,13 @@ Dependencies are named by ID. Sizes are rough new or changed lines of Python, na
 - Run today's ladder through M1's simulator, and on a real pair of FM radios through mic/speaker, with `sounding.py`.
 - Output: where each w48 mode fails against CNR, the SNR ceiling per radio path, and the CNR each VARA FM level needs if a licensed copy is at hand (the VARA Wine harness exists). Its rates are known (chart above); its thresholds are not.
 - Depends: M1 for the simulated half. The on-air half can start now.
-- Hardware: the maintainer has an IC-9700 (enough for M10's I/Q receive on air) but few 9600-capable radios. Volunteers with a pair of computer-connected VHF/UHF radios with flat, clean TX and RX audio are wanted for M0, M5 and M9.
+- Hardware (from the discussion, 2026-11-16), the maintainer's test set:
+  - IC-9700: narrow TX via USB, narrow RX via USB AF, wide RX via USB IF.
+  - TH-D75 with AIOC: narrow TX via AIOC, narrow RX via AIOC or USB AF, wide RX via USB IF.
+  - FT-8800R with DigiRig: wide TX and RX expected.
+  - UV-50X3: TX selectable 1200/9600 in a menu; whether its cable is wired to the RX1200 or RX9600 pin is to be checked.
+  - That covers narrow-narrow, wide-wide and the mixed cases the per-direction capability (M6) is for: two radios receive wide but transmit narrow. The USB IF receive paths are also the first on-air look at M10.
+  - Volunteers with more flat-port radios are still wanted for M5 and M9.
 - This sets the targets for M4 and M5. Until then "match VARA FM narrow" is a guess.
 
 ### M1. FM channel simulator (`data2g/fmchannel.py`, about 300 lines)
@@ -236,6 +242,13 @@ TX path setting (station, FM only, default mic; data2g-host / native --tx-path, 
 - Capability per direction (from the discussion): each station sets its TX capability and its RX capability separately (narrow or wide, and M2b's rate cap). A half-link's cap is the narrower of the sender's TX and the receiver's RX, so the two directions of a link can differ. Unlike HF's `BW`, which takes the lower of the two ends for the whole channel. Cases: a data cable rigged for 1200-style mic TX but a flat RX tap; an IC-9700 receiving wide over I/Q (M10) but transmitting narrow. The connect exchange carries both, and the gear shifter caps each direction's recommendations by its own.
 - Cliff behaviour: fast fall-back on the first lost codewords, fast climb when quieting returns. Judge by paired sessions on M1 with fading and with a CNR ramp through threshold, in dB of CNR where a rate is reached.
 - From the ladder measurements: mobile 10% knees run 7.5-44 dB and do not follow static (16-QAM r.47 beats QPSK r.60 on mobile on both radios), so mobile needs its own thresholds; f55 needs thresholds per TX path; f55 and f108 need band codes in the ARQ (none free while FM keeps CPM: drop CPM from FM per Q2). Mean BMI does not predict mobile knees (fade outage); judge mobile streamed.
+- Status 2026-11-16 (PR #214):
+  - Band set: FM's ARQ uses w, n10, f55, f108 (codes 0-3; caps 500 / NARROW 2700 / WIDE 5350 Hz). CPM, n4 and w48 stay compiled but are never selected or named on FM; the FM engine listens for the four only (listening CPU 5.7% -> 0.8% of a core on the dev machine). FM protocol 5; the ARQ session VERSION is unchanged, so HF sessions are unaffected.
+  - Thresholds: fitted per burst (10,636 bursts, every FM mode, both TX paths, five conditions): P(codeword) = sigmoid(ln 9 + k (snr_est - t - d * fading)), steady k 1.50/dB, fading k 0.51/dB and d +3.17 dB. snr_est puts mic and flat within about 1.3 dB, except f55 256-point r.80-r.88 (3.4-5.3 dB worse on mic: the limiter's distortion does not show in the pilots); the table takes the worse path. w and n10 measured on FM.
+  - Regime input: the spread over frames of the per-window noise (phy.n0_spread_db; medians static 0.35, flutter 0.27, slow fading 1.04, mobile 1.77 dB); fading at >= 1.0 dB over the peer's last 5 bursts. Doppler spread means nothing on FM.
+  - Band offsets (snr_est against f55's on the same channel): w +0.8, n10 -3.9, f108 -3.9 dB.
+  - Sessions (8 paired seeds, 120 s, against the provisional stand-in): mobile +0.25..+2.3 kbps, mic ramp +1.3 kbps, flutter level; losses on flat static CNR 10 (-0.9 kbps) and the flat ramp (-1.0), from one failed f108 64-point probe per session, and mic static CNR 8 (-0.4).
+  - Next: predict f108's SNR from the measured per-carrier noise (on flat the f^2 slope makes one constant offset wrong), cheaper band-change probes, then the peer's TX path in the capability exchange (FM-only) for f55's top rungs.
 - Depends: M4 and M5 ladders frozen (done, 2026-11-16), M2.
 
 ### M7. Station setup tools
@@ -357,6 +370,7 @@ Measurements that decide design:
 
 ## Revisions
 
+- 2026-11-16, M6: FM band set (w, n10, f55, f108), fitted thresholds, the noise-spread regime input, band offsets, session results; the test hardware from the discussion in M0.
 - 2026-11-16, M4/M5 ladders frozen (f55, f108; protocol 4), TX path setting, Q9 (tilt), TX clipping and mic drive measured, constellations kept, new LDPC sizes, FM spread prior 0.2 Hz.
 - 2026-11-16, Q8's pilot half measured (one in eleven: 64-point +0.2-0.4 dB for +9.1% rate, needs an FM spread prior; the prior alone 0.06-0.16 dB better).
 - 2026-11-16, Q8: the prefix stays at 2 ms.
