@@ -71,3 +71,29 @@ Notes:
 - The first version retried every failed slot on each window: 110-128 LDPC tries for 39 slots of a failing 256l burst, 4.4 s of CPU during a 5.6 s burst and feeds up to 904 ms. A slot that fails mid-burst now waits for the whole burst (its window's estimate barely changes meanwhile). That halved the CPU during the burst and kept the decodes.
 - The partial receives run on the engine's worker, not the audio thread; the longest (about 300 ms) is under the 1.15 s window.
 - Open: a failing burst still ends 0.85-1.57 s late, the final pass retrying the failures and spending the DD budget left.
+
+## The frozen FM ladders (f55, f108; 2026-11-17)
+
+TLDR: a Pi 4 keeps up with every FM rung: no rate cap is needed. f108's top rung (256-point r.87, 26 codewords, 25.1 kbps) is decoded 175-208 ms after its end; f55's top rungs 88-107 ms. Failing bursts end within 0.76-1.34 s. Listening with the FM engine's bands costs 5.1% of a core.
+
+Setup:
+- Raspberry Pi 4 (`minstrel`), FM build of fm-stream (FM protocol 5), pool of 2 threads, DD budget 1 s, best of 3, decoding while the burst arrives (and without, for comparison).
+- Bursts: `runs/pi_gen_fmladder.sh` (new `scripts/pi_genburst_fm.py`): the FM simulator at a station's fixed audio level, the sender's tx_path set by its radio; each top rung clean, just above its 10% static knee, and below it. Driver: `runs/pi_fmladder_run.sh`; raw output `runs/pi-fmladder/run.txt`.
+
+| burst | ok | end ms, early | end ms, no early | CPU during, early |
+|---|---|---|---|---|
+| f108-256l-r87, flat, CNR 35 / 25 | 26/26, 26/26 | 175 / 208 | 197 / 241 | 0.37 / 0.43 s |
+| f108-256l-r87, flat, CNR 21 (failing) | 0/26 | 1266 | 1209 | 1.23 s |
+| f108-256l-r87, mobile-rural, CNR 35 | 18/26 | 833 | 1206 | 0.81 s |
+| f108-256l-r80, flat, CNR 30 / 23 / 19 | 26, 26, 0 | 168 / 187 / 1340 | 189 / 214 / 1179 | |
+| f108-64l-r80, flat, CNR 30 / 17 / 13 | 26, 26, 0 | 99 / 121 / 1097 | 106 / 134 / 1115 | |
+| f55-256l-r88, mic, CNR 35 / 29 / 25 | 26, 26, 25 | 102 / 107 / 433 | 112 / 117 / 346 | |
+| f55-256l-r88, flat, CNR 30 / 17 / 13 | 26, 26, 0 | 90 / 103 / 845 | 98 / 113 / 1103 | |
+| f55-256l-r72, mic, CNR 30 / 17 / 13 | 26, 26, 0 | 88 / 106 / 884 | 99 / 128 / 1092 | |
+| f55-64l-r83, mic, CNR 30 / 13 / 9 | 13, 13, 0 | 58 / 71 / 757 | 64 / 80 / 1054 | |
+| f55-qpsk-r21, mic, CNR 10 | 6/6 | 39 | 40 | |
+
+Notes:
+- Listening (FM engine bands, 120 s of noise): 1009 us per 20 ms feed, 5.05% of a core; p99 feed 14 ms, max 18 ms. (M2b's w48-era figure was 17.3% with every band searched.)
+- Decoding while the burst arrives shortens every decodable burst by 6-30 ms on f55 and 7-33 ms on f108, and failing f55 bursts by 0.2-0.3 s. On failing f108 bursts it is 0.02-0.16 s slower (the windows' DD on 108 carriers), with feeds up to 0.6 s on the worker thread (each under its 1.15 s window).
+- The worst failing burst ends 1.34 s late, near TURN_S (1.3 s): a failing f108 top-rung burst can delay the reply by a fraction of a second. The gear shifter keeps such bursts rare; worth watching on air.
