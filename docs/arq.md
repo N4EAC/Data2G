@@ -891,15 +891,15 @@ off (Python and native) for A/B runs.
   value unknown.
 - **Measured** (shift+cpm, DATA2G_PEP_REF_DB=5, paired by seed against `DATA2G_KEEP=0`).
   Bulk (`scripts/loss_study.py`, 16 seeds x 300 s, delivered bps): awgn -10 +1.3% (SE
-  0.7; 3 seeds better, 0 worse), awgn -6 +3.9% (0.4; 16/0), awgn -4 +4.9% (0.7; 14/0),
-  awgn 5 +4.5% (16/0); mpp -6 +8.0% (5.8; 11/4), mpp -3 +6.6% (3.8; 11/4), mpp 0 +2.2%
-  (2.7; 9/3); mpd -6 -0.7% (2.7; 4/4), mpd -3 +4.0% (1.7; 10/4), mpd 0 -1.8% (3.5;
-  5/11). The steady cells gain; each fading cell is within about two SE. Besides the
+  0.7; 3 seeds better, 0 worse), awgn -6 +3.9% (0.3; 16/0), awgn -4 +4.9% (0.7; 14/0),
+  awgn 5 +4.5% (16/0); mpp -6 +6.3% (5.6; 10/4), mpp -3 +6.0% (3.9; 10/5), mpp 0 +2.6%
+  (2.5; 10/3); mpd -6 -0.7% (2.7; 4/4), mpd -3 +4.2% (2.0; 10/4), mpd 0 -2.0% (3.6;
+  5/10). The steady cells gain; each fading cell is within about two SE. Besides the
   shorter ACK, a data burst's control drops from two codewords to one, a data codeword
   more in the same burst. linksim winlink (`scripts/chat_probe.py`, 24 seeds x 900 s,
   per-seed mean latency of every message): awgn 10 -0.16 s (SE 0.05; 23/1), awgn -4
-  -2.65 s (0.41; 23/1), mpp 0 +0.14 s (0.66; 10/14), mpp -3 -2.90 s (1.72; 16/7), mpd
-  -3 -1.69 s (0.61; 17/5).
+  -2.65 s (0.41; 23/1), mpp 0 +0.57 s (0.59; 9/15), mpp -3 -2.72 s (1.54; 16/6), mpd
+  -3 -2.15 s (0.65; 18/5).
 
 ## 9. Host interface (VARA-style TCP)
 
