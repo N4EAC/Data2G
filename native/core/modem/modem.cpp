@@ -823,14 +823,50 @@ Mat<cd> pilot_fold(std::span<const cd* const> D_rows, size_t t0, size_t mm) {
 }
 }  // namespace
 
-Presence pilot_presence(std::span<const cd* const> D_rows, size_t dcols, double level, int64_t window) {
+void FoldTrack::acc(std::span<const cd* const> D_rows, int64_t a, int64_t u0, int64_t u1, bool add) {
+    const int64_t F = FRAME_SAMPLES;
+    for (int64_t u = u0; u < u1;) {
+        const int64_t q = u % F, k = std::min(u1 - u, F - q);
+        for (size_t f = 0; f < D_rows.size(); ++f) {
+            cd* r = R_[f] + q;
+            const cd* d = D_rows[f] + (u - a);
+            if (add)
+                for (int64_t i = 0; i < k; ++i) r[i] += d[i];
+            else
+                for (int64_t i = 0; i < k; ++i) r[i] -= d[i];
+        }
+        u += k;
+    }
+}
+
+const Mat<cd>& FoldTrack::fold(std::span<const cd* const> D_rows, size_t dcols, int64_t a, int64_t lo, int64_t hi) {
+    if (!have_ || n_ >= RENEW || !(lo_ <= lo && lo <= hi_ && hi_ <= hi) || lo_ < a ||
+        hi > a + static_cast<int64_t>(dcols)) {
+        R_ = Mat<cd>(D_rows.size(), FRAME_SAMPLES);
+        acc(D_rows, a, lo, hi, true);
+        have_ = true;
+        n_ = 0;
+    } else {
+        acc(D_rows, a, hi_, hi, true);
+        acc(D_rows, a, lo_, lo, false);
+        ++n_;
+    }
+    lo_ = lo;
+    hi_ = hi;
+    return R_;
+}
+
+Presence pilot_presence(std::span<const cd* const> D_rows, size_t dcols, double level, int64_t window,
+                        FoldTrack* track, int64_t a) {
     Presence out;
     const auto cols = static_cast<int64_t>(dcols) + static_cast<int64_t>(COPY_PAIRS) * FRAME_SAMPLES;  // outputs
     const int64_t W = std::min<int64_t>(cols, window);
     if (W < static_cast<int64_t>(COPY_PAIRS + 1) * FRAME_SAMPLES) return out;
     const int64_t m = (W - static_cast<int64_t>(COPY_PAIRS) * FRAME_SAMPLES) / FRAME_SAMPLES;
     const size_t FR = FRAME_SAMPLES;
-    const Mat<cd> fold = pilot_fold(D_rows, static_cast<size_t>(cols - W), static_cast<size_t>(m));
+    Mat<cd> own;
+    if (!track) own = pilot_fold(D_rows, static_cast<size_t>(cols - W), static_cast<size_t>(m));
+    const Mat<cd>& fold = track ? track->fold(D_rows, dcols, a, a + cols - W, a + cols - W + m * FRAME_SAMPLES) : own;
     std::vector<double> mag(FR, -equalizer::INF);
     for (size_t f = 0; f < D_rows.size(); ++f)
         for (size_t ph = 0; ph < FR; ++ph) mag[ph] = std::max(mag[ph], std::abs(fold[f][ph]));
@@ -867,7 +903,7 @@ std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, 
 
 std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, const Accept* accept,
                               std::span<const cd* const> D_rows, size_t dcols, std::optional<double> level,
-                              double* peak) {
+                              double* peak, const Mat<cd>* fold_in) {
     const auto& b = waveform::band(band);
     const auto z0 = waveform::to_baseband(x);
     const auto freqs = waveform::cfo_grid();
@@ -888,7 +924,9 @@ std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, 
     const int64_t m = static_cast<int64_t>(dcols) / FRAME_SAMPLES;
     if (m < 1) return std::nullopt;
     const size_t FR = FRAME_SAMPLES;
-    const Mat<cd> fold = pilot_fold(D_rows, 0, static_cast<size_t>(m));
+    Mat<cd> own;
+    if (!fold_in) own = pilot_fold(D_rows, 0, static_cast<size_t>(m));
+    const Mat<cd>& fold = fold_in ? *fold_in : own;
     std::vector<double> mag(FR, -equalizer::INF);
     for (size_t f = 0; f < F; ++f)
         for (size_t ph = 0; ph < FR; ++ph) mag[ph] = std::max(mag[ph], std::abs(fold[f][ph]));

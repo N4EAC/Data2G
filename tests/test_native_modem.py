@@ -314,3 +314,18 @@ def test_demodulate_matches(native, py):
     y = _burst("w48-qpsk-r1/3", 4, 1.0, "mpp", seed=6)
     b, n = py.demodulate(y), native.modem.demodulate(y)
     assert n[0] == b.submode.name and n[1] == b.payloads and n[2] == b.crc_ok and n[4] == b.preamble_start
+
+
+def test_fold_track_matches(native):
+    """The running fold: the same adds and subtractions in the same order,
+    so the same sums bit for bit."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from test_modem import _fold_walk
+
+    D, steps = _fold_walk(4)
+    a_py, a_n = modem.FoldTrack(), native.modem.FoldTrack()
+    for a, lo, hi in steps:
+        np.testing.assert_array_equal(a_n.fold(D[:, a:], a, lo, hi), a_py.fold(D[:, a:], a, lo, hi))

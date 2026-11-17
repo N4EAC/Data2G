@@ -865,14 +865,15 @@ COPY_DETECT = 14.0
 
 
 def find_copy(x: np.ndarray, band: str, accept: Accept | None = None, C: np.ndarray | None = None,
-              level: float | None = None, D: np.ndarray | None = None) -> Lock | None:
+              level: float | None = None, D: np.ndarray | None = None, fold: np.ndarray | None = None) -> Lock | None:
     """A burst in real audio `x` found from its frame pilots and header copy
     alone (the preamble and first header lost): a Lock with "copy" (what
     receive() needs to rebuild the header), or None. The burst
     may run past the end of x. `C`, `level`: the preamble matched filter's
     outputs for x's starts (sync.StreamDetector.C) and noise level, if a
     stream has them; computed here otherwise. `D`: their pair_products
-    (StreamDetector.products_from), instead of C.
+    (StreamDetector.products_from), instead of C. `fold`: step 1's fold of
+    D's whole frames, if kept running (FoldTrack.fold, rolled to D's start).
 
     1. The matched filter's outputs one frame apart, correlated as the
        preamble's are one repeat apart (the frame pilot is the preamble's
@@ -902,7 +903,8 @@ def find_copy(x: np.ndarray, band: str, accept: Accept | None = None, C: np.ndar
     m = D.shape[1] // FRAME_SAMPLES
     if m < 1:
         return None
-    fold = _pilot_fold(D, 0, m)
+    if fold is None:
+        fold = _pilot_fold(D, 0, m)
     mag = np.abs(fold).max(axis=0)
     # on noise each product's magnitude is about the level, and the m x
     # COPY_PAIRS of them add at random: the header reads (nearly all of the
@@ -951,6 +953,54 @@ def _pilot_fold(D: np.ndarray, t0: int, m: int) -> np.ndarray:
     return D[:, t0:t0 + m * FRAME_SAMPLES].reshape(len(D), m, FRAME_SAMPLES).sum(axis=1)
 
 
+class FoldTrack:
+    """_pilot_fold kept running over a window of a stream's pair products
+    that slides forward (the receiver's search hops): per CFO bin and
+    absolute frame phase (stream index mod FRAME_SAMPLES), the window's sum.
+    Each fold() adds the products that entered the window and subtracts
+    those that left, in stream order, a frame phase's run at a time;
+    every RENEW folds, or when the window moves any other way, it is
+    summed afresh (the subtractions' rounding doesn't build up)."""
+
+    RENEW = 64
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.R = None
+        self.lo = self.hi = 0  # the window summed: stream starts [lo, hi)
+        self.n = 0  # folds since the last fresh sum
+
+    def _acc(self, D: np.ndarray, a: int, u0: int, u1: int, sign: int):
+        F, u = FRAME_SAMPLES, u0
+        while u < u1:
+            q = u % F
+            k = min(u1 - u, F - q)
+            if sign > 0:
+                self.R[:, q:q + k] += D[:, u - a:u - a + k]
+            else:
+                self.R[:, q:q + k] -= D[:, u - a:u - a + k]
+            u += k
+
+    def fold(self, D: np.ndarray, a: int, lo: int, hi: int) -> np.ndarray:
+        """The window [lo, hi) of stream starts (D: pair products from
+        stream start a, covering it), summed by frame phase: R[:, q] for
+        absolute phase q. np.roll(R, -(lo % FRAME_SAMPLES), axis=1) is
+        _pilot_fold's from lo."""
+        if (self.R is None or self.n >= self.RENEW or not self.lo <= lo <= self.hi <= hi or self.lo < a
+                or hi > a + D.shape[1]):
+            self.R = np.zeros((len(D), FRAME_SAMPLES), dtype=np.complex128)
+            self._acc(D, a, lo, hi, 1)
+            self.n = 0
+        else:
+            self._acc(D, a, self.hi, hi, 1)
+            self._acc(D, a, self.lo, lo, -1)
+            self.n += 1
+        self.lo, self.hi = lo, hi
+        return self.R
+
+
 # Receiver.data2g_on_air's OFDM rule (pilot_present, scripts/presence_study.py,
 # 2026-11-17): the fold's contrast at least PRESENCE_CONTRAST[m - PRESENCE_MIN_M]
 # over m frames, the last entry past the table (noise passes 2e-4 of search
@@ -964,31 +1014,37 @@ PRESENCE_CONTRAST = (4.9, 4.9, 4.9, 4.75, 4.35, 4.25, 4.05, 3.9)
 PRESENCE_MIN_M = 2
 
 
-def pilot_present(D: np.ndarray, level: float, window: int) -> bool:
+def pilot_present(D: np.ndarray, level: float, window: int, track: FoldTrack | None = None, a: int = 0) -> bool:
     """pilot_presence's verdict over the newest `window` outputs (fewer when
     there are fewer: the threshold rises as the window shrinks)."""
     m = (min(D.shape[1] + COPY_PAIRS * FRAME_SAMPLES, window) - COPY_PAIRS * FRAME_SAMPLES) // FRAME_SAMPLES
     if m < PRESENCE_MIN_M:
         return False
-    peak, contrast = pilot_presence(D, level, window)
+    peak, contrast = pilot_presence(D, level, window, track, a)
     return peak >= PRESENCE_PEAK and contrast >= PRESENCE_CONTRAST[min(m - PRESENCE_MIN_M, len(PRESENCE_CONTRAST) - 1)]
 
 
-def pilot_presence(D: np.ndarray, level: float, window: int) -> tuple[float, float]:
+def pilot_presence(D: np.ndarray, level: float, window: int, track: FoldTrack | None = None,
+                   a: int = 0) -> tuple[float, float]:
     """Is a burst of this sync band on the air in the newest `window`
     matched filter outputs (`D`: their pair_products, as a StreamDetector's
     products_from; `level` their noise level), its header heard or not? -> (peak, contrast): find_copy's
     normalized frame-pilot fold peak over the window, and the peak over
     the fold's median over frame phases. A burst's pilots fold to one
     phase (a CP's spread); a tone or a key-down folds as high at every
-    phase."""
+    phase. `track`: the fold kept running (D from stream start `a`); a
+    fold's phases in any rotation give the same peak and contrast."""
     P = COPY_PAIRS
     n = D.shape[1] + P * FRAME_SAMPLES  # the outputs D was made from
     W = min(n, window)
     m = (W - P * FRAME_SAMPLES) // FRAME_SAMPLES
     if m < 1:
         return 0.0, 0.0
-    mag = np.abs(_pilot_fold(D, n - W, m)).max(axis=0)
+    if track is None:
+        fold = _pilot_fold(D, n - W, m)
+    else:
+        fold = track.fold(D, a, a + n - W, a + n - W + m * FRAME_SAMPLES)
+    mag = np.abs(fold).max(axis=0)
     return float(mag.max() / (level * np.sqrt(m * P))), float(mag.max() / (np.median(mag) + 1e-300))
 
 

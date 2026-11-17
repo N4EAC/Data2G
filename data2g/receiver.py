@@ -325,6 +325,8 @@ class Receiver:
 
         # each band's detection statistic, computed once per sample (not per search)
         self.detectors = {b: sync.StreamDetector(ofdm.band(b)) for b in self.bands}
+        # per band, find_copy's fold and data2g_on_air's, kept running (modem.FoldTrack)
+        self.folds = {b: (modem.FoldTrack(), modem.FoldTrack()) for b in self.bands}
         self.blanker = audio.Blanker() if blank else None
         self.sense = False  # read data2g_on_air (arq.engine turns it on; offline searches leave it off)
         self.reset()
@@ -368,6 +370,9 @@ class Receiver:
             d.reset()
         for t in getattr(self, "tracks", ()):
             t.reset()
+        for pair in getattr(self, "folds", {}).values():
+            for f in pair:
+                f.reset()
 
     def expect(self, grids, lo: int, hi: int, cfo: float):
         """The expected slot (docs/arq.md §3a): a burst of one of these CPM
@@ -473,7 +478,7 @@ class Receiver:
                 continue
             a, D = d.products_from(start, modem.FRAME_SAMPLES, modem.COPY_PAIRS)
             D = D[:, :max(0, self.off + len(self.buf) - a - modem.M + 1 - modem.COPY_PAIRS * modem.FRAME_SAMPLES)]
-            if modem.pilot_present(D, level, int(self.PRESENCE_S * FS)):
+            if modem.pilot_present(D, level, int(self.PRESENCE_S * FS), self.folds[band][1], a):
                 log.debug("data2g on air: %s pilots", band)
                 self._present = True
                 return
@@ -680,7 +685,12 @@ class Receiver:
             a, D = d.products_from(self.off, modem.FRAME_SAMPLES, modem.COPY_PAIRS)
             x = self.buf[a - self.off:]
             D = D[:, :max(0, len(x) - modem.M + 1 - modem.COPY_PAIRS * modem.FRAME_SAMPLES)]
-            lock = modem.find_copy(x, band, self.accept, level=level, D=D)
+            m = D.shape[1] // modem.FRAME_SAMPLES
+            fold = None
+            if m >= 1:
+                R = self.folds[band][0].fold(D, a, a, a + m * modem.FRAME_SAMPLES)
+                fold = np.roll(R, -(a % modem.FRAME_SAMPLES), axis=1)
+            lock = modem.find_copy(x, band, self.accept, level=level, D=D, fold=fold)
             if lock is not None and (best is None or lock["score"] > best[0]["score"]):
                 best = (lock, a - self.off)
         if best is None:

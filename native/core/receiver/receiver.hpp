@@ -169,6 +169,7 @@ private:
     struct Detector {
         std::string_view band;
         waveform::StreamDetector d;
+        modem::FoldTrack copy_fold, presence_fold;  // find_copy's and data2g_on_air's, kept running
     };
     struct Stats {  // per band, the statistic for buf[w0:]'s starts
         std::vector<Mat<double>> mats;

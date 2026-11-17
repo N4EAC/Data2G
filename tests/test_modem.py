@@ -291,3 +291,31 @@ def test_find_copy_on_audio_shorter_than_its_pairs():
     rng = np.random.default_rng(1)
     for n in (1000, 3000):
         assert modem.find_copy(rng.normal(size=n), "w") is None
+
+
+def _fold_walk(seed):
+    """Pair products with bursts 40 dB up, and windows that mostly slide
+    forward (the receiver's hops), sometimes jump back, change length."""
+    F = modem.FRAME_SAMPLES
+    rng = np.random.default_rng(seed)
+    D = (rng.normal(size=(25, 60 * F)) + 1j * rng.normal(size=(25, 60 * F))) * np.where(
+        rng.random(60 * F) < 0.3, 100.0, 1.0)
+    lo, steps = 0, []
+    for _ in range(300):
+        m = int(rng.integers(2, 10))
+        lo = (min(lo + int(rng.integers(0, 2500)), 60 * F - m * F) if rng.random() > 0.05
+              else int(rng.integers(0, 50 * F)))
+        steps.append((max(0, lo - int(rng.integers(0, 3 * F))), lo, lo + m * F))
+    return D, steps
+
+
+def test_fold_track_is_the_fold_of_its_window():
+    """modem.FoldTrack, kept running (adds, subtractions, fresh sums every
+    RENEW), rolled to its window's start: _pilot_fold's, to rounding."""
+    F = modem.FRAME_SAMPLES
+    D, steps = _fold_walk(3)
+    t = modem.FoldTrack()
+    for a, lo, hi in steps:
+        R = t.fold(D[:, a:], a, lo, hi)
+        ref = modem._pilot_fold(D, lo, (hi - lo) // F)
+        np.testing.assert_allclose(np.roll(R, -(lo % F), axis=1), ref, rtol=0, atol=1e-12 * np.abs(ref).max())

@@ -344,17 +344,19 @@ void bind_modem(py::module_& m) {
     }, py::arg("x"), py::arg("lock"), py::arg("n_max") = 8, py::arg("latest") = false, py::arg("pattern") = false);
     d.def("find_copy", [](const In<double>& x, const std::string& band, const py::object& accept,
                           const std::optional<In<cd>>& C, std::optional<double> level,
-                          const std::optional<In<cd>>& D) {
+                          const std::optional<In<cd>>& D, const std::optional<In<cd>>& fold) {
         const auto a = accept_of(accept);
-        std::optional<Mat<cd>> c, dm;
+        std::optional<Mat<cd>> c, dm, fm;
         if (C) c = mat(*C);
         if (D) dm = mat(*D);
+        if (fold) fm = mat(*fold);
         double peak = std::numeric_limits<double>::quiet_NaN();
         std::optional<mo::Lock> l;
         {
             py::gil_scoped_release nogil;
             if (dm) {  // the pair products (modem.find_copy's D)
-                l = mo::find_copy(view(x), band_view(band), a ? &*a : nullptr, dm->row_ptrs(), dm->cols, level, &peak);
+                l = mo::find_copy(view(x), band_view(band), a ? &*a : nullptr, dm->row_ptrs(), dm->cols, level, &peak,
+                                  fm ? &*fm : nullptr);
             } else {
                 l = mo::find_copy(view(x), band_view(band), a ? &*a : nullptr, c ? &*c : nullptr, level, &peak);
             }
@@ -362,7 +364,14 @@ void bind_modem(py::module_& m) {
         return py::make_tuple(l ? py::object(lock_dict(*l)) : py::object(py::none()),
                               std::isnan(peak) ? py::object(py::none()) : py::object(py::float_(peak)));
     }, py::arg("x"), py::arg("band"), py::arg("accept") = py::none(), py::arg("C") = py::none(),
-       py::arg("level") = py::none(), py::arg("D") = py::none());
+       py::arg("level") = py::none(), py::arg("D") = py::none(), py::arg("fold") = py::none());
+    py::class_<mo::FoldTrack>(d, "FoldTrack")
+        .def(py::init<>())
+        .def("reset", &mo::FoldTrack::reset)
+        .def("fold", [](mo::FoldTrack& t, const In<cd>& D, std::int64_t a, std::int64_t lo, std::int64_t hi) {
+            const auto c = mat(D);
+            return np(t.fold(c.row_ptrs(), c.cols, a, lo, hi));
+        });
     d.def("pilot_presence", [](const In<cd>& D, double level, std::int64_t window) {
         const auto c = mat(D);
         const auto p = mo::pilot_presence(c.row_ptrs(), c.cols, level, window);
