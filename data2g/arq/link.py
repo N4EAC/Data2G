@@ -516,7 +516,7 @@ class Station:
     _peer_next: int | None = None
     _repeated: bool = False
     _asked_dup: bool = False  # my latest burst carried T_DUPCTL
-    _asked: tuple = (None, None)  # my latest build's recommendations: the peer's data mode, its reply mode
+    _asked: tuple = (None, None)  # my latest build's recommendations as the peer has them: its data mode, its reply mode
     _last_stream: bytes = b""  # the control stream _read_control read last
     _primed_ctl: bool = False  # ... and only a primed retry read it
     _answered: bool = False  # answered() since the last burst handled: a repeat of it means my reply was lost
@@ -598,7 +598,6 @@ class Station:
         if not self._data_allowed(fresh, submode):
             max_cw = 0  # control only
         rec, hint, reply = self.policy.recommend(self)  # what the peer should send me next (§8)
-        self._asked = (rec, reply)
         ext, reply_same = self._control_tlvs(bn, reply)
         core = F.Core(ftype=F.ARQ if fresh else F.PROBE, burst_seq=bn % F.BURST_MOD, acted_on=self._acted_on,
                       cum=self.rx.cum % SEQ_MOD, reply_lost=self.reply_lost, recommend=rec, size_hint=hint)
@@ -670,6 +669,7 @@ class Station:
         else:  # left out: none to a peer that does not keep it yet; shed while it does, it keeps its last
             said = _UNKNOWN if self._keeping else None
         self._reply_by_bn[bn] = said
+        self._asked = (rec, None if said == _UNKNOWN else said)  # (no reply mode to expect that the peer does not hold)
         if self._peer_said_keep:
             self._keep_acks.add(bn)  # it acts on a peer burst that carried T_KEEP
         if self._peer_acked_keep:
@@ -1298,8 +1298,10 @@ class Station:
             # unknown, 6 bits (at code level 0.0-0.2 dB on a CPM control)
             recommend=(0, 0),
             size_hint=(self.peer_size_hint, 3 if base else 0))
-        # (T_NODS: sent until I acted on it, so mostly as last time)
-        common = [(t, pe[t], b"\xff" * len(pe[t])) for t in (F.T_CHAT, F.T_DUPCTL, F.T_NODS, F.T_KEEP) if t in pe]
+        # (T_NODS, T_KEEP: sent until I acted on it, so mostly as last time. T_KEEP no more
+        # once the peer has acted on that, _keep_seen: its last control of this kind may be older)
+        common = [(t, pe[t], b"\xff" * len(pe[t])) for t in (F.T_CHAT, F.T_DUPCTL, F.T_NODS, F.T_KEEP)
+                  if t in pe and not (t == F.T_KEEP and self._keep_seen)]
         # T_REPLY, a recommendation: as last time (80% of them at the floor; its
         # bits sit on weak polar positions, where 6 unknown cost 1-2 dB)
         # (not from a peer that keeps it, T_KEEP: it says T_REPLY only when it changes)

@@ -271,7 +271,7 @@ public:
     std::optional<std::int64_t> peer_next_;
     bool repeated_ = false;
     bool asked_dup_ = false;
-    std::pair<std::optional<int>, std::optional<int>> asked_;  // my latest build's recommendations: data, reply
+    std::pair<std::optional<int>, std::optional<int>> asked_;  // my latest build's recommendations as the peer has them: data, reply
     // The modes the peer's next burst likely comes in (link.Station.expected_modes).
     std::vector<std::string> expected_modes() const;
     Bytes last_stream_;  // the control stream read_control read last

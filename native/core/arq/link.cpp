@@ -374,7 +374,6 @@ TxBurstPtr Station::build(bool fresh, bool nod_ok) {
     const auto r = policy->recommend(*this);
     const int rec = r ? r->rec : 0, hint = r ? r->hint : 1;
     const std::optional<int> reply = r ? r->reply : std::nullopt;
-    asked_ = {rec, reply};
     auto [ext, reply_same] = control_tlvs(bn, reply);
     Core core;
     core.ftype = fresh ? ARQ : PROBE;
@@ -465,6 +464,7 @@ TxBurstPtr Station::build(bool fresh, bool nod_ok) {
     int said = reply_same ? (reply ? *reply : REPLY_NONE) : keeping() ? REPLY_UNKNOWN : REPLY_NONE;
     if (auto e = ext.find(T_REPLY); e != ext.end()) said = e->second.empty() ? REPLY_NONE : e->second[0];
     reply_by_bn_[bn] = said;
+    asked_ = {rec, said >= 0 ? std::optional<int>(said) : std::nullopt};  // (no reply mode to expect that the peer does not hold)
     if (peer_said_keep_) keep_acks_.insert(bn);    // it acts on a peer burst that carried T_KEEP
     if (peer_acked_keep_) keep_acks2_.insert(bn);  // ... on one that acted on a T_KEEP of mine
     Control control{core, ext};
@@ -1086,9 +1086,11 @@ std::vector<Station::Way> Station::variants(bool data, int n_cw, int ctl_slots, 
     c[F_REC] = {0, 0};  // the peer's recommendation moves with every measurement: unknown
     c[F_HINT] = {peer_size_hint, base ? 3 : 0};
     std::vector<Tlv> common;
-    // (T_NODS: sent until I acted on it, so mostly as last time)
+    // (T_NODS, T_KEEP: sent until I acted on it, so mostly as last time. T_KEEP no more once the peer has
+    // acted on that, keep_seen_: its last control of this kind may be older)
     for (int t : {T_CHAT, T_DUPCTL, T_NODS, T_KEEP})
-        if (auto e = pe.find(t); e != pe.end()) common.push_back({t, e->second, Bytes(e->second.size(), 0xFF)});
+        if (auto e = pe.find(t); e != pe.end() && !(t == T_KEEP && keep_seen_))
+            common.push_back({t, e->second, Bytes(e->second.size(), 0xFF)});
     // T_REPLY, a recommendation: as last time
     // (not from a peer that keeps it, T_KEEP: it says T_REPLY only when it changes)
     if (auto e = pe.find(T_REPLY); e != pe.end() && e->second.size() == 1 && !peer_keeping())

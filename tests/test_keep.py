@@ -321,3 +321,45 @@ def test_primed_hypotheses_leave_t_reply_out_first_once_kept():
     assert F.T_REPLY not in exts[0] and any(F.T_REPLY in e for e in exts[1:3]), exts
     assert len(hs) <= L.PRIME_TRIES
 
+
+
+def test_primed_hypotheses_drop_t_keep_once_the_peer_has_stopped():
+    """The peer's last data burst came in the handshake and carried T_KEEP. Its
+    next comes after it stopped saying it: no hypothesis has one."""
+    a, b = _pair(CPM, CPM)
+    a.policy.reply, b.policy.reply = 3, 7
+    a.write(bytes(range(1, 31)))
+    burst, sender, receiver = a.build(), a, b
+    assert F.T_KEEP in _whole(burst).ext and len(burst.slots) == 2
+    for _ in range(8):
+        assert receiver.handle(FullRx(burst))
+        burst, sender, receiver = receiver.build(), receiver, sender
+        sender.answered()
+        assert len(burst.slots) == 1
+    assert sender is a and a._keeping and b._keeping
+
+    class Rx:
+        submode, n_cw, n_ctl_slots = CPM, 2, 1
+
+    hs = b.expect(Rx())
+    assert hs and not any(F.T_KEEP in F.Control.unpack([t]).ext for t, *_ in hs)
+
+
+@pytest.mark.parametrize("mode,left", [(ACK, "swapped"), (CPM, "shed")])
+def test_expected_modes_leave_out_a_reply_mode_never_said(mode, left):
+    """The expected reply slot listens for the reply mode I recommended only where
+    the control said it: not where T_KEEP took T_REPLY's place, nor where it was shed."""
+    if left == "swapped":
+        a, b = _pair()
+        a.policy.reply = 3
+        x = a.build()
+        assert F.T_KEEP in _whole(x).ext and F.T_REPLY not in _whole(x).ext
+        assert "3" not in a.expected_modes()
+        return
+    a, b = _kept_pair()
+    assert "3" in a.expected_modes()  # kept: as said last
+    a.policy.reply = 5
+    a.write(bytes(range(1, 10)))
+    x = a.build()
+    assert F.T_INLINE in _whole(x).ext and F.T_REPLY not in _whole(x).ext
+    assert not {"3", "5"} & set(a.expected_modes())
