@@ -262,8 +262,13 @@ def test_buffer_credit_caps_or_disables_the_next_burst_allowance():
         assert f"BUFFER {expect}" in h.out_cmd
 
 
+# "arrives" on FM: 16 dB. FM's predictor moves a reading across bands by
+# offsets measured on the FM channel (discriminator noise: an n10 burst reads
+# 3.9 dB under f55's, predictor.FM_BAND_OFFSET_DB); on this flat AWGN audio
+# they read alike, so the first f55 burst after an n10 connect is 3.9 dB
+# optimistic and did not arrive at 12. tests/test_fm_session.py runs the FM channel.
 @pytest.mark.parametrize("data2g", [False, True])
-@pytest.mark.parametrize("snr", [12, 6])
+@pytest.mark.parametrize("snr", [12 if PROFILE == "hf" else 16, 6])
 def test_cleantxbuffer_mid_burst(data2g, snr):
     """CLEANTXBUFFER while the first data burst is on air: it arrives (12
     dB) or doesn't (6). VARA's replies and BUFFER 0 at once for a VARA
@@ -314,14 +319,14 @@ def test_cleantxbuffer_mid_burst(data2g, snr):
     pump()
     assert a.engine.session.state == S.CONNECTED
     if not data2g:
-        assert bytes(got) == up[:len(got)] and bool(got) == (snr == 12)
+        assert bytes(got) == up[:len(got)] and bool(got) == (snr > 6)
     settled = [x.split() for x in a.out_cmd if x.startswith("CLEANTXBUFFER SETTLED")]
     if data2g:
         drop_from, drop_to, lf, lt = map(int, reply[2:])
         assert drop_to == 19000 and lf < lt == drop_from
         assert len(settled) == 1 and len(settled[0]) == 5
         f, split, t = map(int, settled[0][2:])
-        assert (f, t) == (lf, lt) and split == (lt if snr == 12 else lf) and bytes(got) == up[:split] + up[19000:]
+        assert (f, t) == (lf, lt) and split == (lt if snr > 6 else lf) and bytes(got) == up[:split] + up[19000:]
     else:
         assert not settled
 
@@ -702,7 +707,8 @@ def test_bcast_commands_and_statuses():
     thr = [ln.split() for ln in h.out_cmd[len(lines) + 1:-1]]
     assert [t[:2] for t in thr] == [["THRESHOLD", n] for n in lines]
     assert all(tuple(99.0 if v == "-" else float(v) for v in t[2:]) == MODE_THRESHOLDS[t[1]] for t in thr)
-    assert "-" in {v for t in thr for v in t[2:]}  # the 99 mapping is exercised
+    if any(99.0 in MODE_THRESHOLDS[t[1]] for t in thr):  # the 99 mapping is exercised (FM's fitted table has none)
+        assert "-" in {v for t in thr for v in t[2:]}
     h.client_gone()
     assert list(link.ports) == [0] and (link.ports[0].mode, link.ports[0].auto, link.ports[0].dup) == (BROADCAST[2],
                                                                                                        False, False)

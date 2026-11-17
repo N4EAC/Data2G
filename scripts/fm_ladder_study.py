@@ -30,9 +30,15 @@ FM_RX_UNCLIPPED=1: on the flat path, the receiver assumes no clipping from
 constants (what is actually sent).
 """
 
+import os
+
+# before numpy (and torch, via fm_ladder_screen): one BLAS thread per worker;
+# unset, each worker took about 4 cores on a shared machine
+for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_v, "1")
+
 import argparse
 import csv
-import os
 import sys
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -44,8 +50,9 @@ import fm_spacing_study as S
 import fm_tx as T
 
 OUT = S.ROOT / "runs" / "fm_ladder"
-LO, HI, STEP = -2.0, 44.0, 0.25
+LO, HI, STEP = float(os.environ.get("FM_LADDER_LO", "-2.0")), 44.0, 0.25  # FM_LADDER_LO: the floor rungs knee lower
 LEVELS = (0.1, 0.01)
+STATION_DRIVE = {"mic": 1460.0, "flat": 2350.0}  # rms Hz: a station's audio level (knees())
 
 
 def spec_of(name: str):
@@ -100,9 +107,7 @@ def knees(args) -> dict:
 
     spec = spec_of(name)
     c, mhz = (cond.split("@") + ["146"])[:2]
-    from data2g import constellation
-
-    from data2g import config
+    from data2g import config, constellation
 
     _, x = burst(spec, 0, radio)
     bits = constellation.bits_per_symbol(constellation.load(spec.constellation))
@@ -111,7 +116,15 @@ def knees(args) -> dict:
     # the station's level: FmChannel scales each burst to its own rms, so a mode
     # sent quieter (FM_MIC_GAIN) deviates that much less than the width-limited drive
     gain = config.FM_MIC_GAIN[bits] if tx_path(radio) == "mic" else 1.0
-    drive = F.drive_for_bandwidth(x[np.abs(x) > 0], S.radio_of(radio), S.OBW_HZ)[0] * gain * T.drive_scale(radio, bits)
+    if spec.band in ("f55", "f108"):
+        level = F.drive_for_bandwidth(x[np.abs(x) > 0], S.radio_of(radio), S.OBW_HZ)[0]
+    else:
+        # w and n10 (FM's floor and ACK rungs): a narrow burst's own width limit
+        # would allow far more drive than the station's one audio level, set by
+        # its f55/f108 modes (runs/fm_ladder/shipped.csv: 1455-1467 Hz on mic,
+        # 2309-2426 on flat, the width being rms-bound)
+        level = STATION_DRIVE[tx_path(radio)]
+    drive = level * gain * T.drive_scale(radio, bits)
     seen = {}
 
     def f(cnr):

@@ -259,6 +259,7 @@ class GearShifter(L.Policy):
     link_now: list | None = None  # link_features() at the last recommendation
     energies: list = field(default_factory=list)  # the peer's last ENERGY_HIST bursts' energy SNR, dB
     spreads: list = field(default_factory=list)  # the peer's last bursts' spread_est (predictor.GATE)
+    n0_spreads: list = field(default_factory=list)  # the peer's last bursts' n0_spread_db (FM's regime input)
     last_spread: float | None = None  # the peer's last measured (not defaulted) spread_est (SPREAD_CARRY)
     snrs: list = field(default_factory=list)  # the peer's last CPM_FLOOR_HIST bursts' snr_est (CPM_FLOOR)
     snrs_long: list = field(default_factory=list)  # the same, the last GATE_HIST (the gate's steadiness)
@@ -370,6 +371,11 @@ class GearShifter(L.Policy):
         self.measured, self.measured_band, self.measured_at = measured, MODES[submode].band, now
         self.heard = submode
         self.spreads = (self.spreads + [float(measured.get("spread_est", 0.0))])[-P.GATE_HIST:]
+        # FM's regime input (predictor.fm_outcome): the median over the peer's
+        # last bursts, as one steady burst on a fading path (or the reverse)
+        # reads like the other regime (static p90 1.15 dB against the 0.7 split)
+        self.n0_spreads = (self.n0_spreads + [float(measured.get("n0_spread_db", 0.0))])[-P.GATE_HIST:]
+        self.measured = dict(self.measured, n0_spread_db=float(np.median(self.n0_spreads)))
         self.snrs = (self.snrs + [float(measured["snr_est"])])[-CPM_FLOOR_HIST:]
         self.snrs_long = (self.snrs_long + [float(measured["snr_est"])])[-P.GATE_HIST:]
 

@@ -227,7 +227,7 @@ def test_shifter_decisions_match(A, pure, seed):
 
 def test_native_shifter_state_roundtrips(A):
     g = A.GearShifter()
-    m = dict(snr_est=3.0, spread_est=0.5, delay_est_ms=1.0, headroom=0.0, frames=8.0,
+    m = dict(snr_est=3.0, spread_est=0.5, delay_est_ms=1.0, headroom=0.0, frames=8.0, n0_spread_db=0.0,
              **{f"mi_{c}": 0.5 for c in P.CONSTS})
     g.observe(m, "qpsk-r1/2", 1.0)
     narrow = "n10-qpsk-r1/3" if config.PROFILE == "fm" else "n4-qpsk-r1/3"  # FM has no n4

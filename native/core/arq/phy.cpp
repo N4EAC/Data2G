@@ -212,6 +212,21 @@ Measured measure(const Heard& r) {
     out.headroom = R.spec->headroom;
     out.frames = R.n_cw * R.spec->frames_per_cw;
     for (std::size_t c = 0; c < CONSTS.size(); ++c) out.mi[c] = effective_mi(est.h.data, var, CONSTS[c]);
+    // n0_spread_db (phy.py): only a per-frame noise estimate (config::EST_WINDOW) has frames to compare
+    const auto nc = static_cast<std::size_t>(est.nc);
+    if (nc > 0 && est.n0_k.size() >= 2 * nc && est.n0_k.size() % nc == 0) {
+        std::vector<double> db(est.n0_k.size() / nc);
+        for (std::size_t f = 0; f < db.size(); ++f) {
+            double s = 0.0;
+            for (std::size_t k = 0; k < nc; ++k) s += est.n0_k[f * nc + k];
+            db[f] = 10 * std::log10(s / static_cast<double>(nc));
+        }
+        double mean = 0.0, ss = 0.0;
+        for (double v : db) mean += v;
+        mean /= static_cast<double>(db.size());
+        for (double v : db) ss += (v - mean) * (v - mean);
+        out.n0_spread_db = std::sqrt(ss / static_cast<double>(db.size()));  // np.std: population
+    }
     return out;
 }
 

@@ -161,9 +161,11 @@ class FmSessionChannel(ContinuousChannel):
     occupied (fmchannel.drive_for_bandwidth). Between bursts the floor is
     ContinuousChannel's (the receiver's noise profile)."""
 
-    def __init__(self, condition: str, radio: str, cnr_db: float, seed: int, horizon: float):
+    def __init__(self, condition: str, radio: str, cnr_db, seed: int, horizon: float, carrier_mhz: float = 146.0):
+        """`cnr_db`: dB, or a function of the burst's start time (s) for a CNR ramp."""
         super().__init__("awgn", 30.0, seed, horizon)
         self.condition, self.radio, self.cnr_db = condition, radio, cnr_db
+        self.carrier_mhz = carrier_mhz
         self.drive_hz = self.ref_rms = None
         self.n_bursts = 0
 
@@ -176,7 +178,8 @@ class FmSessionChannel(ContinuousChannel):
         if self.drive_hz is None:
             self.ref_rms = rms
             self.drive_hz = fmchannel.drive_for_bandwidth(x[np.abs(x) > 0], self.radio)[0]
-        ch = fmchannel.FmChannel(self.condition, self.radio, self.cnr_db, seed=self.seed,
+        cnr = self.cnr_db(t0) if callable(self.cnr_db) else self.cnr_db
+        ch = fmchannel.FmChannel(self.condition, self.radio, cnr, seed=self.seed, carrier_mhz=self.carrier_mhz,
                                  duration_s=t0 + PRE_S + len(y) / FS + 1, drive_dev_hz=self.drive_hz * rms / self.ref_rms)
         self.n_bursts += 1
         return ch.apply(y, t0 + PRE_S - PAD_S, burst=self.n_bursts)

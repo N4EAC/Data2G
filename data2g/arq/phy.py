@@ -161,10 +161,24 @@ def _measure_ofdm(r: modem.Received) -> dict:
     d0, d1 = r.get("seen_support", r["support"])
     out = dict(snr_est=modem.snr_db(est, r["band"]),
                spread_est=est["spread_hz"], delay_est_ms=(d1 - d0) / modem.FS * 1000,
-               headroom=r["spec"].headroom, frames=r["n_cw"] * r["spec"].frames_per_cw)
+               headroom=r["spec"].headroom, frames=r["n_cw"] * r["spec"].frames_per_cw,
+               n0_spread_db=n0_spread_db(est))
     for c in P.CONSTS:
         out[f"mi_{c}"] = P.effective_mi(h, var, c)
     return out
+
+
+def n0_spread_db(est) -> float:
+    """Standard deviation over frames of each frame's noise level, dB, from
+    the per-window estimate (config.EST_WINDOW; 0 without one: HF). FM's
+    regime input: a fading or shadowed path moves the noise between windows
+    (median over the study's bursts: static 0.35 dB, flutter 0.27, slow fading
+    1.04, mobile 1.77; scripts/fm_regime_study.py), where HF's Doppler spread
+    reads about zero on FM audio."""
+    n0 = np.asarray(est.get("n0_k", est["n0"]), float)
+    if n0.ndim != 3 or len(n0) < 2:
+        return 0.0
+    return float(np.std(10 * np.log10(np.mean(n0, axis=(1, 2)))))
 
 
 def soft_bits(r: dict):

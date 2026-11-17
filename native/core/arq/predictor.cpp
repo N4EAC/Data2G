@@ -249,20 +249,32 @@ std::vector<double> outcome_logits(std::span<const double> x, int model) {
     return outcome_logits_batch({std::vector<double>(x.begin(), x.end())}, model)[0];
 }
 
-// FM, provisional (predictor.py FM_THRESHOLD): no outcome model has seen an FM
-// channel; a mode's static 10% knee in snr_est (MODE_THRESHOLDS, FM's own
-// table) is P = 0.9, rising FM_SLOPE logits per dB. Modes are rows of
-// MODE_THRESHOLDS; burst length, history and fading do not enter.
+// FM (predictor.py fm_outcome, which has the measurements): no outcome model
+// has seen an FM channel; each mode's threshold table row (MODE_THRESHOLDS,
+// FM's own: snr_est at its 10% knee, static / flutter / mobile / worst) is
+// P = 0.9. Steady noise (the shifter's median n0_spread_db under
+// FM_FADING_SPREAD_DB): the static column, FM_SLOPE_STEADY logits per dB;
+// fading: the mobile column, FM_SLOPE_FADING. A reading on another band is
+// moved by the bands' snr_est offsets on the same channel.
 namespace {
 constexpr bool FM_THRESHOLD = config::PROFILE == "fm";
-constexpr double FM_SLOPE = 2.0;
-constexpr double FM_BAND_MARGIN_DB = 6.0;  // a measurement from another band than the mode's (predictor.py)
+constexpr double FM_SLOPE_STEADY = 1.50, FM_SLOPE_FADING = 0.51;  // the calibration's fit (predictor.py)
+constexpr double FM_FADING_SPREAD_DB = 1.0;  // predictor.py: flutter reaches 0.7
 
-Outcome fm_outcome(double snr_est, int mode, std::string_view measured_band) {
+double fm_band_offset_db(std::string_view band) {  // snr_est against f55's, same channel (predictor.py)
+    if (band == "w") return 0.8;
+    if (band == "n10" || band == "f108") return -3.9;
+    return 0.0;
+}
+
+Outcome fm_outcome(const Measured& meas, int mode, std::string_view measured_band) {
     const auto& row = tables::MODE_THRESHOLDS[static_cast<std::size_t>(mode)];
     const Mode* m = arq::mode(row.name);
-    if (m && !measured_band.empty() && m->band != measured_band) snr_est -= FM_BAND_MARGIN_DB;
-    const double p = sigmoid(std::clamp(std::log(9.0) + FM_SLOPE * (snr_est - row.db[0]), -40.0, 40.0));
+    double snr = meas.snr_est;
+    if (m && !measured_band.empty()) snr += fm_band_offset_db(m->band) - fm_band_offset_db(measured_band);
+    const bool fading = meas.n0_spread_db >= FM_FADING_SPREAD_DB;
+    const double k = fading ? FM_SLOPE_FADING : FM_SLOPE_STEADY;
+    const double p = sigmoid(std::clamp(std::log(9.0) + k * (snr - row.db[fading ? 2 : 0]), -40.0, 40.0));
     return {p, p};
 }
 }  // namespace
@@ -286,7 +298,7 @@ std::vector<std::vector<Outcome>> predict_outcomes(const std::vector<OutcomeQuer
         std::vector<std::vector<Outcome>> out;
         for (const auto& q : qs) {
             std::vector<Outcome> row;
-            for (std::size_t i = 0; i < tables::MODE_THRESHOLDS.size(); ++i) row.push_back(fm_outcome(q.m.snr_est, static_cast<int>(i), band));
+            for (std::size_t i = 0; i < tables::MODE_THRESHOLDS.size(); ++i) row.push_back(fm_outcome(q.m, static_cast<int>(i), band));
             out.push_back(std::move(row));
         }
         return out;
@@ -314,7 +326,7 @@ std::vector<Outcome> predict_queries(const Measured& m, std::string_view band, d
                                      const std::vector<ModeQuery>& qs) {
     std::vector<Outcome> out(qs.size());
     if constexpr (FM_THRESHOLD) {
-        for (std::size_t i = 0; i < qs.size(); ++i) out[i] = fm_outcome(m.snr_est, qs[i].mode, band);
+        for (std::size_t i = 0; i < qs.size(); ++i) out[i] = fm_outcome(m, qs[i].mode, band);
         return out;
     }
     auto offset = [](int mode) {

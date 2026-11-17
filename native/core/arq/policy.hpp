@@ -112,6 +112,7 @@ public:
     bool peer_had_data = true;
     std::vector<LogEntry> log;
     std::vector<double> spreads;  // the peer's last bursts' spread_est (tables::OUTCOME_GATE_HIST)
+    std::vector<double> n0_spreads;  // the peer's last bursts' n0_spread_db (FM's regime input)
     // the peer's last measured (not defaulted) spread_est: a defaulted reading
     // takes it instead (policy.py SPREAD_CARRY)
     std::optional<double> last_spread;
