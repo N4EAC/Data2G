@@ -83,6 +83,9 @@ inline constexpr double HAND_MIN_D_S = 1.0;
 // CwSense is ignored while a Hand window is open and this long after: a Hand's steady tone near
 // 1500 Hz can read as a CW ID at its edges (CwSense's 1 s history)
 inline constexpr double HAND_CW_TAIL_S = 1.0;
+// The last this many seconds heard (zeros while transmitting or dropped), so a HAND OVERHEAR
+// may come late (engine.py's HAND_HISTORY_S): a whole window (11.76 s) with room to spare.
+inline constexpr double HAND_HISTORY_S = 30.0;
 // A KISS ACKMODE ack's tag (engine.py's ack_tag): the app's ids carry it in their low 16 bits,
 // big-endian. HAND LISTEN names its anchor burst by it.
 inline int ack_tag(std::int64_t ack) { return static_cast<int>(ack & 0xFFFF); }
@@ -551,6 +554,10 @@ private:
     void hand_event(std::string line);
     void hand_collect(std::span<const double> x);
     void overhear_end();
+    void hand_close();  // the open window's capture is complete: its round to a decoder thread
+    std::vector<double> hist_ = std::vector<double>(static_cast<std::size_t>(HAND_HISTORY_S * config::FS), 0.0);  // sample i at [i % size]
+    void hist_put(std::int64_t n0, std::span<const double> x);  // empty x with len: zeros
+    void hist_zero(std::int64_t n0, std::int64_t len);
 };
 
 }  // namespace data2g::arq

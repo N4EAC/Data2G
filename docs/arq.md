@@ -944,11 +944,13 @@ As built (data2g/arq/policy.py):
       256 times likelier (about 6.7% per channel), so the client checks the
       payload itself. Passive: it holds none of my bursts (they blank the
       capture, as a session burst does a listen's), and my own HAND SEND or
-      HAND LISTEN ends it with `HAND END` and goes ahead. WRONG for a gone
-      ref, bad numbers, a channel outside the width, its slot already past
-      (no audio is kept), or another window armed or open. Ends with
-      `HAND SHORT ms` if the command came after the window's head, then
-      `HAND END`.
+      HAND LISTEN ends it with `HAND END` and goes ahead. It may come late:
+      the host keeps the last 30 s heard (`HAND_HISTORY_S`, zeros while it
+      transmits), and the window's past comes from there. A window already
+      over decodes at once. WRONG for a gone ref, bad numbers, a channel
+      outside the width, a slot older than those 30 s, or another window
+      armed or open. A window whose head is older than the 30 s gets
+      `HAND SHORT ms` before its `HAND END`.
     - **HAND CANCEL**: stops a Hand waiting to go and an armed or open
       listen; the window ends with `HAND END`. Always OK.
   - BW500 caps at 500 Hz. This one matters: it keeps a session inside a 500 Hz

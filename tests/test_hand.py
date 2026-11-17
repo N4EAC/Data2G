@@ -703,25 +703,32 @@ def test_hand_decode_any_tag():
     assert [(r["c"], r["tag"]) for r in hand.decode_window(y, 0x5A, [5, 6, 7], hand.SEARCH_SAMPLES)] == [(5, 0x5A)]
 
 
-def overhear(e: Engine, d_s: float, channels: list[int], hands=(), before=None):
+def overhear(e: Engine, d_s: float, channels: list[int], hands=(), before=None, late_s=0.0):
     """A bystander's round on a bare engine: ref 1 ends now, HAND OVERHEAR 1 d_s
-    channels, then the window runs to its end. `hands`: (channel, tag, payload)
-    of Hand audio landing on the slot, over noise at about 20 dB. `before(e)` runs
-    once the window is armed. -> (lines, keyed: any block keyed meanwhile)."""
+    channels `late_s` later (the window's audio before that comes from the ring),
+    then the window runs to its end. `hands`: (channel, tag, payload) of Hand
+    audio landing on the slot, over noise at about 20 dB. `before(e)` runs once
+    the window is armed. -> (lines, keyed: any block keyed meanwhile)."""
     ref_at(e, 0.0)
-    e.hand_overhear(1, d_s, channels)
-    if before:
-        before(e)
     anchor, d = e.n, int(round(d_s * FS))
     hi = anchor + d + hand.SEARCH_SAMPLES + hand.LEN_SAMPLES
-    y = np.random.default_rng(0).normal(0, 0.1, hi - anchor + 3 * BLOCK)
+    y = np.random.default_rng(0).normal(0, 0.1, hi - anchor + int(late_s * FS) + 3 * BLOCK)
     for c, tag, p in hands:
         x = hand.modulate(tag, hand.payload_bits(p), c)
         y[d:d + len(x)] += x
     keyed = False
-    while e.n < hi + BLOCK:
-        i = e.n - anchor
-        keyed |= e.step(y[i:i + BLOCK])[1]
+
+    def run(until):
+        nonlocal keyed
+        while e.n < until:
+            i = e.n - anchor
+            keyed |= e.step(y[i:i + BLOCK])[1]
+
+    run(anchor + int(round(late_s * FS)))
+    e.hand_overhear(1, d_s, channels)
+    if before:
+        before(e)
+    run(hi + BLOCK)
     lines, end = [], time.monotonic() + 30  # the decode runs on its own thread
     while "HAND END" not in lines:
         lines += e.take_hand_events()
@@ -737,6 +744,16 @@ def test_hand_overhear_round():
     got = sorted(l.split() for l in lines if l.startswith("HAND ") and l != "HAND END")
     assert [(w[1], int(w[2], 16), w[5]) for w in got] == [("5", 0x111, "90"), ("7", 0x222, "195")], lines
     assert all(abs(float(w[4])) < 30 for w in got), lines
+
+
+@pytest.mark.parametrize("late_s", [5.0, 20.0])
+def test_hand_overhear_late(late_s):
+    """HAND OVERHEAR may come late (a client hears the REF after the burst's
+    decode, then decides): the window's past comes from the last
+    HAND_HISTORY_S heard. 5 s: mid-Hand; 20 s: the whole window is past, and
+    the round decodes at once. No HAND SHORT either way."""
+    lines, _ = overhear(Engine("W1AW", seed=1), 3.0, [5], [(5, 0x5A, 0x111)], late_s=late_s)
+    assert [l.split()[:3] + l.split()[5:] for l in lines] == [["HAND", "5", "0000000000000111", "90"], ["HAND", "END"]], lines
 
 
 def test_hand_overhear_is_passive():
@@ -763,9 +780,9 @@ def test_hand_overhear_yields_and_refuses():
     e.hand_cancel()
     with pytest.raises(ValueError):
         e.hand_overhear(2, 3.0, [20])  # no ref 2
-    ref_at(e, -4.0)
+    ref_at(e, -40.0)
     with pytest.raises(ValueError):
-        e.hand_overhear(1, 3.0, [20])  # its slot was 1 s ago
+        e.hand_overhear(1, 3.0, [20])  # its slot is older than the 30 s ring
     h = Host(ref_at(Engine("W1AW", seed=1), 0.0))
     for line, want in (("HAND OVERHEAR 1 3.0", "WRONG"), ("HAND OVERHEAR 1 3.0 40", "WRONG"),
                        ("HAND OVERHEAR 1 -3 20", "WRONG"), ("HAND OVERHEAR 1 3.0 20 21", "OK")):

@@ -102,6 +102,10 @@ HAND_REFS_KEPT = 64
 HAND_ARM_EXPIRE_S = 30.0
 HAND_MIN_D_S = 1.0  # the smallest HAND LISTEN d: the window's head is uncollectable
 # below hand.SEARCH_S, since rx is off until the anchor burst ends
+# The last this many seconds heard (zeros while transmitting), so a HAND OVERHEAR may come late:
+# a client hears the REF after the burst's decode, then decides. Covers a whole window (11.76 s)
+# with room to spare; 1.9 MB of float64.
+HAND_HISTORY_S = 30.0
 HAND_CW_TAIL_S = 1.0  # CwSense is ignored while a Hand window is open and this long after:
 # a Hand's steady tone near 1500 Hz can read as a CW ID at its edges (CwSense's 1 s history)
 
@@ -228,6 +232,7 @@ class Engine:
         self._test_acks = []  # tests: (port, ack) the burst on air carries, as KissLink.on_sent's (native: test_tx's)
         self._hand_out: list[str] = []  # REF/HAND lines for the host; the decoder thread appends (lock)
         self._hand_lock = threading.Lock()
+        self._hist = np.zeros(int(HAND_HISTORY_S * FS))  # sample i at [i % len]: HAND_HISTORY_S's ring
         self._timeouts = 0  # the station's timeouts already reported as missed bursts
         self.slot = ReplySlot()  # where and how the peer's replies arrive (the receiver's expected slot, §3a)
         self._nod = None  # the nod search after my burst (_watch_nods): [(key, lo, hi), cfo, audio chunks, samples]
@@ -402,11 +407,18 @@ class Engine:
         if self._hand_listen is not None:
             raise ValueError("a Hand window is already waiting")
         a, d = int(round(self.hand_refs[ref][0] * FS)), int(round(d_s * FS))
-        if self.n > a + d:  # the head is gone with it (no audio is kept): HAND SHORT short of this
+        old = max(0, self.n - len(self._hist))  # the oldest sample the ring still holds
+        if old > a + d:  # the slot itself is older than the ring
             raise ValueError("the slot has passed")
-        self._hand_listen = dict(d=d, tag=None, ack=None, channels=list(dict.fromkeys(channels)), armed=self.n,
-                                 open=True, passive=True, buf=[], first=0, next=0, anchor=a,
-                                 lo=a + d - hand.SEARCH_SAMPLES, hi=a + d + hand.SEARCH_SAMPLES + hand.LEN_SAMPLES)
+        hl = self._hand_listen = dict(d=d, tag=None, ack=None, channels=list(dict.fromkeys(channels)), armed=self.n,
+                                      open=True, passive=True, buf=[], first=0, next=0, anchor=a,
+                                      lo=a + d - hand.SEARCH_SAMPLES, hi=a + d + hand.SEARCH_SAMPLES + hand.LEN_SAMPLES)
+        first, last = max(hl["lo"], old), min(self.n, hl["hi"])
+        if first < last:  # late: what the window already holds comes from the ring
+            idx = np.arange(first, last) % len(self._hist)
+            hl.update(buf=[self._hist[idx]], first=first, next=self.n)
+            if self.n >= hl["hi"]:  # all of it: decode now
+                self._hand_close()
 
     def _overhear_end(self):
         if self._hand_listen is not None and self._hand_listen.get("passive"):
@@ -456,15 +468,18 @@ class Engine:
                 hl["buf"].append(x)
             hl["next"] = self.n + k
         if self.n + k >= hl["hi"] and hl["buf"]:
-            self._hand_listen = None
-            nominal = hl["anchor"] + hl["d"] - hl["first"]
-            # first past lo: the window's head went uncaptured (my own burst
-            # ran into it) - the round reports how much
-            short = f"HAND SHORT {int(round((hl['first'] - hl['lo']) * 1000 / FS))}" if hl["first"] > hl["lo"] else None
-            threading.Thread(target=self._hand_decode,
-                             args=(np.concatenate(hl["buf"]), hl["tag"], hl["channels"], nominal, short,
-                                   hand.ROUNDS[self.hand_round]),
-                             name="hand-decode", daemon=True).start()
+            self._hand_close()
+
+    def _hand_close(self):
+        """The open window's capture is complete: its round goes to a decoder thread."""
+        hl, self._hand_listen = self._hand_listen, None
+        nominal = hl["anchor"] + hl["d"] - hl["first"]
+        # first past lo: the window's head went uncaptured (my own burst
+        # ran into it, or older than the ring) - the round reports how much
+        short = f"HAND SHORT {int(round((hl['first'] - hl['lo']) * 1000 / FS))}" if hl["first"] > hl["lo"] else None
+        threading.Thread(target=self._hand_decode,
+                         args=(np.concatenate(hl["buf"]), hl["tag"], hl["channels"], nominal, short, hand.ROUNDS[self.hand_round]),
+                         name="hand-decode", daemon=True).start()
 
     def _hand_decode(self, y: np.ndarray, tag: int | None, channels: list[int], nominal: int, short: str | None, rnd: dict):
         """The round's decodes off the audio thread (~2.4 s of CPU for 40
@@ -625,6 +640,8 @@ class Engine:
         out = np.zeros(k)
         if self.rec:
             self.rec.audio(x if self.tx is None else np.zeros(k))
+        idx = np.arange(self.n, self.n + k) % len(self._hist)
+        self._hist[idx] = x if self.tx is None else 0.0
         if self.tx is None:
             self.noise.feed(x, self.now)
             cw = self.cw.feed(x)
