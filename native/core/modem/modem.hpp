@@ -155,6 +155,14 @@ std::optional<double> prime_floor(std::string_view band);  // PRIME_FLOOR[band];
 std::int64_t prime_span(std::string_view band);            // its preamble, header and the pilot after
 std::optional<Lock> prime_ofdm(std::span<const double> x, std::int64_t lo, std::int64_t hi, double cfo,
                                const Accept& accept);
+// A band's preamble, then one symbol per layout entry (1: a pilot; 0: the next nc QPSK cells of `bits`,
+// two bits a cell) and nothing more, conditioned as an ACK mode's burst (arq/onod.hpp: onod.waveform).
+std::vector<double> keyed_waveform(std::string_view band, std::span<const std::uint8_t> layout,
+                                   std::span<const std::uint8_t> bits);
+// Soft bits of the symbols after a preamble at `start` that layout marks 0 (1: a pilot), read as
+// read_header reads a header's (onod.read). z: baseband, frequency-corrected.
+std::vector<double> keyed_read(std::span<const cd> z, std::int64_t start, std::string_view band,
+                               std::span<const std::uint8_t> layout);
 // `pattern`: also the pilot pattern over those frames (modem.pilot_coherence's pattern=True)
 std::vector<double> pilot_coherence(std::span<const double> x, const Lock& lock, int n_max = 8, bool latest = false,
                                     double* pattern = nullptr);

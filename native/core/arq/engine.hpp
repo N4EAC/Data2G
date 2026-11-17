@@ -45,6 +45,7 @@
 #include "arq/phy.hpp"
 #include "arq/policy.hpp"
 #include "arq/nod.hpp"
+#include "arq/onod.hpp"
 #include "arq/session.hpp"
 #include "cwid/cwid.hpp"
 #include "kisslink/kisslink.hpp"
@@ -550,6 +551,17 @@ private:
         std::vector<double> buf;
     };
     std::optional<NodWatch> nod_watch_;
+    // the OFDM nod search (engine.py _onod / _onod_feed, docs/arq.md §3c): in the OFDM replies' slot, on each
+    // sync band an ACK mode I expect nods on (with the first such mode, for its energy reading)
+    struct OnodWatch {
+        nod::FamilyKey key;
+        std::int64_t anchor, lo, hi;
+        double cfo;
+        std::vector<std::pair<std::string_view, std::string>> bands;
+        std::vector<double> buf;
+    };
+    std::optional<OnodWatch> onod_watch_;
+    void onod_collect(std::span<const double> x, double t);
     bool nods_ = true;
     void watch_nods(std::int64_t end);
     void nod_collect(std::span<const double> x, double t);

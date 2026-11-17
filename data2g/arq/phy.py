@@ -123,9 +123,12 @@ def tx_audio(burst) -> np.ndarray:
     (codes.scramble_seed: no key on air); a resend in another slot still
     combines (codes.flip). A nod (burst.nod): its keyed sequence."""
     if getattr(burst, "nod", None) is not None:
-        from . import nod
+        from . import nod, onod
 
         meaning, fam = burst.nod
+        band = onod.band_of(burst.submode)
+        if band is not None:  # an OFDM nod (docs/arq.md §3c), on its mode's sync band
+            return onod.waveform(band, onod.K[band], onod.family(band, onod.K[band], *fam)[meaning])
         return nod.waveform(nod.family(*fam)[meaning], burst.cap)
     spec = MODES[burst.submode]
     if is_cpm(spec):
