@@ -248,7 +248,13 @@ TX path setting (station, FM only, default mic; data2g-host / native --tx-path, 
   - Regime input: the spread over frames of the per-window noise (phy.n0_spread_db; medians static 0.35, flutter 0.27, slow fading 1.04, mobile 1.77 dB); fading at >= 1.0 dB over the peer's last 5 bursts. Doppler spread means nothing on FM.
   - Band offsets (snr_est against f55's on the same channel): w +0.8, n10 -3.9, f108 -3.9 dB.
   - Sessions (8 paired seeds, 120 s, against the provisional stand-in): mobile +0.25..+2.3 kbps, mic ramp +1.3 kbps, flutter level; losses on flat static CNR 10 (-0.9 kbps) and the flat ramp (-1.0), from one failed f108 64-point probe per session, and mic static CNR 8 (-0.4).
-  - Next: predict f108's SNR from the measured per-carrier noise (on flat the f^2 slope makes one constant offset wrong), cheaper band-change probes, then the peer's TX path in the capability exchange (FM-only) for f55's top rungs.
+  - Band-change fix (f773481): f108 predicted 1 dB lower from another band's reading on steady paths: flat static CNR 10 +584 bps [+266, +903], flat ramp +756 [+151, +1492], mic unchanged. Tried and dropped: predicting f108 from the per-carrier noise profile (biased +5 dB, rms 5.3 vs 0.8 for the constant), and short probe bursts on band changes (lost 0.6-1.5 kbps on flat, or kept mic on w).
+  - Known gaps, accepted for now (2026-11-17):
+    - flat mobile CNR 32: -0.8 kbps [-1.6, -0.2] against the fitted policy before the band fix; the w band's snr_est saturates near 27 dB, so a w reading cannot show f108's top rungs are in reach (a ceiling-aware band mapping is the lever);
+    - mic static CNR 8: -0.4 kbps [-0.7, -0.1] against the provisional stand-in (bottom of the ladder; one slope per family may fix it);
+    - f55 256-point r.80-r.88 use mic's thresholds for flat senders too (3.4-5.3 dB conservative on flat): needs the peer's TX path in the capability exchange (FM-only wire);
+    - the outcome model is a fitted logistic, not a learned model; retrain on FM session data once on-air data exists;
+    - the 2n (IR) screen point for the new LDPC sizes is not run.
 - Depends: M4 and M5 ladders frozen (done, 2026-11-16), M2.
 
 ### M7. Station setup tools
@@ -370,6 +376,7 @@ Measurements that decide design:
 
 ## Revisions
 
+- 2026-11-17, M6: band-change fix, and the known gaps accepted for now.
 - 2026-11-16, M6: FM band set (w, n10, f55, f108), fitted thresholds, the noise-spread regime input, band offsets, session results; the test hardware from the discussion in M0.
 - 2026-11-16, M4/M5 ladders frozen (f55, f108; protocol 4), TX path setting, Q9 (tilt), TX clipping and mic drive measured, constellations kept, new LDPC sizes, FM spread prior 0.2 Hz.
 - 2026-11-16, Q8's pilot half measured (one in eleven: 64-point +0.2-0.4 dB for +9.1% rate, needs an FM spread prior; the prior alone 0.06-0.16 dB better).
