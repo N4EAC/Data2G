@@ -29,6 +29,10 @@ using clk = std::chrono::steady_clock;
 
 namespace {
 
+// the engine's TX scale (arq/phy full_scale): HF, peak 1.0 (~unit RMS again x 2.2 after the clipper);
+// FM, unit RMS over config::FM_TX_PEAK
+constexpr double LINK_G = config::PROFILE == "hf" ? 2.2 : config::FM_TX_PEAK;
+
 constexpr int BLOCK = config::FS / 10;
 // Sanitizers slow everything several-fold: wall-clock latency bounds are off.
 #if defined(__SANITIZE_THREAD__) || defined(__SANITIZE_ADDRESS__)
@@ -46,9 +50,9 @@ bool link(Engine& a, Engine& b, double snr_db, double seconds, const std::functi
     std::vector<double> ao(BLOCK, 0.0), bo(BLOCK, 0.0), x(BLOCK);
     const auto t0 = clk::now();
     for (int i = 0; i < static_cast<int>(seconds * 10); ++i) {
-        for (int j = 0; j < BLOCK; ++j) x[j] = 2.2 * bo[j] + noise(rng);
+        for (int j = 0; j < BLOCK; ++j) x[j] = LINK_G * bo[j] + noise(rng);
         ao = a.step(x).audio;
-        for (int j = 0; j < BLOCK; ++j) x[j] = 2.2 * ao[j] + noise(rng);
+        for (int j = 0; j < BLOCK; ++j) x[j] = LINK_G * ao[j] + noise(rng);
         bo = b.step(x).audio;
         if (until()) return true;
         if (paced) std::this_thread::sleep_until(t0 + std::chrono::milliseconds(100 * (i + 1)));

@@ -16,6 +16,10 @@ using arq::Engine;
 
 namespace {
 
+// the engine's TX scale (arq/phy full_scale): HF, peak 1.0 (~unit RMS again x 2.2 after the clipper);
+// FM, unit RMS over config::FM_TX_PEAK
+constexpr double LINK_G = config::PROFILE == "hf" ? 2.2 : config::FM_TX_PEAK;
+
 constexpr int BLOCK = config::FS / 10;
 
 bool has(const std::vector<std::string>& v, const std::string& s) { return std::find(v.begin(), v.end(), s) != v.end(); }
@@ -34,11 +38,11 @@ struct Pair {
         std::normal_distribution<double> noise(0.0, std::sqrt((config::FS / 2.0) / config::SNR_REF_BW_HZ / std::pow(10.0, 1.2)));
         std::vector<double> x(BLOCK);
         for (int i = 0; i < static_cast<int>(seconds * 10); ++i) {
-            for (int j = 0; j < BLOCK; ++j) x[j] = 2.2 * bo[j] + noise(rng);
+            for (int j = 0; j < BLOCK; ++j) x[j] = LINK_G * bo[j] + noise(rng);
             auto oa = ea.step(x);
             a.after_step(oa.ptt);
             ao = oa.audio;
-            for (int j = 0; j < BLOCK; ++j) x[j] = 2.2 * ao[j] + noise(rng);
+            for (int j = 0; j < BLOCK; ++j) x[j] = LINK_G * ao[j] + noise(rng);
             auto ob = eb.step(x);
             b.after_step(ob.ptt);
             bo = ob.audio;

@@ -57,6 +57,7 @@ inline py::object burst_py(const TxBurstPtr& b) {
     py::list slots;
     for (const auto& s : b->slots) slots.append(Slot(mask_tuple(s.mask_id), s.rv, pyb(s.payload)));
     py::object out = link_attr("TxBurst")(b->submode, slots, b->burst_seq, b->cap);
+    out.attr("level") = b->level;
     if (b->nod) {
         const auto& k = b->nod->second;
         out.attr("nod") = py::make_tuple(b->nod->first, py::make_tuple(k[0], k[1], k[2], k[3]));
@@ -71,6 +72,7 @@ inline TxBurstPtr burst_cpp(const py::handle& o) {
     for (auto s : o.attr("slots")) b->slots.push_back({mask_of(s.attr("mask_id")), s.attr("rv").cast<int>(), bytes_of(s.attr("payload"))});
     b->burst_seq = o.attr("burst_seq").cast<std::int64_t>();
     b->cap = o.attr("cap").cast<int>();
+    b->level = py::getattr(o, "level", py::float_(1.0)).cast<double>();
     if (py::object n = py::getattr(o, "nod", py::none()); !n.is_none()) {
         auto t = n.cast<py::tuple>();
         auto k = t[1].cast<py::tuple>();

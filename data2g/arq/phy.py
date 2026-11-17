@@ -17,6 +17,7 @@ from functools import lru_cache
 import numpy as np
 
 from .. import codes, constellation, cpm, equalizer, modem
+from ..config import FM_TX_PEAK, PROFILE
 from ..waveform import dsp, ofdm
 from . import predictor as P
 from .burst import COMPACT_CONNECT
@@ -117,11 +118,22 @@ def _peak_db(submode: str, cap: int) -> float:
     return round(float(10 * np.log10(np.max(dsp.envelope(x) ** 2) / 2 / dsp.active_power(x))), 3)
 
 
-def tx_audio(burst) -> np.ndarray:
+def full_scale(x: np.ndarray) -> np.ndarray:
+    """A burst's unit-RMS audio for the sound card. HF: its envelope peak at
+    full scale (PEP limited; arq.engine._start_tx's reasons). FM: one fixed
+    scale for every burst, so modes keep their levels (config.FM_TX_PEAK)."""
+    if PROFILE == "fm":
+        return np.clip(x / FM_TX_PEAK, -1.0, 1.0)
+    return x / np.max(dsp.envelope(x))
+
+
+def tx_audio(burst, tx_path: str | None = None, level: float | None = None) -> np.ndarray:
     """A link.TxBurst -> unit-RMS audio (a CPM burst filtered for its cap:
-    cpm.TX_FILTERS). Codewords scramble by burst position alone
+    cpm.TX_FILTERS), times burst.level (an FM ping: its top modes' level,
+    arq.ping) or `level`. Codewords scramble by burst position alone
     (codes.scramble_seed: no key on air); a resend in another slot still
-    combines (codes.flip). A nod (burst.nod): its keyed sequence."""
+    combines (codes.flip). A nod (burst.nod): its keyed sequence. `tx_path`:
+    FM's (modem.modulate's; default modem.TX_PATH)."""
     if getattr(burst, "nod", None) is not None:
         from . import nod
 
@@ -136,7 +148,9 @@ def tx_audio(burst) -> np.ndarray:
                  for i, s in enumerate(burst.slots)]
         return cpm.modulate(spec, coded, dup=n_ctl == 2, cap=burst.cap)
     bits = np.stack([codes.encode(spec, s.payload, s.rv, mask_value(s.mask_id), i) for i, s in enumerate(burst.slots)])
-    return modem.modulate_bits(codes.spread(bits, spec.bits_per_cu, codes.spread_group(spec)), spec)
+    x = modem.modulate_bits(codes.spread(bits, spec.bits_per_cu, codes.spread_group(spec)), spec, tx_path)
+    g = getattr(burst, "level", 1.0) if level is None else level
+    return x if g == 1.0 else x * g
 
 
 def measure(r: dict) -> dict:

@@ -70,7 +70,11 @@ inline constexpr int PRIMED_PATHS = 4;
 std::uint32_t mask_value(const MaskId& m);
 
 // A TxBurst -> unit-RMS audio. Throws std::out_of_range for an unknown mode.
-std::vector<double> tx_audio(const TxBurst& burst);
+// times burst.level (or `level`); tx_path: FM's (modem::modulate's; default modem's)
+std::vector<double> tx_audio(const TxBurst& burst, std::string_view tx_path = {}, std::optional<double> level = {});
+// A burst's unit-RMS audio for the sound card (phy.py full_scale): HF, its envelope peak at
+// full scale (PEP limited); FM, one fixed scale (config::FM_TX_PEAK) so modes keep their levels.
+std::vector<double> full_scale(std::vector<double> x);
 
 // A received burst: modem::receive's (OFDM) or cpm.receive's.
 struct Heard {
@@ -141,6 +145,7 @@ public:
 
     const std::string& submode() const override { return submode_; }
     int n_cw() const override { return n_cw_; }
+    const Heard& heard() const { return r_; }  // the burst (a ping's measurement reads it: arq/ping)
     std::optional<Bytes> decode(int slot, const MaskId& mask, int rv, const SoftKey* key) override;
     void forget(const SoftKey& key) override;
     // Runs the first pass of each request's slot at once on the pool (only on the burst's own estimate, and

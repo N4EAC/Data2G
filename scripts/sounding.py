@@ -37,7 +37,6 @@ from data2g.arq.modes import MODES, ctl_spec, is_cpm
 from data2g.arq.policy import MODE_THRESHOLDS
 from data2g.config import FS, LEADIN_SAMPLES, NSYM, RS, SNR_REF_BW_HZ, SYMS_PER_FRAME, max_codewords
 from data2g.receiver import Receiver
-from data2g.waveform import dsp
 
 SOUND_KEY = 0x50DA  # every slot's CRC mask key: no live session (key 0 for CQ/ID) accepts these
 MAGIC = 0xD2  # a payload's first byte; then the burst number (2 bytes) and the slot
@@ -125,7 +124,7 @@ def sequence(call: str, seed: int = 0, reps: int = 2, modes=None) -> tuple[np.nd
                                # where the receiver puts the burst's start: OFDM's preamble, past its lead-in
                                sync_s=(start + (0 if is_cpm(spec) else LEADIN_SAMPLES)) / FS,
                                tx=b, audio=x))
-            parts += [np.zeros(lead), x / np.max(dsp.envelope(x)), np.zeros(int(GAP_S * FS))]
+            parts += [np.zeros(lead), PHY.full_scale(x), np.zeros(int(GAP_S * FS))]  # as the engine sends it
             t += lead + len(x) + int(GAP_S * FS)
     parts.append(cwid.audio(cwid.id_text(call) + " SK"))
     return np.concatenate(parts), bursts

@@ -155,6 +155,12 @@ DECODE_EARLY = bool(int(os.environ.get("DATA2G_DECODE_EARLY", {"hf": 0, "fm": 1}
 FM_TX_TILT_DB_OCT = 3.0
 FM_FLAT_NOCLIP_BITS = 4
 FM_MIC_GAIN = (1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.70, 1.0, 0.55)  # by bits per cell
+# FM: every burst at one scale, the modem's unit-RMS audio over this peak (rms about -14 dBFS),
+# the rare crest above it clipped. HF's per-burst envelope-peak normalisation (an SSB
+# transmitter is PEP limited) would undo FM_MIC_GAIN and send unclipped flat-path bursts
+# (peaks near 5) about 6 dB under QPSK's (peaks near 2.5); FM deviation, and so the 15 kHz
+# width and every FM study, go by rms. 5.0: the largest crest of the unclipped flat modes.
+FM_TX_PEAK = 5.0
 # The Doppler spread the equalizer assumes for a burst too short to measure one
 # (equalizer.measure_spread: under 8 pilots). HF: 2.0, what MPD measures. FM:
 # the audio channel is the radios' fixed response, RF Doppler reaching it as

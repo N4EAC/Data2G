@@ -8,7 +8,8 @@ import pytest
 from scipy import signal
 from scipy.io import wavfile
 
-from data2g import cwid, hfchannel
+from data2g import config, cwid, hfchannel
+from data2g.arq import phy as PHY
 from data2g.config import FS, PROFILE
 from data2g.waveform import dsp
 
@@ -19,16 +20,20 @@ MODES = [m for m in ("qpsk-r1/2", "n10-qpsk-r1/2", "w48-qpsk-r1/3", "n4-ack-2f",
          if m in S.MODE_THRESHOLDS]  # what the ARQ may name (FM: no w48, n4 or CPM)
 
 
+# the noise reference: HF, unit power (each burst's envelope peak at full scale); FM, the
+# fixed scale's (phy.full_scale: unit-RMS audio over config.FM_TX_PEAK), so snr_db is a burst's
+REF = 1.0 if PROFILE == "hf" else config.FM_TX_PEAK ** -2
+
+
 def _burst_snr(bursts, snr_db):
-    """Each burst's SNR when noise is set for unit power at snr_db (its peak-1.0 audio's active power)."""
-    return {b["n"]: snr_db + 10 * np.log10(dsp.active_power(b["audio"] / np.max(dsp.envelope(b["audio"]))))
-            for b in bursts}
+    """Each burst's SNR when noise is set for REF power at snr_db (its audio as sent: phy.full_scale)."""
+    return {b["n"]: snr_db + 10 * np.log10(dsp.active_power(PHY.full_scale(b["audio"])) / REF) for b in bursts}
 
 
 @pytest.mark.parametrize("snr", [3.0, 12.0])
 def test_awgn_round_trip(snr):
     x, bursts = S.sequence("W1AW", seed=1, reps=1, modes=MODES)
-    y = hfchannel.awgn(x, snr, seed=7, s_power=1.0)
+    y = hfchannel.awgn(x, snr, seed=7, s_power=REF)
     rep = S.analyse(y, FS, "W1AW", 1, 1, MODES)
     assert abs(rep["offset_s"]) < 0.01
     want = _burst_snr(bursts, snr)

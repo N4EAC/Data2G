@@ -9,7 +9,7 @@ from data2g.arq import phy as PHY
 from data2g.arq import session as S
 from data2g.arq.engine import Engine
 from data2g.arq.modes import BW_NAME
-from data2g.config import FS, PROFILE, SNR_REF_BW_HZ
+from data2g.config import FM_TX_PEAK, FS, PROFILE, SNR_REF_BW_HZ
 
 NARROW_BCAST = "n10-qpsk-r1/3" if PROFILE == "fm" else "n4-qpsk-r1/3"  # a 500 Hz broadcast mode (FM has no n4)
 
@@ -22,7 +22,9 @@ def link(a: Engine, b: Engine, snr_db: float, seconds: float, until, seed=0):
     rng = np.random.default_rng(seed)
     sigma = np.sqrt((FS / 2) / SNR_REF_BW_HZ / 10 ** (snr_db / 10))
     a_out = b_out = np.zeros(BLOCK)
-    g = 2.2  # an Engine plays bursts at peak 1.0: ~unit RMS again (peak/RMS ~2.2 after the clipper)
+    # HF: an Engine plays bursts at peak 1.0, ~unit RMS again (peak/RMS ~2.2 after the clipper);
+    # FM: at one fixed scale, unit RMS over config.FM_TX_PEAK (phy.full_scale)
+    g = 2.2 if PROFILE == "hf" else FM_TX_PEAK
     for _ in range(int(seconds * FS / BLOCK)):
         a_out, _ = a.step(g * b_out + rng.normal(0, sigma, BLOCK))
         b_out, _ = b.step(g * a_out + rng.normal(0, sigma, BLOCK))

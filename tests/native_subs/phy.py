@@ -70,8 +70,9 @@ def substitutions(native):
         def forget(self, key):
             return self._n.forget(key)
 
-    def tx_audio(burst):
-        return P.tx_audio(burst) if burst.submode in modes.MODES else py_tx(burst)
+    def tx_audio(burst, tx_path=None, level=None):
+        return (P.tx_audio(burst, tx_path, level) if burst.submode in modes.MODES
+                else py_tx(burst, tx_path=tx_path, level=level))
 
     def soft_bits(r):
         return P.soft_bits(r) if own(r["spec"]) else py_soft(r)

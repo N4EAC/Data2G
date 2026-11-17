@@ -11,6 +11,8 @@
 #include "util/cancel.hpp"
 #include "util/pool.hpp"
 #include "cpm/cpm.hpp"
+#include "dsp/dsp.hpp"
+#include "generated/config.hpp"
 #include "arq/nod.hpp"
 #include "equalizer/equalizer.hpp"
 
@@ -144,7 +146,18 @@ std::uint32_t mask_value(const MaskId& m) {
     return v ? v : 1;
 }
 
-std::vector<double> tx_audio(const TxBurst& burst) {
+std::vector<double> full_scale(std::vector<double> x) {
+    if constexpr (config::PROFILE == "fm") {
+        for (double& v : x) v = std::clamp(v / config::FM_TX_PEAK, -1.0, 1.0);
+        return x;
+    }
+    double peak = 0.0;  // the envelope, not the samples: w48's crests fall up to 1.8 dB between samples
+    for (const dsp::cdouble& z : dsp::hilbert(x)) peak = std::max(peak, std::abs(z));
+    for (double& v : x) v /= peak;
+    return x;
+}
+
+std::vector<double> tx_audio(const TxBurst& burst, std::string_view tx_path, std::optional<double> level) {
     if (burst.nod) {  // a nod (docs/arq.md §3b): its keyed sequence
         const auto& [meaning, key] = *burst.nod;
         return nod::waveform(nod::family(key).at(static_cast<std::size_t>(meaning)), burst.cap);
@@ -171,8 +184,12 @@ std::vector<double> tx_audio(const TxBurst& burst) {
                                      static_cast<int>(i));
         bits.insert(bits.end(), c.begin(), c.end());
     }
-    return modem::modulate_bits(
-        codes::spread<std::uint8_t>(bits, static_cast<int>(n), md.ofdm->bits_per_cu, modem::spread_group(*md.ofdm)), *md.ofdm);
+    auto x = modem::modulate_bits(
+        codes::spread<std::uint8_t>(bits, static_cast<int>(n), md.ofdm->bits_per_cu, modem::spread_group(*md.ofdm)), *md.ofdm,
+        tx_path);
+    if (const double g = level.value_or(burst.level); g != 1.0)
+        for (double& v : x) v *= g;
+    return x;
 }
 
 const Mode& Heard::mode() const { return mode_at(ofdm ? ofdm->spec->name : cpm->spec->name); }

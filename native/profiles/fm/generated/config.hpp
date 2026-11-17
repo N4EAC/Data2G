@@ -31,6 +31,7 @@ inline constexpr bool DECODE_EARLY = true;
 inline constexpr double FM_TX_TILT_DB_OCT = 3.0;
 inline constexpr int FM_FLAT_NOCLIP_BITS = 4;
 inline constexpr std::array<double, 9> FM_MIC_GAIN = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.7, 1.0, 0.55};
+inline constexpr double FM_TX_PEAK = 5.0;
 inline constexpr double DEFAULT_SPREAD_HZ = 0.2;
 inline constexpr int FIRST_PATH_SEARCH = 32;
 inline constexpr double FIRST_PATH_FRAC = 0.5;

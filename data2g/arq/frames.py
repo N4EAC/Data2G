@@ -55,6 +55,8 @@ T_INLINE = 18
 # the peer acts on a burst that carried it; nods go only to a peer that sent it.
 # Drop it (everyone hears nods) at the next session version bump.
 T_NODS = 19
+# FM only (arq.ping): a ping or its reply, a measurement burst for the TX path and level check (FM plan M7)
+T_PING = 20
 
 
 def inline_check(mask_id: tuple, payload: bytes) -> bytes:
