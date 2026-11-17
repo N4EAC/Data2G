@@ -89,6 +89,7 @@ std::optional<Rx> receive_any(std::span<const double> y, int64_t lead,
 int64_t Pending::start() const { return is_cpm() ? cpm().start : ofdm().start; }
 int64_t Pending::end() const { return is_cpm() ? cpm().end : ofdm().end; }
 double Pending::score() const { return is_cpm() ? cpm().score : ofdm().score; }
+double Pending::cfo() const { return is_cpm() ? cpm().cfo : ofdm().cfo; }
 int Pending::n_cw() const { return is_cpm() ? 1 + cpm().dup + cpm().n_data : ofdm().n_cw; }
 
 void Pending::shift(int64_t d) {

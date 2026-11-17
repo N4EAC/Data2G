@@ -41,6 +41,7 @@ struct Decoded {
     int c;
     std::uint64_t payload;
     double snr, dt_ms;
+    int tag;  // the tag its CRC passed under
 };
 // A round's search and nail grids. ROUND_FULL is what ships. ROUND_CHEAP is
 // the setting a station picks when a round has to cost about half as much
@@ -56,7 +57,8 @@ struct Round {
 inline constexpr Round ROUND_FULL{TOP, 8, true}, ROUND_CHEAP{2, 4, false};
 
 // Net control's round: every channel of the captured window y; `nominal`: a
-// Hand's expected start sample in y. Thread-safe.
+// Hand's expected start sample in y. `tag` < 0: any tag (HAND OVERHEAR), 256
+// times the false passes. Thread-safe.
 std::vector<Decoded> decode_window(std::span<const double> y, int tag, std::span<const int> channels, std::int64_t nominal,
                                    Round round = ROUND_FULL);
 
