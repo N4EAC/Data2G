@@ -1032,8 +1032,9 @@ def receive(x: np.ndarray, bands=None, accept: Accept | None = None, head: int |
     ref_syms = np.empty((len(layout), b.nc), dtype=np.complex128)
     ref_syms[layout] = b.pilot
     ref_syms[~layout] = constellation.modulate(_word_bits(word) @ header_code(band) % 2, QPSK).reshape(-1, b.nc)
-    known = list(hd["y_all"] * np.conj(ref_syms)) + ([h_first] if db == band else [])
-    runs = [known]
+    # (not `known`: that is the argument, a bulk burst's, and the alias choice below reads it)
+    ref = list(hd["y_all"] * np.conj(ref_syms)) + ([h_first] if db == band else [])
+    runs = [ref]
     if kc is not None:
         # the header copy's frame is known symbols too (pilot, copy, next
         # pilot): the estimate survives a fade on the first copy

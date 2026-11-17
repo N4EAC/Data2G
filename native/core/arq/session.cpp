@@ -268,9 +268,9 @@ void Session::on_rx(RxBurst& rx, double now) {
     build_at.reset();
     // the peer's reply was lost: it may hold data I never heard of. An
     // abandon re-sliced data the peer holds, maybe in a control-only
-    // (escalated) burst: idling would leave it to wake me ~5 s later
+    // (escalated) burst: idling would leave it to wake me ~5 s later. The same in a recovery (link.Station.recovering)
     const bool busy = st->tx.pending() || st->last_rx_data || !pending_write.empty() || woke || st->peer_reply_lost
-                      || st->peer_abandon;
+                      || st->peer_abandon || st->recovering();
     if (busy && settled) {
         idle_wait = 0.0;
         build_at = now + REPLY_HOLD_S;  // poll() builds it; write() brings it forward

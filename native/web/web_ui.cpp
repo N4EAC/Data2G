@@ -21,6 +21,7 @@
 #include "arq/modes.hpp"
 #include "arq/session.hpp"
 #include "generated/config.hpp"
+#include "rig/cm108.hpp"
 #ifdef DATA2G_HAVE_AUDIO
 #include "audio/card.hpp"
 #endif
@@ -355,6 +356,9 @@ QJsonObject WebUi::settings() const {
         models.append(QJsonArray{m.model, qs(m.label()), int(m.port), rig::supports_ptt_audio_source(m.model)});
 #endif
     o["rig_models"] = models;
+    QJsonArray cm108;  // [path, name]: the CM108 interfaces plugged in, for PTT by GPIO
+    for (const auto& d : rig::find_cm108_devices()) cm108.append(QJsonArray{qs(d.path), qs(d.name)});
+    o["cm108"] = cm108;
     return o;
 }
 

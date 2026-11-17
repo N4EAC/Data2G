@@ -351,9 +351,10 @@ class Session:
         woke, self._build_at = self._build_at is not None, None
         # the peer's reply was lost: it may hold data I never heard of. An
         # abandon re-sliced data the peer holds, maybe in a control-only
-        # (escalated) burst: idling would leave it to wake me ~5 s later
+        # (escalated) burst: idling would leave it to wake me ~5 s later.
+        # The same in a recovery (link.Station.recovering)
         busy = (st.tx.pending() or st.last_rx_data or bool(self._pending_write) or woke or st.peer_reply_lost
-                or st.peer_abandon)
+                or st.peer_abandon or st.recovering)
         if busy and settled:
             self._idle_wait = 0.0
             self._build_at = now + REPLY_HOLD_S  # poll() builds it; write() brings it forward

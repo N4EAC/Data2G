@@ -480,6 +480,50 @@ def test_abandon_is_answered_at_once(monkeypatch):
     assert a.next_event() < t + 1  # answered now, not at a keepalive
 
 
+def test_a_recovery_is_answered_at_once(monkeypatch):
+    """The caller's reply to the callee's data is lost; the caller polls,
+    and the callee answers in control only (its reply to a poll, escalated),
+    holding its data back. The caller must answer at once, not idle into the
+    callee's wake (on air 2026-11-15: a lost nod, then 16-32 s each time)."""
+    class OneCwEscalation(Policy):
+        def choose(self, station, escalation):
+            return ("m46", 1) if escalation else ("m22", 6)
+
+    monkeypatch.setattr(S, "REPEAT_MAX_S", 0.0)  # every timeout polls
+    a = S.Session("W1AW", OneCwEscalation(random.Random(1), change=0.0), rng=random.Random(2))
+    b = S.Session("K2XYZ-7", OneCwEscalation(random.Random(3), change=0.0), rng=random.Random(4))
+    b.listen()
+    a.connect("K2XYZ-7", 2, 0.0)
+
+    def send(me, other, t, drop=False, before_rx=None):
+        burst = None
+        while burst is None:
+            t = me.next_event()
+            burst = me.poll(t)
+        end = t + me.policy.airtime(burst.submode, len(burst.slots))
+        me.on_tx_end(burst, end)
+        if before_rx:
+            before_rx()
+        if not drop:
+            other.on_rx(FakeRx(burst, random.Random(0), 0.0, {}, {"mismatch": 0}), end + DECODE_S)
+        return burst, end + DECODE_S
+
+    t = 0.0
+    for _ in range(3):  # CONNECT, its ACK, and the caller's first ARQ burst
+        _, t = send(a, b, t)
+        _, t = send(b, a, t)
+    _, t = send(a, b, t, before_rx=lambda: b.write(bytes(3000)))
+    data, t = send(b, a, t)  # heard
+    assert data.slots and b.station.tx.pending()
+    _, t = send(a, b, t, drop=True)  # the caller's reply, lost
+    poll, t = send(a, b, t)  # the caller's timeout poll
+    assert len(poll.slots) == 1
+    reply, t = send(b, a, t)
+    assert len(reply.slots) == 1 and b.station.tx.pending()  # control only, data held back
+    assert not a.station.peer_abandon and not a.station.peer_reply_lost
+    assert a.next_event() < t + 1  # answered now, not at a keepalive
+
+
 def test_another_stations_burst_is_foreign_but_my_peers_and_a_connect_are_not():
     """A burst under another session's key, heard while I am connected (its
     first codeword converged: the engine asks only then), is foreign: not

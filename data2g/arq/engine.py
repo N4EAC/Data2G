@@ -17,6 +17,7 @@ Native: arq/engine.hpp (the same step(); with `worker`, the session stage
 on its own thread).
 """
 
+import dataclasses
 import json
 import logging
 import random
@@ -101,6 +102,10 @@ HAND_REFS_KEPT = 64
 HAND_ARM_EXPIRE_S = 30.0
 HAND_MIN_D_S = 1.0  # the smallest HAND LISTEN d: the window's head is uncollectable
 # below hand.SEARCH_S, since rx is off until the anchor burst ends
+# The last this many seconds heard (zeros while transmitting), so a HAND OVERHEAR may come late:
+# a client hears the REF after the burst's decode, then decides. Covers a whole window (11.76 s)
+# with room to spare; 1.9 MB of float64.
+HAND_HISTORY_S = 30.0
 HAND_CW_TAIL_S = 1.0  # CwSense is ignored while a Hand window is open and this long after:
 # a Hand's steady tone near 1500 Hz can read as a CW ID at its edges (CwSense's 1 s history)
 
@@ -227,6 +232,7 @@ class Engine:
         self._test_acks = []  # tests: (port, ack) the burst on air carries, as KissLink.on_sent's (native: test_tx's)
         self._hand_out: list[str] = []  # REF/HAND lines for the host; the decoder thread appends (lock)
         self._hand_lock = threading.Lock()
+        self._hist = np.zeros(int(HAND_HISTORY_S * FS))  # sample i at [i % len]: HAND_HISTORY_S's ring
         self._timeouts = 0  # the station's timeouts already reported as missed bursts
         self.slot = ReplySlot()  # where and how the peer's replies arrive (the receiver's expected slot, §3a)
         self._nod = None  # the nod search after my burst (_watch_nods): [(key, lo, hi), cfo, audio chunks, samples]
@@ -351,6 +357,7 @@ class Engine:
             raise ValueError(f"no ref {ref}")
         if self._hand_tx is not None:
             raise ValueError("a Hand is already waiting")
+        self._overhear_end()  # my own Hand takes precedence over a bystander's window
         if not 0 <= channel < hand.N_CHANNELS or not 0 <= tag <= 255:
             raise ValueError("bad channel or tag")
         if not 0 <= payload < 2 ** 64 or not 0 < d_s < HAND_ARM_EXPIRE_S:
@@ -378,10 +385,45 @@ class Engine:
         if not channels or any(not 0 <= c < hand.N_CHANNELS for c in channels):
             raise ValueError("bad channels")
         channels = list(dict.fromkeys(channels))  # listed twice: decoded once
+        self._overhear_end()  # my own window takes precedence over a bystander's
         if self._hand_listen is not None:  # its round still owes a HAND END
             raise ValueError("a Hand window is already waiting")
         self._hand_listen = dict(d=int(round(d_s * FS)), tag=tag, ack=ack, channels=channels,
                                  armed=self.n, open=False, buf=[], first=0, next=0, lo=0, hi=0, anchor=0)
+
+    def hand_overhear(self, ref: int, d_s: float, channels: list[int]):
+        """A bystander's Hand window (issue #210): d_s seconds after heard
+        burst `ref` ends (decoded or LOST), where the answerers to it time
+        theirs, decoded under any tag. Passive: it holds none of my bursts,
+        and my own HAND SEND or LISTEN ends it (HAND END). Its Hand lines add
+        the tag that passed. ValueError: unknown ref, bad numbers, its slot
+        already past, or a window already waiting."""
+        if ref not in self.hand_refs:
+            raise ValueError(f"no ref {ref}")
+        if not 0 < d_s < HAND_ARM_EXPIRE_S:
+            raise ValueError("bad delay")
+        if not channels or any(not 0 <= c < hand.N_CHANNELS for c in channels):
+            raise ValueError("bad channels")
+        if self._hand_listen is not None:
+            raise ValueError("a Hand window is already waiting")
+        a, d = int(round(self.hand_refs[ref][0] * FS)), int(round(d_s * FS))
+        old = max(0, self.n - len(self._hist))  # the oldest sample the ring still holds
+        if old > a + d:  # the slot itself is older than the ring
+            raise ValueError("the slot has passed")
+        hl = self._hand_listen = dict(d=d, tag=None, ack=None, channels=list(dict.fromkeys(channels)), armed=self.n,
+                                      open=True, passive=True, buf=[], first=0, next=0, anchor=a,
+                                      lo=a + d - hand.SEARCH_SAMPLES, hi=a + d + hand.SEARCH_SAMPLES + hand.LEN_SAMPLES)
+        first, last = max(hl["lo"], old), min(self.n, hl["hi"])
+        if first < last:  # late: what the window already holds comes from the ring
+            idx = np.arange(first, last) % len(self._hist)
+            hl.update(buf=[self._hist[idx]], first=first, next=self.n)
+            if self.n >= hl["hi"]:  # all of it: decode now
+                self._hand_close()
+
+    def _overhear_end(self):
+        if self._hand_listen is not None and self._hand_listen.get("passive"):
+            self._hand_listen = None
+            self._hand_event("HAND END")
 
     def hand_cancel(self):
         """Stop a waiting Hand and an armed or open window (docs/arq.md §9):
@@ -426,19 +468,23 @@ class Engine:
                 hl["buf"].append(x)
             hl["next"] = self.n + k
         if self.n + k >= hl["hi"] and hl["buf"]:
-            self._hand_listen = None
-            nominal = hl["anchor"] + hl["d"] - hl["first"]
-            # first past lo: the window's head went uncaptured (my own burst
-            # ran into it) - the round reports how much
-            short = f"HAND SHORT {int(round((hl['first'] - hl['lo']) * 1000 / FS))}" if hl["first"] > hl["lo"] else None
-            threading.Thread(target=self._hand_decode,
-                             args=(np.concatenate(hl["buf"]), hl["tag"], hl["channels"], nominal, short,
-                                   hand.ROUNDS[self.hand_round]),
-                             name="hand-decode", daemon=True).start()
+            self._hand_close()
 
-    def _hand_decode(self, y: np.ndarray, tag: int, channels: list[int], nominal: int, short: str | None, rnd: dict):
+    def _hand_close(self):
+        """The open window's capture is complete: its round goes to a decoder thread."""
+        hl, self._hand_listen = self._hand_listen, None
+        nominal = hl["anchor"] + hl["d"] - hl["first"]
+        # first past lo: the window's head went uncaptured (my own burst
+        # ran into it, or older than the ring) - the round reports how much
+        short = f"HAND SHORT {int(round((hl['first'] - hl['lo']) * 1000 / FS))}" if hl["first"] > hl["lo"] else None
+        threading.Thread(target=self._hand_decode,
+                         args=(np.concatenate(hl["buf"]), hl["tag"], hl["channels"], nominal, short, hand.ROUNDS[self.hand_round]),
+                         name="hand-decode", daemon=True).start()
+
+    def _hand_decode(self, y: np.ndarray, tag: int | None, channels: list[int], nominal: int, short: str | None, rnd: dict):
         """The round's decodes off the audio thread (~2.4 s of CPU for 40
-        channels on a desktop): a line per Hand decoded, then HAND SHORT if
+        channels on a desktop): a line per Hand decoded (tag None, an
+        overheard window: any tag, which the line adds), then HAND SHORT if
         the window's head was missed, then HAND END. A negative nominal: the
         slot lies before the capture, so no decodes (a search reaching past
         the capture's head reads zeros, as hand.bins pads). A decoder exception costs the round, not the station."""
@@ -446,7 +492,8 @@ class Engine:
         if nominal >= 0:
             try:
                 res = hand.decode_window(y, tag, channels, nominal, rnd)
-                lines = [f"HAND {r['c']} {r['payload']:016x} {r['snr']:.1f} {r['dt_ms']:.0f}" for r in res]
+                lines = [f"HAND {r['c']} {r['payload']:016x} {r['snr']:.1f} {r['dt_ms']:.0f}"
+                         + (f" {r['tag']}" if tag is None else "") for r in res]
             except Exception:
                 log.exception("hand decode failed")
         for line in lines + ([short] if short is not None else []) + ["HAND END"]:
@@ -514,18 +561,23 @@ class Engine:
         log.info("TX CW ID %s", call)
         return cwid.CwBurst(cwid.id_text(call), self.cw_wpm)
 
-    def _with_id(self, burst: B.TxBurst, t: float) -> list:
-        """A session's burst -> the bursts to send back to back: an ID first
-        when one is due, or the pending last ID after a closed session's
-        final burst (its DISC_ACK)."""
+    def _with_id(self, burst: B.TxBurst, t: float) -> tuple[list, B.TxBurst]:
+        """A session's burst -> (the bursts to send back to back, the session's
+        among them): an ID first when one is due, or the pending last ID after
+        a closed session's final burst (its DISC_ACK). A nod behind an ID
+        would miss its slot (on air 2026-11-15: 3.1 s past the peer's burst,
+        its window ended at 1.8): it goes as the control it stands for."""
         s = self.session
         if s.state == S.CLOSED and self._id_pending is not None:
             self._id_pending = None
-            return [burst, *self._ids(s, False)]
+            return [burst, *self._ids(s, False)], burst
         if s is self._id_for and self._id_due is not None and t >= self._id_due:
             self._id_due = t + self.id_interval_s
-            return [*self._ids(s, True), burst]
-        return [burst]
+            if burst.nod is not None:
+                log.info("TX b%d: an ID goes ahead, so its nod goes as its control", burst.burst_seq % F.BURST_MOD)
+                burst = dataclasses.replace(burst, nod=None)
+            return [*self._ids(s, True), burst], burst
+        return [burst], burst
 
     def _cw_ready(self, t: float) -> bool:
         return self.cw_id != "off" and self._cw_at is not None and t >= self._cw_at
@@ -588,6 +640,8 @@ class Engine:
         out = np.zeros(k)
         if self.rec:
             self.rec.audio(x if self.tx is None else np.zeros(k))
+        idx = np.arange(self.n, self.n + k) % len(self._hist)
+        self._hist[idx] = x if self.tx is None else 0.0
         if self.tx is None:
             self.noise.feed(x, self.now)
             cw = self.cw.feed(x)
@@ -612,7 +666,7 @@ class Engine:
                 self._missed_energy()
                 self._id_check(t)
                 if burst is not None:
-                    bursts, main = self._with_id(burst, t), burst
+                    bursts, main = self._with_id(burst, t)
                 elif self._id_pending is not None and t >= self._id_pending[1] and hand_free:
                     bursts, self._id_pending = self._ids(self._id_pending[0], False), None
                 elif self._extra and free:
@@ -744,14 +798,17 @@ class Engine:
             span, self._span = self._span, None
             r, h = ev["rx"], ev["header"]
             meas = PHY.measure(r) if r is not None else None
-            if r is not None:  # every decoded burst is a Hand reference (docs/arq.md §9)
-                self._hand_ref_n += 1
-                end = span[1] if span else t
-                cfo = r.get("cfo", 0.0)
-                self.hand_refs[self._hand_ref_n] = (end, cfo, meas["snr_est"])
-                if len(self.hand_refs) > HAND_REFS_KEPT:
-                    self.hand_refs.pop(min(self.hand_refs))
-                self._hand_event(f"REF {self._hand_ref_n} {end:.2f} {cfo:.1f} {meas['snr_est']:.1f}")
+            # every burst heard is a Hand reference (docs/arq.md §9); one whose header was heard but
+            # not its data (the bursts behind BUSY and BCAST * MISSED) is LOST, its snr from power alone
+            self._hand_ref_n += 1
+            end = span[1] if span else t
+            cfo = (r if r is not None else h).get("cfo", 0.0)
+            snr = meas["snr_est"] if meas else self._span_snr(*span) if span else None
+            snr = float("nan") if snr is None else snr
+            self.hand_refs[self._hand_ref_n] = (end, cfo, snr)
+            if len(self.hand_refs) > HAND_REFS_KEPT:
+                self.hand_refs.pop(min(self.hand_refs))
+            self._hand_event(f"REF {self._hand_ref_n} {end:.2f} {cfo:.1f} {snr:.1f}" + ("" if r is not None else " LOST"))
             if span is not None and self.session.state in (S.CONNECTED, S.DISCONNECTING):
                 # heard (decoded or not): the peer's, most likely
                 self._energy(*span, t, floor_db=meas["snr_est"] if meas else None)

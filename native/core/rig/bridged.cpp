@@ -206,6 +206,9 @@ std::unique_ptr<RigBackend> make_bridged_backend(
     HamlibConfig config, std::shared_ptr<SerialTransport> transport,
     BackendFactory make_inner) {
     if (!make_inner) throw RigError("make_bridged_backend: no backend factory");
+    // Hamlib keys a CM108 through Linux's hidraw, which an Android app can't open.
+    if (config.ptt_method == PttMethod::Cm108)
+        throw RigError("PTT by CM108 needs a desktop (Linux); choose CAT, DTR, RTS or VOX here");
 
     // No transport: the operator chose a network rig. Hamlib opens the
     // socket itself, for model 2 and for a native backend alike, and

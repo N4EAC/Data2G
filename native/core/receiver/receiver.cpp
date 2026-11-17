@@ -89,6 +89,7 @@ std::optional<Rx> receive_any(std::span<const double> y, int64_t lead,
 int64_t Pending::start() const { return is_cpm() ? cpm().start : ofdm().start; }
 int64_t Pending::end() const { return is_cpm() ? cpm().end : ofdm().end; }
 double Pending::score() const { return is_cpm() ? cpm().score : ofdm().score; }
+double Pending::cfo() const { return is_cpm() ? cpm().cfo : ofdm().cfo; }
 int Pending::n_cw() const { return is_cpm() ? 1 + cpm().dup + cpm().n_data : ofdm().n_cw; }
 
 void Pending::shift(int64_t d) {
@@ -211,9 +212,8 @@ std::optional<std::pair<double, double>> ReplySlot::window(double tx_end) const 
 std::optional<std::pair<double, double>> ReplySlot::nod_window(double tx_end) const {
     const auto w = window(tx_end);
     if (!w) return std::nullopt;
-    const double g = w->first + TOL_S - tx_end;
-    const auto [mn, mx] = std::minmax_element(gaps_.begin(), gaps_.end());
-    return std::make_pair(tx_end + std::max(*mn - TOL_S, g - NOD_HALF_S), tx_end + std::min(*mx + TOL_S, g + NOD_HALF_S));
+    const double g = w->first + TOL_S - tx_end;  // the median
+    return std::make_pair(tx_end + g - NOD_HALF_S, tx_end + g + NOD_HALF_S);
 }
 
 bool Receiver::on_air() const {
