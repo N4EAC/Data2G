@@ -888,7 +888,9 @@ off (Python and native) for A/B runs.
   holds after each control (the value said, the value kept, none; never an unknown one).
   **Primed controls (§3a)**: from a peer at step 2 the likeliest control has no
   `T_REPLY`, so that is the first hypothesis, and the second is the same with one, its
-  value unknown.
+  value unknown. No hypothesis carries `T_KEEP` once the peer has stopped saying it.
+  The expected reply slot listens for the reply mode the peer holds: not one a control
+  left out for `T_KEEP` or shed.
 - **Measured** (shift+cpm, DATA2G_PEP_REF_DB=5, paired by seed against `DATA2G_KEEP=0`).
   Bulk (`scripts/loss_study.py`, 16 seeds x 300 s, delivered bps): awgn -10 +1.3% (SE
   0.7; 3 seeds better, 0 worse), awgn -6 +3.9% (0.3; 16/0), awgn -4 +4.9% (0.7; 14/0),

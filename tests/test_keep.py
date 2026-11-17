@@ -95,7 +95,7 @@ def test_t_keep_until_acted_on_then_t_reply_only_on_change():
     assert a.handle(FullRx(r)) and a._keeping
     x = a.build()
     # a's T_KEEP is acted on, but a does not know yet that b reads its controls so: in full
-    assert F.T_KEEP not in _ctl(x).ext and _ctl(x).ext[F.T_REPLY] == b""
+    assert F.T_KEEP not in _ctl(x).ext and _ctl(x).ext[F.T_REPLY] == b"\x03"
     burst, sender, receiver = x, a, b
     for _ in range(4):
         assert receiver.handle(FullRx(burst))
@@ -212,7 +212,7 @@ def test_reply_is_not_kept_before_its_sender_keeps_it():
     assert a.handle(FullRx(b0)) and a.keep_peer and not a._keep_told
     a.policy.mode, a.policy.reply = CPM, 7
     a1 = a.build()
-    assert _whole(a1).ext[F.T_REPLY] == b"" and F.T_KEEP in _whole(a1).ext
+    assert _whole(a1).ext[F.T_REPLY] == b"\x07" and F.T_KEEP in _whole(a1).ext
     assert b.handle(FullRx(a1)) and b.peer_reply_recommend == 7
     b.build()  # lost
     b.answered()
@@ -286,7 +286,7 @@ def _kept_pair():
     return a, b
 
 
-@pytest.mark.parametrize("size,left", [(7, b""), (8, b""), (9, None)])
+@pytest.mark.parametrize("size,left", [(7, b"\x05"), (8, b""), (9, None)])
 def test_a_shed_t_reply_says_none_where_that_fits(size, left):
     """Once both keep it, a changed T_REPLY that an inline codeword leaves no room
     for is cut to none (an empty T_REPLY, a byte less) before it is dropped, so the
@@ -299,12 +299,12 @@ def test_a_shed_t_reply_says_none_where_that_fits(size, left):
     x = a.build()
     ext = _whole(x).ext
     assert F.T_INLINE in ext and ext.get(F.T_REPLY) == left
-    assert b.handle(FullRx(x)) and b.peer_reply_recommend == {b"": 5, b"": None, None: 3}[left]
-    assert a._said(a._latest) == {b"": 5, b"": None, None: L._UNKNOWN}[left]
+    assert b.handle(FullRx(x)) and b.peer_reply_recommend == {b"\x05": 5, b"": None, None: 3}[left]
+    assert a._said(a._latest) == {b"\x05": 5, b"": None, None: L._UNKNOWN}[left]
     y = b.build()
     b.answered()
     assert a.handle(FullRx(y))
-    assert _whole(a.build()).ext.get(F.T_REPLY) == (None if left == b"" else b"")
+    assert _whole(a.build()).ext.get(F.T_REPLY) == (None if left == b"\x05" else b"\x05")
 
 
 def test_primed_hypotheses_leave_t_reply_out_first_once_kept():
@@ -350,13 +350,13 @@ def test_expected_modes_leave_out_a_reply_mode_never_said(mode, left):
     """The expected reply slot listens for the reply mode I recommended only where
     the control said it: not where T_KEEP took T_REPLY's place, nor where it was shed."""
     if left == "swapped":
-        a, b = _pair()
+        a, _ = _pair()
         a.policy.reply = 3
         x = a.build()
         assert F.T_KEEP in _whole(x).ext and F.T_REPLY not in _whole(x).ext
         assert "3" not in a.expected_modes()
         return
-    a, b = _kept_pair()
+    a, _ = _kept_pair()
     assert "3" in a.expected_modes()  # kept: as said last
     a.policy.reply = 5
     a.write(bytes(range(1, 10)))

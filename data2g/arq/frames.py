@@ -54,8 +54,10 @@ T_INLINE = 18
 # Drop it (everyone hears nods) at the next session version bump.
 T_NODS = 19
 # empty: the sender keeps T_REPLY (docs/arq.md §8a): a control without it leaves the reply
-# recommendation as it was. In control padding only, until the peer acts on a burst that
-# carried it; a station leaves T_REPLY out as unchanged only once both have said so.
+# recommendation as it was. In control padding, or in T_REPLY's place where the two would
+# cost a codeword more, until the peer acts on a burst that carried it. Both having said
+# it is not enough to leave T_REPLY out as unchanged, or to read a control without it so:
+# §8a's three steps, each a burst acted on, say when a station may do either.
 # Drop it (everyone keeps it) at the next session version bump.
 T_KEEP = 20
 
