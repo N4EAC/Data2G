@@ -152,6 +152,11 @@ void bind_kisslink(py::module_& m) {
         })
         .def("missed", &KissLink::missed, py::arg("submode"), py::arg("n_cw"), py::arg("snr") = py::none())
         .def("next_burst", [](KissLink& l) { return burst_py(l.next_burst()); })
+        .def("next_bursts", [](KissLink& l) {
+            py::list out;
+            for (const auto& b : l.next_bursts()) out.append(burst_py(b));
+            return out;
+        })
         .def("on_burst", [](KissLink& l, py::dict r, const py::object&) -> py::object {
             auto h = heard_of(r);
             auto soft = cached_soft(r, h);
