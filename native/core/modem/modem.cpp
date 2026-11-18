@@ -14,6 +14,7 @@
 #include "codes/codes.hpp"
 #include "constellation/constellation.hpp"
 #include "dsp/dsp.hpp"
+#include "util/pool.hpp"
 #include "waveform/dsp.hpp"
 #include "waveform/ofdm.hpp"
 
@@ -708,11 +709,17 @@ BestHeader best_header(std::span<const cd> z0, std::span<const std::string_view>
         waveform::Acquisition acq;
         std::shared_ptr<const std::vector<cd>> z;
     };
-    std::vector<Good> good;
-    int detected = 0;
-    bool waiting = false;
     const auto len = static_cast<int64_t>(z0.size());
-    for (const auto name : search_bands(bands, accept)) {
+    // one pool task per band (receive's acquisition fan-out); each band's own list, joined in band order below
+    struct Band {
+        std::vector<Good> good;
+        bool detected = false, waiting = false;
+    };
+    const auto names = search_bands(bands, accept);
+    std::vector<Band> per(names.size());
+    pool::parallel_for(names.size(), [&](std::size_t i) {
+        const auto name = names[i];
+        auto& out = per[i];
         const Mat<double>* S = nullptr;
         for (const auto& st : stats)
             if (st.band == name) S = st.S;
@@ -720,16 +727,16 @@ BestHeader best_header(std::span<const cd> z0, std::span<const std::string_view>
         try {
             acq_b = waveform::acquire(z0, waveform::band(name), {}, ACQUIRE_REACH_HZ, {}, S);
         } catch (const SyncError&) {
-            continue;
+            return;
         }
-        ++detected;
+        out.detected = true;
         const int64_t hdr_end = preamble_samples(band(name)) + header_samples(name) + NSYM;
         std::vector<std::pair<int64_t, double>> hyps{{acq_b.preamble_start, acq_b.freq_offset}};
         hyps.insert(hyps.end(), acq_b.alternatives.begin(), acq_b.alternatives.end());
         for (size_t h = 0; h < hyps.size(); ++h) {
             const auto [start, f] = hyps[h];
             if (!complete && start + 2 * M > len - hdr_end) {
-                waiting = waiting || !final;
+                out.waiting = out.waiting || !final;
                 continue;
             }
             auto zb = std::make_shared<const std::vector<cd>>(waveform::freq_correct(z0, f));
@@ -738,7 +745,7 @@ BestHeader best_header(std::span<const cd> z0, std::span<const std::string_view>
                 if (!(0 <= s && s <= len - hdr_end)) continue;
                 auto r = read_header(*zb, s, name, accept);
                 if (!complete && !final && r.pending_copy && r.hdr.score < COPY_COMMIT_SCORE) {
-                    waiting = true;
+                    out.waiting = true;
                     continue;
                 }
                 if (r.valid && (!complete || burst_end(r.p0, *r.hdr.spec, r.hdr.n_cw) <= len)) {
@@ -746,10 +753,18 @@ BestHeader best_header(std::span<const cd> z0, std::span<const std::string_view>
                     auto acq = acq_b;
                     acq.preamble_start = start;
                     acq.freq_offset = f;
-                    good.push_back({rank, std::move(r), std::move(acq), zb});
+                    out.good.push_back({rank, std::move(r), std::move(acq), zb});
                 }
             }
         }
+    });
+    std::vector<Good> good;
+    int detected = 0;
+    bool waiting = false;
+    for (auto& b : per) {
+        detected += b.detected;
+        waiting = waiting || b.waiting;
+        for (auto& g : b.good) good.push_back(std::move(g));
     }
     if (good.empty()) throw SyncError(detected ? "header decode failed" : "no preamble found");
     size_t best = 0;  // max(): the first of equal ranks

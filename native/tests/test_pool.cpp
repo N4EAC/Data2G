@@ -1,6 +1,6 @@
 // The shared pool (core/util/pool) changes timing, never results: batched
 // LDPC (soft values included) and polar decodes, the CFO-grid sync, the DD
-// re-estimate and a whole receive + DD decode, bit for bit at pool sizes 1,
+// re-estimate, a whole receive + DD decode and the streaming search, bit for bit at pool sizes 1,
 // 2, 4 and 8. Also the pool itself: every index once, exceptions, nesting,
 // two callers at once. Run under TSan too (docs/native-port-plan.md).
 
@@ -14,6 +14,7 @@
 #include "arq/phy.hpp"
 #include "check.hpp"
 #include "equalizer/equalizer.hpp"
+#include "receiver/receiver.hpp"
 #include "util/pool.hpp"
 #include "waveform/sync.hpp"
 
@@ -106,6 +107,23 @@ std::vector<std::string> run(const std::vector<double>& y_fail, const std::vecto
         for (const auto& [k, e] : store) got += bits(e.buf);
         out.push_back(flags + got);
     }
+
+    // the streaming search (per band and per CPM grid on the pool), 20 ms feeds: every event's lock
+    for (const auto* y : {&y_fail, &y_mixed}) {
+        std::vector<std::string_view> grids;
+        for (const auto& g : tables::CPM_GRIDS) grids.push_back(g.name);
+        receiver::Receiver rx(modem::Accept::of(), grids);
+        std::string ev;
+        for (std::size_t i = 0; i < y->size(); i += config::FS / 50) {
+            const auto n = std::min<std::size_t>(config::FS / 50, y->size() - i);
+            for (const auto& e : rx.feed(std::span(*y).subspan(i, n))) {
+                const auto& p = std::holds_alternative<receiver::HeaderEvent>(e) ? std::get<0>(e).header : std::get<1>(e).header;
+                const double v[] = {static_cast<double>(p.start()), p.score(), p.cfo(), static_cast<double>(e.index())};
+                ev += bits(std::vector<double>(v, v + 4));
+            }
+        }
+        out.push_back(ev);
+    }
     return out;
 }
 
@@ -184,7 +202,8 @@ int main() {
             check::is_true(got[i] == want[i], "part " + std::to_string(i) + " at " + std::to_string(n) + " threads");
     }
     // the DD part must have had something to do: some slots fail, some decode
-    const auto flags = want.back().substr(0, 16), none = want[want.size() - 3].substr(0, 16);
+    const auto flags = want[want.size() - 3].substr(0, 16), none = want[want.size() - 5].substr(0, 16);
+    check::is_true(!want.back().empty(), "the stream search locked the mixed burst");
     check::is_true(flags.find('0') != std::string::npos && flags.find('1') != std::string::npos,
                    "mixed burst: some slots decode, DD runs on the rest (" + flags + ")");
     check::equal(none, std::string(16, '0'), "failing burst: every slot fails");

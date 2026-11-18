@@ -7,6 +7,7 @@
 #include <string>
 
 #include "dsp/dsp.hpp"
+#include "util/pool.hpp"
 #include "waveform/dsp.hpp"
 
 namespace data2g::receiver {
@@ -298,11 +299,11 @@ void Receiver::trim(int64_t n) {
 }
 
 Receiver::Stats Receiver::stats(int64_t w0) {
-    Stats out;
-    out.mats.reserve(detectors_.size());
-    for (auto& det : detectors_) {
-        const auto band = det.band;
-        auto& d = det.d;
+    // one pool task per band (each detector is its own); joined in band order
+    std::vector<std::optional<Mat<double>>> per(detectors_.size());
+    pool::parallel_for(detectors_.size(), [&](std::size_t i) {
+        const auto band = detectors_[i].band;
+        auto& d = detectors_[i].d;
         if (d.fed < off_) d.restart_at(off_);  // its audio was trimmed away: start over
         auto from = static_cast<std::size_t>(d.fed - off_);
         // A confirmed burst isn't searched, so its audio goes unfed until a search is wanted again (a late
@@ -318,14 +319,20 @@ Receiver::Stats Receiver::stats(int64_t w0) {
         // a long burst in the buffer)
         d.trim(off_ + len() - keep_ - d.span);
         const int64_t n = len() - w0 - d.span + 1;
-        if (n <= 0) continue;
+        if (n <= 0) return;
         const int64_t lo = off_ + w0;
         Mat<double> S = d.stat(lo, lo + n);
         const auto masked = static_cast<std::size_t>(std::clamp<int64_t>(decided(band) - lo, 0, n));
         for (std::size_t r = 0; r < S.rows; ++r) std::fill(S[r], S[r] + masked, -1.0);
-        out.mats.push_back(std::move(S));
-        out.v.push_back({band, &out.mats.back()});
-    }
+        per[i] = std::move(S);
+    });
+    Stats out;
+    out.mats.reserve(detectors_.size());  // (out.v points into it)
+    for (std::size_t i = 0; i < per.size(); ++i)
+        if (per[i]) {
+            out.mats.push_back(std::move(*per[i]));
+            out.v.push_back({detectors_[i].band, &out.mats.back()});
+        }
     return out;
 }
 
@@ -345,15 +352,18 @@ void Receiver::searched() {
 }
 
 std::optional<modem::Lock> Receiver::find_copy() {
-    std::optional<modem::Lock> best;
-    int64_t best_k = 0;
     constexpr int64_t PF = static_cast<int64_t>(modem::COPY_PAIRS) * config::FRAME_SAMPLES;
-    for (const auto band : config::HEADER_COPY_BANDS) {
+    // one pool task per band (each its own detector); the best taken in band order below
+    const auto& bands = config::HEADER_COPY_BANDS;
+    std::vector<std::optional<modem::Lock>> locks(bands.size());
+    std::vector<int64_t> ks(bands.size(), 0);
+    pool::parallel_for(bands.size(), [&](std::size_t i) {
+        const auto band = bands[i];
         const auto it = std::find_if(detectors_.begin(), detectors_.end(), [&](const Detector& d) { return d.band == band; });
-        if (it == detectors_.end()) continue;
+        if (it == detectors_.end()) return;
         auto& d = it->d;
         const auto level = d.level();
-        if (!level) continue;
+        if (!level) return;
         // from the stream index both the buffer and the products cover
         const auto c = d.products_from(off_, config::FRAME_SAMPLES, modem::COPY_PAIRS);
         const int64_t a = c.start;
@@ -370,12 +380,16 @@ std::optional<modem::Lock> Receiver::find_copy() {
             for (std::size_t f = 0; f < R.rows; ++f)
                 for (std::size_t ph = 0; ph < R.cols; ++ph) fold[f][ph] = R[f][(s + ph) % R.cols];
         }
-        const auto lock = modem::find_copy(x, band, &accept_, c.rows, cols, level, nullptr, m >= 1 ? &fold : nullptr);
-        if (lock && (!best || lock->score > best->score)) {
-            best = lock;
-            best_k = a - off_;
+        locks[i] = modem::find_copy(x, band, &accept_, c.rows, cols, level, nullptr, m >= 1 ? &fold : nullptr);
+        ks[i] = a - off_;
+    });
+    std::optional<modem::Lock> best;
+    int64_t best_k = 0;
+    for (std::size_t i = 0; i < locks.size(); ++i)
+        if (locks[i] && (!best || locks[i]->score > best->score)) {
+            best = locks[i];
+            best_k = ks[i];
         }
-    }
     if (best) {
         Pending p{*best};
         p.shift(best_k);
@@ -400,9 +414,16 @@ std::optional<cpm::Lock> Receiver::find_cpm() {
         c.end -= off_;
         if (auto lock = cpm::late_lock(*w.g, buf_, c)) return lock;
     }
-    for (const auto* g : grids_) {
-        auto lock = cpm::find(*g, buf_, std::nullopt, 150.0, true, std::max<int64_t>(0, decided(g->name) - off_),
-                              len() - grid_span(*g) + 2 * g->T, true);
+    // one pool task per grid, read in grid order (a grid's lock ends the search, as when they ran one by one)
+    std::vector<std::optional<cpm::Lock>> found(grids_.size());
+    pool::parallel_for(grids_.size(), [&](std::size_t i) {
+        const auto* g = grids_[i];
+        found[i] = cpm::find(*g, buf_, std::nullopt, 150.0, true, std::max<int64_t>(0, decided(g->name) - off_),
+                             len() - grid_span(*g) + 2 * g->T, true);
+    });
+    for (std::size_t i = 0; i < grids_.size(); ++i) {
+        const auto* g = grids_[i];
+        auto& lock = found[i];
         if (!lock) continue;
         if (!lock->wait) return lock;
         lock->start += off_;
@@ -414,11 +435,15 @@ std::optional<cpm::Lock> Receiver::find_cpm() {
         });
         if (!known) cpm_wait_.push_back({g, *lock, lock->header_end - cpm::hdr_span(*g, 2)});
     }
-    for (const auto* g : grids_) {  // the front missed: the mid block and both header copies
-        const auto lock = cpm::find_mid(*g, buf_, std::max<int64_t>(0, decided_mid(*g) - off_),
-                                        len() - (static_cast<int64_t>(g->mid_block.size()) + g->hdr_len - 1) * g->T);
+    // the front missed: the mid block and both header copies (per grid on the pool, the first in grid order)
+    std::vector<std::optional<cpm::Lock>> mid(grids_.size());
+    pool::parallel_for(grids_.size(), [&](std::size_t i) {
+        const auto* g = grids_[i];
+        mid[i] = cpm::find_mid(*g, buf_, std::max<int64_t>(0, decided_mid(*g) - off_),
+                               len() - (static_cast<int64_t>(g->mid_block.size()) + g->hdr_len - 1) * g->T);
+    });
+    for (auto& lock : mid)
         if (lock) return lock;
-    }
     return std::nullopt;
 }
 

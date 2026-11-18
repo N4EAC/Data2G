@@ -145,7 +145,9 @@ latency before it is kept:
 - CFO-grid parallel sync correlation.
 
 One shared pool, sized min(4, cores/2) and settable, because the machine is
-shared and a modem must not saturate a laptop either.
+shared and a modem must not saturate a laptop either. Since 2026-11-17 the
+default is every core up to 4, 4 up to 8 cores, half the cores above (a Pi 4
+gets all 4, for the per-band/grid search fan-out).
 
 Status 2026-10-02: the pool landed (`core/util/pool`). Fixed threads, one
 job at a time (a second caller, or a nested call, runs inline),
