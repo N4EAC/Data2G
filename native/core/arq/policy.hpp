@@ -52,6 +52,8 @@ inline constexpr int CTL_BYTES = 12;
 inline constexpr std::string_view ALT_POLL = "n4-ack-8f";  // escalation 2's mode
 inline constexpr int ROBUST_ESCALATION = 4;  // from here on ROBUST_CONNECT
 inline constexpr std::string_view ROBUST_CONNECT = "fsk16r25-r1/2";
+inline constexpr std::string_view ROBUST_FAST = "fsk8r50-r1/3";  // policy.py: in a session on fast fading
+inline constexpr double ROBUST_FAST_SPREAD_HZ = 6.0;
 
 std::string_view fallback(int cap);
 std::string_view connect_mode(int cap, int tries = 0);

@@ -330,3 +330,25 @@ def test_expected_reply_follows_what_the_peer_sent_last():
     mode, secs = g.expected_reply()
     assert mode == G.decode(reply) and secs == G.burst_seconds(G.MODES[mode], G.ctl_slots(G.MODES[mode]))
     assert secs < G.burst_seconds(G.MODES[G.decode(data)], G.slots_for(G.MODES[G.decode(data)], G.SIZE_S[hint]))
+
+
+def test_robust_mode_follows_measured_spread():
+    """In a session, robust polls and the robust floor go in ROBUST_FAST once
+    the peer measured fast fading (fsk16r25 fails on 30 Hz Doppler, #244); a
+    robust poll is answered in whichever robust mode it came in."""
+    g = G.GearShifter()
+    st = station(0)
+    assert g.choose(st, 4) == (G.ROBUST_CONNECT, 1)  # nothing measured
+    g.observe(measured(10, 12.0), "fsk32r62-r1/2", 0.0)
+    assert g.choose(st, 4) == (G.ROBUST_FAST, 1)
+    st.tx, st.esc_floor = SimpleNamespace(pending=lambda: False, base=0), G.ROBUST_ESCALATION
+    assert g.choose(st, 0) == (G.ROBUST_FAST, 1)  # the robust floor too
+    g.observe(measured(10, 1.0), G.ROBUST_CONNECT, 1.0)
+    assert g.choose(st, 1) == (G.ROBUST_CONNECT, 1)  # answered in the peer's robust mode
+    assert g.choose(st, 4) == (G.ROBUST_CONNECT, 1)
+    g.observe(measured(10, 12.0), G.ROBUST_FAST, 2.0)
+    assert g.choose(st, 1) == (G.ROBUST_FAST, 1)
+    from data2g.arq.modes import burst_seconds
+
+    hold = g.reply_hold(SimpleNamespace(cap=0, misses=0, esc_floor=0), SimpleNamespace(submode=G.ROBUST_FAST))
+    assert hold >= max(burst_seconds(G.MODES[m], 1) for m in G.ROBUST_MODES)

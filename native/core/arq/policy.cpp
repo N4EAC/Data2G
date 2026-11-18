@@ -72,8 +72,10 @@ std::pair<std::string_view, int> GearShifter::choose(const StationView& st, int 
     // the peer's robust poll, or my floor there with no data: control only in
     // ROBUST_CONNECT (policy.py)
     const bool robust_floor = st.esc_floor >= ROBUST_ESCALATION && !st.pending;
-    if (escalation >= ROBUST_ESCALATION || (escalation && heard == ROBUST_CONNECT) || robust_floor)
-        return {ROBUST_CONNECT, 1};
+    if (escalation && (heard == ROBUST_CONNECT || heard == ROBUST_FAST))  // the peer's robust poll: in its mode
+        return {heard == ROBUST_FAST ? ROBUST_FAST : ROBUST_CONNECT, 1};
+    if (escalation >= ROBUST_ESCALATION || robust_floor)
+        return {last_spread && *last_spread >= ROBUST_FAST_SPREAD_HZ ? ROBUST_FAST : ROBUST_CONNECT, 1};
     if (escalation == 2) return {ALT_POLL, 2};
     if (escalation) {
         const Mode* r = st.peer_reply_recommend ? decode(*st.peer_reply_recommend) : nullptr;
@@ -171,7 +173,8 @@ int GearShifter::gate() const {
 double GearShifter::reply_hold(const StationView& st, std::string_view submode) const {
     std::vector<std::string_view> ms = {log.empty() ? fallback(st.cap) : std::string_view(log.back().reply)};
     if (st.misses) ms.insert(ms.end(), {fallback(st.cap), ALT_POLL});
-    if (submode == ROBUST_CONNECT || st.esc_floor >= ROBUST_ESCALATION) ms.push_back(ROBUST_CONNECT);
+    if (submode == ROBUST_CONNECT || submode == ROBUST_FAST || st.esc_floor >= ROBUST_ESCALATION)
+        ms.insert(ms.end(), {ROBUST_CONNECT, ROBUST_FAST});
     double t = 0.0;
     for (auto m : ms) {
         const Mode& md = mode_at(m);

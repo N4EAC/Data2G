@@ -110,6 +110,16 @@ CONNECT = {0: "n10-qpsk-r1/3", 1: "qpsk-r1/5", 2: "qpsk-r1/5"}  # >= 28 B payloa
 ALT_POLL = "n4-ack-8f"
 ROBUST_ESCALATION = 4  # from here on ROBUST_CONNECT (link caps escalation at 4)
 ROBUST_CONNECT = "fsk16r25-r1/2"  # session-frame retries: 500 Hz, within every cap; CONNECT goes compact (20 B)
+# In a session, the robust mode on fast fading (robust_mode()): the peer's last
+# measured spread_est at least ROBUST_FAST_SPREAD_HZ. On 30 Hz / 7 ms fading
+# fsk16r25 decodes nothing even at a genie lock (25 Hz tones), and its lock
+# gets worse with SNR (#244), so polls in it stalled sessions longer the
+# stronger the signal; fsk8r50-r1/3 (400 Hz, within every cap too) locked and
+# decoded 100% there from -5 to +20 dB. Connect retries keep ROBUST_CONNECT:
+# before a session nothing is measured.
+ROBUST_FAST = "fsk8r50-r1/3"
+ROBUST_FAST_SPREAD_HZ = 6.0
+ROBUST_MODES = (ROBUST_CONNECT, ROBUST_FAST)
 
 # --- study toggles (Python only; native has the defaults) --------------------
 # Set any and tests/native_subs/gear.py's GEAR_STUDY_ENV keeps the shifter in Python.
@@ -296,6 +306,12 @@ class GearShifter(L.Policy):
         loss-study sessions there never connected in qpsk-r1/5)."""
         return CONNECT[cap] if tries == 0 else ROBUST_CONNECT
 
+    def robust_mode(self) -> str:
+        """In a session, the robust control mode: ROBUST_FAST if the peer's
+        last measured spread_est says fast fading, else ROBUST_CONNECT."""
+        fast = self.last_spread is not None and self.last_spread >= ROBUST_FAST_SPREAD_HZ
+        return ROBUST_FAST if fast else ROBUST_CONNECT
+
     def airtime(self, m, n_cw, dup=False):
         """`dup`: a CPM burst's control twice (the second copy is a short
         control codeword, not a data one: an x10 burst is 30.4 s, not 32.6)."""
@@ -321,8 +337,10 @@ class GearShifter(L.Policy):
         # as well, not only polls (MPP -8: the peer heard 4 of my 11
         # n4-ack-8f acks and 13 of 17 robust polls; its data waited on them)
         robust_floor = st.esc_floor >= ROBUST_ESCALATION and not st.pending
-        if escalation >= ROBUST_ESCALATION or (escalation and self.heard == ROBUST_CONNECT) or robust_floor:
-            return ROBUST_CONNECT, 1
+        if escalation and self.heard in ROBUST_MODES:  # the peer's robust poll: answered in its mode
+            return self.heard, 1
+        if escalation >= ROBUST_ESCALATION or robust_floor:
+            return self.robust_mode(), 1
         if escalation == 2:
             return ALT_POLL, 2
         if escalation:
@@ -357,8 +375,8 @@ class GearShifter(L.Policy):
         modes = [self.log[-1][2] if self.log else FALLBACK[st.cap]]
         if st.misses:
             modes += [FALLBACK[st.cap], ALT_POLL]
-        if burst.submode == ROBUST_CONNECT or st.esc_floor >= ROBUST_ESCALATION:
-            modes.append(ROBUST_CONNECT)
+        if burst.submode in ROBUST_MODES or st.esc_floor >= ROBUST_ESCALATION:
+            modes += ROBUST_MODES
         return max(burst_seconds(MODES[m], ctl_slots(MODES[m])) for m in modes) + REPLY_HOLD_MARGIN_S
 
     # -- as a receiver: the peer's next burst, from my measurements of its last -------
