@@ -19,9 +19,9 @@ for arm in "$@"; do
   case $arm in
     base) tree=$([ -d $O/tree_old ] && echo $O/tree_old || echo /home/andrew/code/Data2G/runs/spr/tree_old) model=$C4 ;;
     c4new) tree=$O/tree_new model=$C4 ;;
-    *) tree=$O/tree_new model=$O/$arm.npz ;;
+    *) tree=${TREE:-$O/tree_new} model=$O/$arm.npz ;;
   esac
-  out=$O/judge_${arm}_s$SEED0
+  out=$O/judge_${arm}${TAG:-}_s$SEED0
   if [ -s $out.log ] && grep -q "^wall" $out.log; then continue; fi
   (cd $tree && STEER=$model /usr/bin/time -f "wall %e s" $O/sev_env.sh $PY tools/with_native.py \
     scripts/loss_study.py --out $out.csv --cells "$cells" --seeds $SEEDS --seed0 $SEED0 --horizon 600 --jobs ${J:-12} \
