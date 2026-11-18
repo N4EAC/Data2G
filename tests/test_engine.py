@@ -166,6 +166,45 @@ def test_malformed_cq_and_id_frames_are_dropped():
     assert heard(F.T_ID, F.pack_call("VARA KISS") + b"\x12\x34") == ["ID VARA KISS 4660"]
 
 
+@pytest.mark.parametrize("data2g", [False, True])
+def test_disconnect_while_dialing_frees_the_modem_after_one_try(data2g):
+    """#215: DISCONNECT with the CONNECT on air answers OK at once, keys no
+    second CONNECT, and DISCONNECTED follows within the try's reply window
+    (BPQ32 sends ABORT 30 s after its DISCONNECT)."""
+    from data2g.host import Host
+
+    a = Host(Engine("NOCALL", seed=4))
+    if data2g:
+        a.command("DATA2G ON")
+    a.command("CONNECT W1AW K2XYZ")  # nobody answers
+    rng = np.random.default_rng(0)
+    keyed, was, n = 0, False, 0
+
+    def step():
+        nonlocal keyed, was, n
+        a.engine.step(rng.normal(0, 0.01, BLOCK))
+        on = bool(a.engine.tx)
+        keyed += on and not was
+        was, n = on, n + 1
+        a.after_step(on)
+
+    while not was and n < 100:
+        step()
+    assert was  # the CONNECT is on air
+    a.out_cmd.clear()
+    a.command("DISCONNECT")
+    assert a.out_cmd == ["OK"]
+    start = n
+    while not any(c.startswith("DISCONNECTED") for c in a.out_cmd) and n - start < 600:
+        step()
+    events = [c for c in a.out_cmd if not c.startswith("PTT ")]
+    assert events == ["OK", "DISCONNECTED CLIENT unconfirmed" if data2g else "DISCONNECTED"], a.out_cmd
+    assert keyed == 1 and (n - start) * BLOCK / FS < 15
+    for _ in range(300):  # 30 s more: nothing else keys
+        step()
+    assert keyed == 1 and a.engine.session.state == S.CLOSED
+
+
 def test_vara_commands_drive_a_session(tmp_path):
     import json
 
