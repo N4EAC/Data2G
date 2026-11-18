@@ -1,5 +1,5 @@
 // The one shared worker pool (docs/native-port-plan.md, "Threads"): a fixed
-// set of threads, min(4, cores / 2) by default, settable at run time.
+// set of threads, default_threads() by default, settable at run time.
 //
 // parallel_for hands out indices; callers keep each index's arithmetic
 // independent of the thread that runs it, so results are bit-identical for
@@ -11,7 +11,7 @@
 
 namespace data2g::pool {
 
-// min(4, hardware_concurrency / 2), at least 1; DATA2G_THREADS overrides.
+// Every core up to 4, then 4 up to 8 cores, then half the cores; DATA2G_THREADS overrides.
 int default_threads();
 // Threads including the caller; n < 1: default_threads(). 1 runs no pool
 // threads. Waits for a running parallel_for.
