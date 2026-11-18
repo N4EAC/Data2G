@@ -162,7 +162,8 @@ Pool& pool() {
 
 int default_threads() {
     if (const char* env = std::getenv("DATA2G_THREADS"); env && std::atoi(env) > 0) return std::atoi(env);
-    return std::clamp(static_cast<int>(std::thread::hardware_concurrency() / 2), 1, 4);
+    const int n = std::max(1, static_cast<int>(std::thread::hardware_concurrency()));
+    return n <= 4 ? n : n <= 8 ? 4 : n / 2;  // every core of a Pi; never more than half a big machine's
 }
 
 void set_threads(int n) { pool().set(n); }

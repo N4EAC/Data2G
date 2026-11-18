@@ -105,7 +105,7 @@ const char* HELP =
     "                        in place of the sound card and Hamlib. --sample-rate 8000, 24000 or 48000;\n"
     "                        --rig-mode usb or pkt_usb sets USB or DIGU on connect (default: off)\n"
     "  --tci-host HOST[:PORT]  the TCI server (default localhost:50001)\n"
-    "  --threads N           threads for decode and sync, the calling one included (default: min(4, cores / 2))\n"
+    "  --threads N           threads for decode and sync, the calling one included (default: cores up to 4, 4 up to 8 cores, half above)\n"
     "  --realtime, --no-realtime\n"
     "                        real-time scheduling for the transmit and sound card threads (Linux: directly\n"
     "                        if the user's limits allow it, else through RealtimeKit), so a loaded machine\n"
