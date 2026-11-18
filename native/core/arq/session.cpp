@@ -324,7 +324,7 @@ void Session::disconnect() {
     if (state == SessionState::IDLE || state == SessionState::LISTEN || state == SessionState::CLOSED) return;
     want_disc = true;
     disc_why = "CLIENT";
-    if (state == SessionState::CONNECTING && out) {
+    if (state == SessionState::CONNECTING && out && out != nak) {
         // a CONNECT not yet on air (the first, or a retry's) is dropped and
         // the dial ends at the next poll; one on air has its answer waited for
         out.reset();

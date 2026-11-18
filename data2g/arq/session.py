@@ -153,7 +153,7 @@ class Session:
         if self.state in (IDLE, LISTEN, CLOSED):
             return  # nothing to close; a flag left set would end the next session at its first burst
         self._want_disc, self._disc_why = True, "CLIENT"
-        if self.state == CONNECTING and self._out is not None:
+        if self.state == CONNECTING and self._out is not None and self._out is not self._nak:
             # a CONNECT not yet on air (the first, or a retry's) is dropped and
             # the dial ends at the next poll; one on air has its answer waited for
             self._out, self._due, self._deadline = None, None, float("-inf")

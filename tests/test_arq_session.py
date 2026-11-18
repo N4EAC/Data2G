@@ -266,6 +266,29 @@ def test_a_callee_that_answers_a_given_up_dial_gets_the_disc_next():
     assert b.state == S.CLOSED and b.events == ["CONNECTED W1AW", "DISCONNECTED PEER"]
 
 
+def test_disconnect_with_a_refusal_queued_still_waits_for_the_answer():
+    """A NAK to a third station in _out is not a CONNECT to drop: it goes,
+    and the CONNECT on air keeps its reply window."""
+    from data2g.arq import policy as G
+
+    a = S.Session("W1AW", G.GearShifter(), rng=random.Random(1))
+    b = S.Session("K2XYZ", G.GearShifter(), rng=random.Random(2))
+    c = S.Session("N0CALL", G.GearShifter(), rng=random.Random(3))
+    b.listen()
+    a.connect("K2XYZ", 2, 0.0)
+    first = a.poll(0.0)
+    a.on_tx_end(first, 2.0)
+    c.connect("W1AW", 2, 2.1)
+    a.on_rx(_rx(c.poll(2.1)), 2.5)
+    nak = a._out
+    a.disconnect()
+    assert a.poll(2.6) is nak and a.state == S.CONNECTING
+    a.on_tx_end(nak, 3.0)
+    b.on_rx(_rx(first), 2.2)
+    a.on_rx(_rx(b.poll(3.2)), 3.4)
+    assert a.state == S.DISCONNECTING and a.events == ["CONNECTED K2XYZ"]
+
+
 def test_a_refusal_sent_leaves_the_reply_timer_alone():
     """A NAK BUSY sent while dialing is not the session's burst: its end
     arms nothing. on_tx_end knows it by identity, so the burst handed back
