@@ -132,3 +132,36 @@ def test_delay_support_noise_gate_keeps_a_lone_path_narrow():
         narrow.append(g1 - g0)
     assert np.median(wide) > 40
     assert max(narrow) <= 8
+
+
+def test_dd_time_pass_low_rank_matches_the_exact_solve(monkeypatch):
+    """refine's time pass in its reduced-rank form (DD_LOWRANK_TOL) against the exact solve (a negative
+    tolerance: full rank, which the cost rule sends to the exact solve), on a real fading receive with half
+    the codewords known and then all: well under the estimate's own error."""
+    import copy
+
+    from data2g import equalizer, hfchannel
+    from data2g.arq import phy
+    from data2g.hfchannel import FadingPreset
+
+    spec = SUBMODES["w48-qpsk-r1/2"]
+    rng = np.random.default_rng(16)
+    sent = [rng.bytes(codes.payload_bytes(spec)) for _ in range(16)]
+    x = np.concatenate([np.zeros(3000), modem.modulate(sent, spec), np.zeros(3000)])
+    y = hfchannel.apply_channel(x, snr_db=10.0, fading_preset=FadingPreset("mpd", 2.0, 2.0), seed=16)
+    calls, refine = [], equalizer.refine
+    monkeypatch.setattr(equalizer, "refine", lambda *a, **k: calls.append(copy.deepcopy((a, k))) or refine(*a, **k))
+    r = modem.receive(y)
+    bits = np.stack([codes.encode(spec, p, index=i) for i, p in enumerate(sent)])
+    post = {i: 30.0 * (1 - 2.0 * bits[i]) for i in range(0, len(sent), 2)}
+    phy._dd_estimate(r, post)
+    phy._dd_estimate(r, {i: 30.0 * (1 - 2.0 * bits[i]) for i in range(len(sent))})
+    assert len(calls) == 2
+    for a, k in calls:
+        h1, m1 = refine(*a, **k)
+        monkeypatch.setattr(equalizer, "DD_LOWRANK_TOL", -1.0)
+        h0, m0 = refine(*a, **k)
+        monkeypatch.undo()
+        m0 = np.maximum(m0, 1e-12 * a[6]["p_sig"])
+        assert np.max(np.abs(h1 - h0) ** 2 / m0) < 1e-6
+        assert np.max(np.abs(m1 - m0) / m0) < 1e-3

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <map>
 #include <mutex>
 #include <numbers>
@@ -507,25 +508,145 @@ std::pair<Mat<cd>, Mat<double>> refine(const Mat<cd>& h_pilot, std::span<const d
     // Frames are independent: one pool task each.
     Mat<cd> h(F * S, nc);
     Mat<double> mse(F * S, nc);
-    pool::parallel_for(F, [&](size_t f) {
-        cancel::check();
-        std::vector<size_t> obs;
-        std::vector<double> rt, rdp, ar, xr;
+    std::vector<std::vector<size_t>> obs_of(F);
+    std::vector<double> mid_of(F);
+    for (size_t f = 0; f < F; ++f) {
         // t_rows.mean(axis=1) bit for bit (a sequential sum: measured), since
         // an observation exactly DD_TAPS frames away sits on the boundary
         double mid = 0.0;
         for (size_t s = 0; s < S; ++s) mid += t_rows[f][s];
         mid /= static_cast<double>(S);
+        mid_of[f] = mid;
         for (size_t o = 0; o < O; ++o)
-            if (std::abs(times[o] - mid) <= DD_TAPS * FRAME_S) obs.push_back(o);
+            if (std::abs(times[o] - mid) <= DD_TAPS * FRAME_S) obs_of[f].push_back(o);
+    }
+    // The low-rank form (equalizer.refine): one basis for every window, the eigenpairs (largest first) of the
+    // Doppler prior over the union of the windows' observation times less their frame's middle. A window holds
+    // a subset of them (rows with nothing known, the burst's ends): its observations take their rows of U.
+    std::map<std::int64_t, size_t> at;  // a time less the middle, in 0.1 us: its index in rel
+    std::vector<double> rel;
+    std::vector<std::vector<size_t>> idx_of(F);
+    for (size_t f = 0; f < F; ++f)
+        for (size_t o : obs_of[f]) {
+            const double t = times[o] - mid_of[f];
+            const auto [it, fresh] = at.try_emplace(std::llround(t * 1e7), rel.size());
+            if (fresh) rel.push_back(t);
+            idx_of[f].push_back(it->second);
+        }
+    const size_t Js = rel.size();
+    std::vector<double> lam_s(Js), u_s(Js * Js);  // (Js), (Js, Js) row-major, column k: eigenvector k
+    if (Js) {
+        std::vector<cd> a(Js * Js), v;
+        for (size_t i = 0; i < Js; ++i)
+            for (size_t j = 0; j < Js; ++j) a[i * Js + j] = p_sig * doppler_corr(rel[i] - rel[j], spread);
+        const auto lam = linalg::hermitian_eigen(a, v, static_cast<int>(Js));
+        std::vector<size_t> ord(Js);
+        std::iota(ord.begin(), ord.end(), size_t{0});
+        std::stable_sort(ord.begin(), ord.end(), [&](size_t x, size_t y) { return lam[x] > lam[y]; });
+        for (size_t k = 0; k < Js; ++k) {
+            lam_s[k] = lam[ord[k]];
+            for (size_t i = 0; i < Js; ++i) u_s[i * Js + k] = v[i * Js + ord[k]].real();  // real input: real vectors
+        }
+    }
+    pool::parallel_for(F, [&](size_t f) {
+        cancel::check();
+        const std::vector<size_t>& obs = obs_of[f];
+        std::vector<double> rt, rdp, ar, xr, mm, xl, ub, psi, mall, qall, dinv;
         const size_t J = obs.size();
-        rt.assign(J * J, 0.0);
-        for (size_t u = 0; u < J; ++u)
-            for (size_t v = 0; v < J; ++v) rt[u * J + v] = p_sig * doppler_corr(times[obs[u]] - times[obs[v]], spread);
-        rdp.assign(S * J, 0.0);
-        for (size_t s = 0; s < S; ++s)
-            for (size_t u = 0; u < J; ++u) rdp[s * J + u] = p_sig * doppler_corr(t_rows[f][s] - times[obs[u]], spread);
+        auto exact_prior = [&] {  // the exact solve's Rt and Rdp, made at its first carrier
+            if (rt.size() == J * J && rdp.size() == S * J) return;
+            rt.assign(J * J, 0.0);
+            for (size_t u = 0; u < J; ++u)
+                for (size_t v = 0; v < J; ++v) rt[u * J + v] = p_sig * doppler_corr(times[obs[u]] - times[obs[v]], spread);
+            rdp.assign(S * J, 0.0);
+            for (size_t s = 0; s < S; ++s)
+                for (size_t u = 0; u < J; ++u) rdp[s * J + u] = p_sig * doppler_corr(t_rows[f][s] - times[obs[u]], spread);
+        };
+        // the kept rank: eigenvalues over DD_LOWRANK_TOL of the window's least observation variance; the low-rank
+        // form only where it costs less than the exact solve
+        size_t r = 0;
+        if (J) {
+            double least = INFINITY;
+            for (size_t o : obs)
+                for (size_t c = 0; c < nc; ++c) least = std::min(least, var[o][c]);
+            while (r < Js && lam_s[r] > DD_LOWRANK_TOL * least) ++r;
+            const double Jd = static_cast<double>(J), rd = static_cast<double>(r), Sd = static_cast<double>(S);
+            if (Jd * rd * rd / 2 + rd * rd * rd / 6 + rd * rd * Sd >= Jd * Jd * Jd / 6 + Jd * Jd * (Sd + 2) / 2) r = 0;
+        }
+        const size_t W = S + 2, R2 = r * (r + 1) / 2;
+        if (r) {
+            // h(t) = psi(t) g, g ~ N(0, diag(lam)): psi(obs) = U's rows, psi(t) = k(t, rel) U / lam (Nystrom)
+            ub.resize(J * r);
+            for (size_t u = 0; u < J; ++u)
+                for (size_t k = 0; k < r; ++k) ub[u * r + k] = u_s[idx_of[f][u] * Js + k];
+            psi.assign(S * r, 0.0);
+            for (size_t s = 0; s < S; ++s)
+                for (size_t i = 0; i < Js; ++i) {
+                    const double kt = p_sig * doppler_corr(t_rows[f][s] - mid_of[f] - rel[i], spread);
+                    for (size_t k = 0; k < r; ++k) psi[s * r + k] += kt * u_s[i * Js + k];
+                }
+            for (size_t s = 0; s < S; ++s)
+                for (size_t k = 0; k < r; ++k) psi[s * r + k] /= lam_s[k];
+            // U^T D^-1 U (its lower triangle) and U^T D^-1 v, every carrier at once (the carriers innermost)
+            mall.assign(R2 * nc, 0.0);
+            qall.assign(2 * r * nc, 0.0);
+            dinv.resize(3 * nc);
+            for (size_t u = 0; u < J; ++u) {
+                const double* vr = var[obs[u]];
+                const cd* vv = vals[obs[u]];
+                for (size_t c = 0; c < nc; ++c) {
+                    dinv[c] = 1 / vr[c];
+                    dinv[nc + c] = dinv[c] * vv[c].real();
+                    dinv[2 * nc + c] = dinv[c] * vv[c].imag();
+                }
+                const double* uu = &ub[u * r];
+                for (size_t k = 0, kl = 0; k < r; ++k) {
+                    for (size_t l = 0; l <= k; ++l, ++kl) {
+                        const double a = uu[k] * uu[l];
+                        double* mc = &mall[kl * nc];
+                        for (size_t c = 0; c < nc; ++c) mc[c] += a * dinv[c];
+                    }
+                    double* qr = &qall[(2 * k) * nc];
+                    double* qi = &qall[(2 * k + 1) * nc];
+                    for (size_t c = 0; c < nc; ++c) {
+                        qr[c] += uu[k] * dinv[nc + c];
+                        qi[c] += uu[k] * dinv[2 * nc + c];
+                    }
+                }
+            }
+        }
         for (size_t c = 0; c < nc; ++c) {
+            if (r) {
+                // with M = diag(1 / lam) + U^T D^-1 U = L L^T and Y = L^-1 [psi^T | U^T D^-1 Re v | U^T D^-1 Im v]:
+                // h_s = Y_s . Y_v and mse_s = p_sig - psi_s lam psi_s^T + |Y_s|^2 (Woodbury: exact at full rank)
+                mm.assign(r * r, 0.0);
+                for (size_t k = 0, kl = 0; k < r; ++k)
+                    for (size_t l = 0; l <= k; ++l, ++kl) mm[k * r + l] = mm[l * r + k] = mall[kl * nc + c];
+                for (size_t k = 0; k < r; ++k) mm[k * r + k] += 1 / lam_s[k];
+                if (linalg::cholesky(mm.data(), static_cast<int>(r))) {
+                    xl.resize(r * W);
+                    for (size_t k = 0; k < r; ++k) {
+                        for (size_t s = 0; s < S; ++s) xl[k * W + s] = psi[s * r + k];
+                        xl[k * W + S] = qall[(2 * k) * nc + c];
+                        xl[k * W + S + 1] = qall[(2 * k + 1) * nc + c];
+                    }
+                    linalg::forward_solve(mm.data(), static_cast<int>(r), xl.data(), static_cast<int>(W));
+                    for (size_t s = 0; s < S; ++s) {
+                        double hr = 0.0, hi = 0.0, y2 = 0.0, prior = 0.0;
+                        for (size_t k = 0; k < r; ++k) {
+                            const double y = xl[k * W + s];
+                            hr += y * xl[k * W + S];
+                            hi += y * xl[k * W + S + 1];
+                            y2 += y * y;
+                            prior += psi[s * r + k] * psi[s * r + k] * lam_s[k];
+                        }
+                        h[f * S + s][c] = cd(hr, hi);
+                        mse[f * S + s][c] = std::max(p_sig - prior + y2, 0.0);
+                    }
+                    continue;
+                }
+            }
+            exact_prior();
             ar = rt;
             for (size_t u = 0; u < J; ++u) ar[u * J + u] += var[obs[u]][c];
             // A = rt + diag(var) is symmetric positive definite: with A = L L^T and Y = L^-1 [Rdp^T | Re v | Im v],
