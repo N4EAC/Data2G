@@ -348,7 +348,8 @@ def test_primed_hypotheses_drop_t_keep_once_the_peer_has_stopped():
 @pytest.mark.parametrize("mode,left", [(ACK, "swapped"), (CPM, "shed")])
 def test_expected_modes_leave_out_a_reply_mode_never_said(mode, left):
     """The expected reply slot listens for the reply mode I recommended only where
-    the control said it: not where T_KEEP took T_REPLY's place, nor where it was shed."""
+    the control said it: not where T_KEEP took T_REPLY's place (the peer picks its own),
+    nor where it was shed (the peer keeps the one I said last: that one)."""
     if left == "swapped":
         a, _ = _pair()
         a.policy.reply = 3
@@ -362,4 +363,78 @@ def test_expected_modes_leave_out_a_reply_mode_never_said(mode, left):
     a.write(bytes(range(1, 10)))
     x = a.build()
     assert F.T_INLINE in _whole(x).ext and F.T_REPLY not in _whole(x).ext
-    assert not {"3", "5"} & set(a.expected_modes())
+    assert "3" in a.expected_modes() and "5" not in a.expected_modes()
+
+
+def _reply_form(ext):
+    """T_REPLY as a control has it: None (left out), b"" (none, said) or its byte."""
+    return ext.get(F.T_REPLY)
+
+
+def test_a_held_none_costs_nothing_and_only_a_change_to_none_is_said():
+    """A None reply the peer already holds goes without T_REPLY in the handshake's
+    window too (absent and kept agree): 2 B an OFDM ACK control may have no room for.
+    Changing to none says so once (an empty T_REPLY), then leaves it out."""
+    a, b = _pair(CPM, CPM)  # (room for T_KEEP: the handshake runs)
+    a.policy.reply = b.policy.reply = None
+    burst, sender, receiver = a.build(), a, b
+    for _ in range(10):
+        assert F.T_REPLY not in _whole(burst).ext
+        assert receiver.handle(FullRx(burst)) and receiver.peer_reply_recommend is None
+        burst, sender, receiver = receiver.build(), receiver, sender
+        sender.answered()
+    assert a._keeping and b._keeping
+    a, b = _kept_pair()
+    a.policy.reply = None
+    forms = []
+    burst, sender, receiver = a.build(), a, b
+    for _ in range(6):
+        if sender is a:
+            forms.append(_reply_form(_whole(burst).ext))
+        assert receiver.handle(FullRx(burst))
+        if receiver is b:
+            assert b.peer_reply_recommend is None
+        burst, sender, receiver = receiver.build(), receiver, sender
+        sender.answered()
+    assert forms == [b"", None, None], forms
+
+
+def test_primed_hypotheses_follow_the_peers_t_reply_through_the_handshake():
+    """The first primed hypothesis has T_REPLY as the peer sends it: in full with its
+    known value until its handshake ends (as before T_KEEP), left out after. Only the
+    burst where it first leaves it out is missed, and that one is still among the
+    tries; so is a change to none (an empty T_REPLY)."""
+
+    class Rx:
+        submode, n_cw, n_ctl_slots = CPM, 1, 1
+
+    a, b = _pair(CPM, CPM)
+    a.policy.reply, b.policy.reply = 3, 7
+    burst, sender, receiver = a.build(), a, b
+    missed = [0, 0]
+    for turn in range(16):
+        if turn == 12:
+            sender.policy.reply = None  # its next control: an empty T_REPLY
+        if turn >= 2:  # (each has a control of the other's to go by)
+            actual = _reply_form(_whole(burst).ext)
+            forms = [_reply_form(F.Control.unpack([t]).ext) for t, *_ in receiver.expect(Rx())]
+            assert actual in forms, (turn, actual, forms)
+            missed[receiver is b] += forms[0] != actual
+        assert receiver.handle(FullRx(burst))
+        burst, sender, receiver = receiver.build(), receiver, sender
+        sender.answered()
+    assert a._peer_omits and b._peer_omits
+    assert max(missed) <= 2, missed  # first left out, and the change to none
+
+
+def test_told_stops_collecting_once_done():
+    a, b = _kept_pair()
+    if not isinstance(getattr(a, "_keep_seen", None), L.Told):
+        pytest.skip("Told is the Python station's own")
+    sizes = [len(t.bns) for t in (a._keep_told, a._keep_seen, a._keep_sure)]
+    burst, sender, receiver = a.build(), a, b
+    for _ in range(6):
+        assert receiver.handle(FullRx(burst))
+        burst, sender, receiver = receiver.build(), receiver, sender
+        sender.answered()
+    assert [len(t.bns) for t in (a._keep_told, a._keep_seen, a._keep_sure)] == sizes

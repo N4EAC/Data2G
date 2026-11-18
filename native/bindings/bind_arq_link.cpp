@@ -490,6 +490,7 @@ void bind_arq_link(py::module_& m) {
         .def_readwrite("keep_peer", &Station::keep_peer)
         .def_property_readonly("_keep_told", [](const Station& s) { return s.keep_told_.done; })
         .def_property_readonly("_keeping", &Station::keeping)
+        .def_readonly("_peer_omits", &Station::peer_omits_)
         .def("_said", [](const Station& s, std::int64_t bn) -> py::object {
             const int v = s.said(bn);
             return v == REPLY_NONE ? py::object(py::none()) : py::object(py::int_(v));

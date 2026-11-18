@@ -456,8 +456,8 @@ class ProtocolError(Exception):
 
 @dataclass
 class Told:
-    """Something my controls say until the peer has it: my bns that said it, and
-    whether the peer has acted on one of them."""
+    """Something my controls say until the peer has it: my bns that said it (no more
+    once it has: they stop growing), and whether the peer has acted on one of them."""
 
     bns: set = field(default_factory=set)
     done: bool = False
@@ -466,7 +466,8 @@ class Told:
         return self.done
 
     def mark(self, bn: int):
-        self.bns.add(bn)
+        if not self.done:
+            self.bns.add(bn)
 
     def acted(self, bn: int) -> bool:
         """The peer acted on my burst bn. -> whether that was one of them."""
@@ -537,7 +538,8 @@ class Station:
     _peer_next: int | None = None
     _repeated: bool = False
     _asked_dup: bool = False  # my latest burst carried T_DUPCTL
-    _asked: tuple = (None, None)  # my latest build's recommendations as the peer has them: its data mode, its reply mode
+    _peer_omits: bool = False  # the peer has left T_REPLY out as unchanged (a mode, kept)
+    _asked: tuple = (None, None)  # my latest build's recommendations as the peer has them: its data mode, its reply modes
     _last_stream: bytes = b""  # the control stream _read_control read last
     _primed_ctl: bool = False  # ... and only a primed retry read it
     _answered: bool = False  # answered() since the last burst handled: a repeat of it means my reply was lost
@@ -654,21 +656,23 @@ class Station:
             dup = 1  # nothing but control after all
         if dup == 2:
             core.ftype = F.ARQ_DUP
-        if ((new or inline) and not self.new_available()
-                and self._ctl_bytes(ext, 0, False, 0) + 2 <= n_ctl * cpb):
+        if (new or inline) and not self.new_available() and self._fits_padding(ext, n_ctl, cpb):
             # my host's data ends here: the peer may hold its reply for its
             # host's answer (session.REPLY_HOLD_S). Only in the padding, like T_COMP
             ext[F.T_DRAINED] = b""
-        if NOD and self.nod and not self._nods_told and self._ctl_bytes(ext, 0, False, 0) + 2 <= n_ctl * cpb:
+        if NOD and self.nod and not self._nods_told and self._fits_padding(ext, n_ctl, cpb):
             ext[F.T_NODS] = b""  # I hear nods: in the padding, until the peer acted on it
         if KEEP and self.keep and not self._keep_told:
-            if self._ctl_bytes(ext, 0, False, 0) + 2 <= n_ctl * cpb:
+            if self._fits_padding(ext, n_ctl, cpb):
                 ext[F.T_KEEP] = b""  # I keep T_REPLY: likewise
             elif F.T_REPLY in ext and n_ctl < self.policy.max_ctl(submode):
                 # the two together would cost a control codeword more (an OFDM ACK mode's control
-                # is full with T_REPLY): T_KEEP in its place, until acted on. Not keeping yet, the
-                # peer reads none and falls back to its own reply mode meanwhile. A control that
-                # cannot grow (CPM's one codeword) keeps its T_REPLY and waits for room
+                # is full with T_REPLY): T_KEEP in its place, until acted on. It saves no airtime
+                # on this burst (ack-4f: 7 B and 6 B are both two codewords); it is the bootstrap
+                # cost, paid until the peer acts on one: a control that is always full would never
+                # carry T_KEEP otherwise, and keeping takes that ACK to one codeword. Meanwhile the
+                # peer reads none and replies in its own mode. A control that cannot grow (CPM's
+                # one codeword) keeps its T_REPLY and waits for room
                 del ext[F.T_REPLY]
                 ext[F.T_KEEP] = b""
         if F.T_REPLY in ext:
@@ -677,7 +681,11 @@ class Station:
             said = reply
         else:  # left out: none to a peer that does not keep it yet; shed while it does, it keeps its last
             said = _UNKNOWN if self._keeping else None
-        self._asked = (rec, None if said == _UNKNOWN else said)  # (no reply mode to expect that the peer does not hold)
+        # the reply mode the peer holds: shed while both keep it, one of those I said since the
+        # last burst it acted on (none: its own choice, not known here)
+        replies = ([s for b in range(self._confirmed, bn) if (s := self._said(b)) not in (None, _UNKNOWN)]
+                   if said == _UNKNOWN else [said])
+        self._asked = (rec, *replies)
         if self._peer_said_keep:
             self._keep_seen.mark(bn)  # it acts on a peer burst that carried T_KEEP
         if self._peer_acked_keep:
@@ -783,9 +791,15 @@ class Station:
 
     def _reply_held(self, bn: int, reply: int | None) -> bool:
         """The peer holds `reply` whichever of my bursts before bn it has heard: the last
-        it acted on left it so, and none since says otherwise."""
-        return (self._keeping and self._keep_seen.done and self._keep_sure.done
+        it acted on left it so, and none since says otherwise. None needs no handshake: a
+        control without T_REPLY says none to a peer that does not keep it, and keeps none
+        for one that does (an empty T_REPLY only when it changes to none)."""
+        return ((reply is None or (self._keeping and self._keep_seen.done and self._keep_sure.done))
                 and all(self._said(b) == reply for b in range(self._confirmed, bn)))
+
+    def _fits_padding(self, ext: dict, n_ctl: int, cpb: int) -> bool:
+        """An empty flag TLV (2 B) fits the control's padding: it costs no codeword."""
+        return self._ctl_bytes(ext, 0, False, 0) + 2 <= n_ctl * cpb
 
     @property
     def _peer_keeping(self) -> bool:
@@ -1102,6 +1116,8 @@ class Station:
             # this burst's acted-on counted
             if F.T_REPLY not in ext and self._peer_keeping:
                 self.peer_reply_recommend = reply_was
+                # it left a mode out as unchanged: past its handshake (primed ways, _variants)
+                self._peer_omits |= reply_was is not None
             abandoned = self._take_abandon(rx, ext)
             slots, n_dec, n_old, delivered = self._take_data(rx, core, ext, dup, acted)
         except ProtocolError as e:
@@ -1253,17 +1269,15 @@ class Station:
             kinds = [(False, False)] * (rx.n_cw <= max_ctl) + [(True, self._asked_dup)] * (rx.n_cw >= 2)
             kinds.sort(key=lambda k: k[0] != self.last_rx_data)  # the kind the peer sent last first
         for data, pair in kinds:
-            ways = list(self._variants(data, rx.n_cw, ctl_slots, pair))
-            if self._peer_keeping and ways:
-                # T_REPLY only when it changes (T_KEEP): the likeliest way has none (_variants);
-                # second, the same with one, its value unknown
-                ways.insert(1, (ways[0][0], ways[0][1] + [(F.T_REPLY, b"\0", b"\xc0")]))
+            base = list(self._variants(data, rx.n_cw, ctl_slots, pair))
             # then the same with T_DUPCTL the other way (the peer's outcome model
-            # asks for it, or stops), and with T_REPLY's recommendation unknown
+            # asks for it, or stops), with T_REPLY's recommendation unknown, and
+            # T_REPLY the other ways a peer that keeps it sends it
             dupctl = (F.T_DUPCTL, b"", b"")
-            ways += ([(c, [t for t in e if t[0] != F.T_DUPCTL] if dupctl in e else e + [dupctl]) for c, e in ways]
-                     + [(c, [(t, v, b"\xc0") if t == F.T_REPLY else (t, v, m) for t, v, m in e]) for c, e in ways
-                        if any(t == F.T_REPLY for t, *_ in e)])
+            ways = (base + [(c, [t for t in e if t[0] != F.T_DUPCTL] if dupctl in e else e + [dupctl]) for c, e in base]
+                    + [(c, [(t, v, b"\xc0") if t == F.T_REPLY and v else (t, v, m) for t, v, m in e]) for c, e in base
+                       if any(t == F.T_REPLY and v for t, v, _ in e)]
+                    + self._reply_changes(base))
             for core, ext in ways:
                 # an OFDM control-only burst is its control: n_cw codewords, the
                 # last ones maybe all padding (build reserves room for data it may not send)
@@ -1277,6 +1291,23 @@ class Station:
         if repeat is not None and repeat not in out:
             out.insert(min(1, len(out)), repeat)
         return out[:PRIME_TRIES]
+
+    def _reply_changes(self, ways: list) -> list:
+        """From a peer that keeps T_REPLY (T_KEEP): each way with T_REPLY the other ways it
+        can be. As the peer's last control: left out, said (its value unknown), or none
+        (empty). After T_DUPCTL's and the value-unknown ways, as they are no likelier."""
+        if not (KEEP and self.keep and self.keep_peer):
+            return []
+        forms = [None, (F.T_REPLY, b"\0", b"\xc0"), (F.T_REPLY, b"", b"")]
+        out = []
+        for c, e in ways:
+            rest = [t for t in e if t[0] != F.T_REPLY]
+            have = next(((t, bool(v)) for t, v, _ in e if t == F.T_REPLY), None)
+            for f in forms:
+                if (f is None and have is None) or (f is not None and have == (f[0], bool(f[1]))):
+                    continue  # the way itself (a said value: its unknown-value way)
+                out.append((c, rest + [f] * (f is not None)))
+        return out
 
     def _variants(self, data: bool, n_cw: int, ctl_slots: int, pair: bool):
         """(core fields {name: (value, mask)}, TLVs [(type, value, value mask)])
@@ -1311,9 +1342,10 @@ class Station:
         common = [(t, pe[t], b"\xff" * len(pe[t])) for t in (F.T_CHAT, F.T_DUPCTL, F.T_NODS, F.T_KEEP)
                   if t in pe and not (t == F.T_KEEP and self._keep_seen)]
         # T_REPLY, a recommendation: as last time (80% of them at the floor; its
-        # bits sit on weak polar positions, where 6 unknown cost 1-2 dB)
-        # (not from a peer that keeps it, T_KEEP: it says T_REPLY only when it changes)
-        common += [(t, pe[t], b"\xff") for t in (F.T_REPLY,) if len(pe.get(t, b"")) == 1 and not self._peer_keeping]
+        # bits sit on weak polar positions, where 6 unknown cost 1-2 dB). A peer that keeps
+        # it (T_KEEP) says it until its handshake ends, then mostly leaves it out (unchanged);
+        # the other ways come last (_reply_changes), as the value-unknown one does
+        common += [(t, pe[t], b"\xff" * len(pe[t])) for t in (F.T_REPLY,) if t in pe and not self._peer_omits]
         common += [(t, pe[t], bytes(len(pe[t]))) for t in (F.T_BUFFER,) if t in pe]
         if not base:  # its first ARQ burst: the gear shifter's (T_REPLY, T_DUPCTL)
             common = [(F.T_REPLY, b"\0", b"\xc0"), (F.T_DUPCTL, b"", b"")]

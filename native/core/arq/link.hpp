@@ -51,7 +51,9 @@ struct Told {
     std::set<std::int64_t> bns;
     bool done = false;
     explicit operator bool() const { return done; }
-    void mark(std::int64_t bn) { bns.insert(bn); }
+    void mark(std::int64_t bn) {
+        if (!done) bns.insert(bn);  // no more once the peer has it: they stop growing
+    }
     // The peer acted on my burst bn. -> whether that was one of them.
     bool acted(std::int64_t bn) {
         const bool hit = bns.count(bn) > 0;
@@ -285,7 +287,9 @@ public:
     std::optional<std::int64_t> peer_next_;
     bool repeated_ = false;
     bool asked_dup_ = false;
-    std::pair<std::optional<int>, std::optional<int>> asked_;  // my latest build's recommendations as the peer has them: data, reply
+    // my latest build's recommendations as the peer has them: its data mode, its reply modes
+    std::vector<int> asked_;
+    bool peer_omits_ = false;  // the peer has left T_REPLY out as unchanged (a mode, kept)
     // The modes the peer's next burst likely comes in (link.Station.expected_modes).
     std::vector<std::string> expected_modes() const;
     Bytes last_stream_;  // the control stream read_control read last
@@ -322,6 +326,8 @@ public:
     bool shed(Ext& ext) const;
     // The peer holds `reply` whichever of my bursts before bn it has heard (link.Station._reply_held).
     bool reply_held(std::int64_t bn, std::optional<int> reply) const;
+    // An empty flag TLV (2 B) fits the control's padding (link.Station._fits_padding).
+    bool fits_padding(const Ext& ext, int n_ctl, int cpb) const;
     using Kept = std::tuple<int, int, bool>;  // size_hint, the reply the peer holds (said), T_CHAT
     struct SentCtl {
         std::int64_t cum;
@@ -430,6 +436,7 @@ private:
         std::vector<Tlv> ext;
     };
     std::vector<Way> variants(bool data, int n_cw, int ctl_slots, bool pair) const;
+    std::vector<Way> reply_changes(const std::vector<Way>& ways) const;
     static std::optional<Hypothesis> pack_hypothesis(const Way& w, int cpb, int max_ctl, bool pair, int n_ctl);
     std::pair<std::optional<Bytes>, bool> primed(RxBurst& rx, int slot, int i, const std::vector<Hypothesis>& hyps);
     std::optional<std::string> implausible(const Core& core, const Ext& ext) const;

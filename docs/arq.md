@@ -855,7 +855,10 @@ off (Python and native) for A/B runs.
 - **Who keeps it** (no session version bump). A station that keeps `T_REPLY` says so with
   `T_KEEP` (empty) until the peer acts on a burst that carried it: in its control's
   padding, or in `T_REPLY`'s place where the two together would cost a control codeword
-  more (an OFDM ACK mode's control, full with `T_REPLY`). A control that cannot grow
+  more (an OFDM ACK mode's control, full with `T_REPLY`). That swap saves no airtime on
+  its own burst (ack-4f: 7 B and 6 B are both x2) and the peer replies in its own mode
+  meanwhile; it is the bootstrap cost, paid until the peer acts on one, since a control
+  that is always full would never carry `T_KEEP` otherwise. A control that cannot grow
   (CPM's one codeword) keeps its `T_REPLY` and waits for room. A peer without it ignores
   the TLV and never says it, so nothing changes for it: `T_REPLY` in every control, and
   a control without one means none. Drop `T_KEEP` at the next session version bump.
@@ -863,8 +866,9 @@ off (Python and native) for A/B runs.
   `_reply_held`). Each step is a burst of the peer's that acts on one of mine, so it is
   known to have been heard:
   1. *I keep it* once I have heard the peer's `T_KEEP` and the peer has acted on a burst
-     of mine that carried `T_KEEP`. From then on I say none in so many words (an empty
-     `T_REPLY`) and never just leave it out.
+     of mine that carried `T_KEEP`. From then on a change to none is said in so many
+     words (an empty `T_REPLY`, 2 B); none the peer already holds is still left out, as
+     "none" and "kept" agree on it.
   2. *I read the peer's controls as kept* (one without `T_REPLY` leaves the
      recommendation as it was) once the peer has acted on a burst of mine that carried
      `T_KEEP` and on one that acted on a `T_KEEP` of its own. That is never before the
@@ -876,9 +880,10 @@ off (Python and native) for A/B runs.
   peer heard a burst and never acted on it), and stay so until its recommendation moved;
   step 3 closes that. tests/test_keep.py holds the two ends to the same value through
   600 random loss patterns with nods and both control sizes.
-- **Rule.** A station at step 3 leaves `T_REPLY` out when the peer holds the value
-  whichever of its bursts the peer has heard: the last burst of mine it acted on left it
-  so, and none since says otherwise.
+- **Rule.** A station leaves `T_REPLY` out when the peer holds the value whichever of its
+  bursts the peer has heard: the last burst of mine it acted on left it so, and none
+  since says otherwise. For a mode that needs step 3; for none it needs no step, as a
+  peer that does not keep yet reads the missing `T_REPLY` as none anyway.
 - **Shed.** `T_REPLY` is still among the TLVs a full control sheds (`OPTIONAL_TLVS`), but
   once I keep it its value goes first (an empty `T_REPLY`, a byte less: none, said, and
   the peer falls back to its own reply mode). With not a byte to spare it is dropped
@@ -886,11 +891,14 @@ off (Python and native) for A/B runs.
   is unknown to me, and my next control says it in full.
 - **Nods (§3b)** already keep `T_REPLY`; their "kept fields" test compares what the peer
   holds after each control (the value said, the value kept, none; never an unknown one).
-  **Primed controls (§3a)**: from a peer at step 2 the likeliest control has no
-  `T_REPLY`, so that is the first hypothesis, and the second is the same with one, its
-  value unknown. No hypothesis carries `T_KEEP` once the peer has stopped saying it.
-  The expected reply slot listens for the reply mode the peer holds: not one a control
-  left out for `T_KEEP` or shed.
+  **Primed controls (§3a)**: `T_REPLY` as the peer's last control had it (its value
+  known), until the peer has left a mode out as unchanged (its step 3); from then on
+  without. The other ways (left out, said with its value unknown, none) come after the
+  `T_DUPCTL` ones, as the value-unknown one always did, so the first `PRIME_TRIES` keep
+  the shapes they had before `T_KEEP`. No hypothesis carries `T_KEEP` once the peer has
+  stopped saying it. The expected reply slot listens for the reply mode the peer holds:
+  the one said, or where `T_REPLY` was shed, those said since the last burst the peer
+  acted on; not one left out for `T_KEEP` (the peer picks its own).
 - **Measured** (shift+cpm, DATA2G_PEP_REF_DB=5, paired by seed against `DATA2G_KEEP=0`).
   Bulk (`scripts/loss_study.py`, 16 seeds x 300 s, delivered bps): awgn -10 +1.3% (SE
   0.7; 3 seeds better, 0 worse), awgn -6 +3.9% (0.3; 16/0), awgn -4 +4.9% (0.7; 14/0),

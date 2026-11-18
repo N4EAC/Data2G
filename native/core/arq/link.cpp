@@ -441,21 +441,23 @@ TxBurstPtr Station::build(bool fresh, bool nod_ok) {
     for (auto& [t, v] : data) ext[t] = std::move(v);
     if (dup == 2 && resend.empty() && fresh_cws.empty() && !inl) dup = 1;  // nothing but control after all
     if (dup == 2) core.ftype = ARQ_DUP;
-    if ((!fresh_cws.empty() || inl) && new_available() <= 0 &&
-        ctl_bytes(ext, 0, false, 0) + 2 <= static_cast<std::int64_t>(n_ctl) * cpb) {
+    if ((!fresh_cws.empty() || inl) && new_available() <= 0 && fits_padding(ext, n_ctl, cpb)) {
         // my host's data ends here: the peer may hold its reply for its
         // host's answer (session REPLY_HOLD_S). Only in the padding, like T_COMP
         ext[T_DRAINED] = Bytes{};
     }
-    if (nod_default() && nod && !nods_told_ && ctl_bytes(ext, 0, false, 0) + 2 <= static_cast<std::int64_t>(n_ctl) * cpb)
+    if (nod_default() && nod && !nods_told_ && fits_padding(ext, n_ctl, cpb))
         ext[T_NODS] = Bytes{};  // I hear nods: in the padding, until the peer acted on it
     if (keep_default() && keep && !keep_told_) {
-        const auto room = static_cast<std::int64_t>(n_ctl) * cpb;
-        if (ctl_bytes(ext, 0, false, 0) + 2 <= room) {
+        if (fits_padding(ext, n_ctl, cpb)) {
             ext[T_KEEP] = Bytes{};  // I keep T_REPLY: likewise
         } else if (auto e = ext.find(T_REPLY); e != ext.end() && n_ctl < policy->max_ctl(submode)) {
             // the two together would cost a control codeword more (an OFDM ACK mode's control is full with
-            // T_REPLY): T_KEEP in its place, until acted on. A control that cannot grow keeps its T_REPLY
+            // T_REPLY): T_KEEP in its place, until acted on. It saves no airtime on this burst (ack-4f: 7 B
+            // and 6 B are both two codewords); it is the bootstrap cost, paid until the peer acts on one: a
+            // control that is always full would never carry T_KEEP otherwise, and keeping takes that ACK to
+            // one codeword. Meanwhile the peer reads none and replies in its own mode. A control that cannot
+            // grow (CPM's one codeword) keeps its T_REPLY and waits for room
             ext.erase(e);
             ext[T_KEEP] = Bytes{};
         }
@@ -463,7 +465,16 @@ TxBurstPtr Station::build(bool fresh, bool nod_ok) {
     // left out: the peer's (kept); none to a peer that does not keep it yet; shed while it does, unknown
     int said = reply_same ? (reply ? *reply : REPLY_NONE) : keeping() ? REPLY_UNKNOWN : REPLY_NONE;
     if (auto e = ext.find(T_REPLY); e != ext.end()) said = e->second.empty() ? REPLY_NONE : e->second[0];
-    asked_ = {rec, said >= 0 ? std::optional<int>(said) : std::nullopt};  // (no reply mode to expect that the peer does not hold)
+    // the reply mode the peer holds: shed while both keep it, one of those I said since the last burst it
+    // acted on (none: its own choice, not known here)
+    asked_.clear();
+    if (rec >= 0) asked_.push_back(rec);
+    if (said == REPLY_UNKNOWN) {
+        for (std::int64_t b = confirmed; b < bn; ++b)
+            if (const int s = this->said(b); s >= 0) asked_.push_back(s);
+    } else if (said >= 0) {
+        asked_.push_back(said);
+    }
     if (peer_said_keep_) keep_seen_.mark(bn);   // it acts on a peer burst that carried T_KEEP
     if (peer_acked_keep_) keep_sure_.mark(bn);  // ... on one that acted on a T_KEEP of mine
     Control control{core, ext};
@@ -551,10 +562,16 @@ int Station::said(std::int64_t bn) const {
 
 bool Station::reply_held(std::int64_t bn, std::optional<int> reply) const {
     const int want = reply ? *reply : REPLY_NONE;
-    if (!(keeping() && keep_seen_ && keep_sure_)) return false;
+    // none needs no handshake: left out, it says none to a peer that does not keep it, and keeps none for one
+    // that does (an empty T_REPLY only when it changes to none)
+    if (reply && !(keeping() && keep_seen_ && keep_sure_)) return false;
     for (std::int64_t b = confirmed; b < bn; ++b)
         if (said(b) != want) return false;
     return true;
+}
+
+bool Station::fits_padding(const Ext& ext, int n_ctl, int cpb) const {
+    return ctl_bytes(ext, 0, false, 0) + 2 <= static_cast<std::int64_t>(n_ctl) * cpb;
 }
 
 bool Station::shed(Ext& ext) const {
@@ -831,7 +848,10 @@ bool Station::handle_inner(RxBurst& rxb) {
         keep_sure_.acted(acted);
         // without T_REPLY: none (note_peer), or as it was where the peer keeps it (T_KEEP), this burst's
         // acted-on counted
-        if (!ext.count(T_REPLY) && peer_keeping()) peer_reply_recommend = reply_was;
+        if (!ext.count(T_REPLY) && peer_keeping()) {
+            peer_reply_recommend = reply_was;
+            peer_omits_ = peer_omits_ || reply_was.has_value();  // a mode left out as unchanged: past its handshake
+        }
         abandoned = take_abandon(rxb, ext);
         data = take_data(rxb, core, ext, dup, acted, outcome);
     } catch (const ProtocolError& e) {
@@ -982,8 +1002,7 @@ std::vector<std::string> Station::expected_modes() const {
         if (std::find(out.begin(), out.end(), m) == out.end()) out.push_back(std::move(m));
     };
     if (last_sent) add(last_sent->submode);
-    for (const auto& r : {asked_.first, asked_.second})
-        if (r) add(policy->mode_name(*r));
+    for (const int r : asked_) add(policy->mode_name(r));
     return out;
 }
 
@@ -1013,15 +1032,10 @@ std::vector<Station::Hypothesis> Station::expect(const RxBurst& rxb) const {
     }
     for (const auto& [data, pair] : kinds) {
         std::vector<Way> ways = variants(data, n_cw, ctl_slots, pair);
-        if (peer_keeping() && !ways.empty()) {
-            // T_REPLY only when it changes (T_KEEP): the likeliest way has none (variants); second, the same
-            // with one, its value unknown
-            Way w = ways[0];
-            w.ext.push_back({T_REPLY, Bytes{0}, Bytes{0xC0}});
-            ways.insert(ways.begin() + 1, std::move(w));
-        }
-        // then the same with T_DUPCTL the other way, and with T_REPLY's recommendation unknown
+        // then the same with T_DUPCTL the other way, with T_REPLY's recommendation unknown, and T_REPLY the
+        // other ways a peer that keeps it sends it
         const Tlv dupctl{T_DUPCTL, {}, {}};
+        const std::vector<Way> base = ways;
         const std::size_t n0 = ways.size();
         for (std::size_t j = 0; j < n0; ++j) {
             Way w = ways[j];
@@ -1035,12 +1049,13 @@ std::vector<Station::Hypothesis> Station::expect(const RxBurst& rxb) const {
             Way w = ways[j];
             bool has = false;
             for (auto& t : w.ext)
-                if (t.type == T_REPLY) {
+                if (t.type == T_REPLY && !t.value.empty()) {
                     t.mask = Bytes{0xC0};
                     has = true;
                 }
             if (has) ways.push_back(std::move(w));
         }
+        for (auto& w : reply_changes(base)) ways.push_back(std::move(w));
         for (const auto& w : ways) {
             // an OFDM control-only burst is its control: n_cw codewords, the last ones maybe all padding
             auto h = pack_hypothesis(w, cpb, max_ctl, pair, (ctl_slots || data) ? 0 : n_cw);
@@ -1054,6 +1069,27 @@ std::vector<Station::Hypothesis> Station::expect(const RxBurst& rxb) const {
         out.insert(out.begin() + static_cast<std::ptrdiff_t>(std::min<std::size_t>(1, out.size())), *repeat);
     const int tries = std::max(0, prime_tries());
     if (static_cast<int>(out.size()) > tries) out.resize(static_cast<std::size_t>(tries));
+    return out;
+}
+
+// From a peer that keeps T_REPLY (T_KEEP): each way with T_REPLY the other ways it can be, as the peer's last
+// control: left out, said (its value unknown), or none (empty) (link.Station._reply_changes).
+std::vector<Station::Way> Station::reply_changes(const std::vector<Way>& ways) const {
+    std::vector<Way> out;
+    if (!(keep_default() && keep && keep_peer)) return out;
+    for (const auto& w : ways) {
+        int have = 0;  // 0: left out, 1: said, 2: none
+        for (const auto& t : w.ext)
+            if (t.type == T_REPLY) have = t.value.empty() ? 2 : 1;
+        for (int f = 0; f < 3; ++f) {
+            if (f == have) continue;  // the way itself (a said value: its unknown-value way)
+            Way v = w;
+            std::erase_if(v.ext, [](const Tlv& t) { return t.type == T_REPLY; });
+            if (f == 1) v.ext.push_back({T_REPLY, Bytes{0}, Bytes{0xC0}});
+            if (f == 2) v.ext.push_back({T_REPLY, {}, {}});
+            out.push_back(std::move(v));
+        }
+    }
     return out;
 }
 
@@ -1089,10 +1125,10 @@ std::vector<Station::Way> Station::variants(bool data, int n_cw, int ctl_slots, 
     for (int t : {T_CHAT, T_DUPCTL, T_NODS, T_KEEP})
         if (auto e = pe.find(t); e != pe.end() && !(t == T_KEEP && keep_seen_))
             common.push_back({t, e->second, Bytes(e->second.size(), 0xFF)});
-    // T_REPLY, a recommendation: as last time
-    // (not from a peer that keeps it, T_KEEP: it says T_REPLY only when it changes)
-    if (auto e = pe.find(T_REPLY); e != pe.end() && e->second.size() == 1 && !peer_keeping())
-        common.push_back({T_REPLY, e->second, Bytes{0xFF}});
+    // T_REPLY, a recommendation: as last time. A peer that keeps it (T_KEEP) says it until its handshake
+    // ends, then mostly leaves it out (unchanged); the other ways come last (reply_changes)
+    if (auto e = pe.find(T_REPLY); e != pe.end() && !peer_omits_)
+        common.push_back({T_REPLY, e->second, Bytes(e->second.size(), 0xFF)});
     if (auto e = pe.find(T_BUFFER); e != pe.end()) common.push_back({T_BUFFER, e->second, Bytes(e->second.size(), 0)});
     if (!base) common = {{T_REPLY, Bytes{0}, Bytes{0xC0}}, {T_DUPCTL, {}, {}}};  // its first ARQ burst: the shifter's
     std::vector<Way> ways;
