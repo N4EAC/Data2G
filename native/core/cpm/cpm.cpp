@@ -492,13 +492,24 @@ Detection detect(const Grid& g, std::span<const double> x, double reach_hz, bool
 
 namespace {
 
-// cpm.tone_metric's factor: the square law's Es / (N0 (N0 + Es)), the codeword's Es and N0.
+// cpm.spill: the share of Es each neighbour of a row's strongest tone holds over N0, 0..1 (#244).
+double spill(const Mat<double>& E, double n0, double es) {
+    std::vector<double> nb(E.rows);
+    for (std::size_t r = 0; r < E.rows; ++r) {
+        const auto a = static_cast<std::size_t>(std::max_element(E[r], E[r] + E.cols) - E[r]);  // np.argmax: first
+        nb[r] = (a > 0 ? E[r][a - 1] : n0) + (a + 1 < E.cols ? E[r][a + 1] : n0) - 2 * n0;
+    }
+    return std::clamp(np_mean(nb) / 2 / es, 0.0, 1.0);
+}
+
+// cpm.tone_metric's factor: the square law's Es / (N0 (N0 + Es)), the codeword's Es, N0 plus the spill.
 double metric_scale(const Mat<double>& E) {
     const auto top = row_max(E);
     const double mtop = np_mean(top);
     double n0 = median_rest(E) / std::numbers::ln2;  // exponential: median = N0 ln 2
     n0 = std::max(n0, 1e-12 * mtop + 1e-300);
     const double es = std::max(mtop - n0, 1e-3 * n0);
+    n0 += spill(E, n0, es) * es;
     return es / (n0 + es) / n0;
 }
 

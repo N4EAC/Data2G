@@ -619,14 +619,29 @@ def tone_metric(g: Grid, E: np.ndarray) -> np.ndarray:
     """(n_sym, m) tone energies of one codeword -> (n_sym, m) log P(E | tone
     sent) up to a per-symbol constant. Noncoherent square-law metric, exact
     for Rayleigh fading: E_m g, g = Es / (N0 (N0 + Es)), Es and N0 the
-    codeword's."""
+    codeword's, N0 plus the Doppler spill (spill())."""
     top = E.max(axis=1)
     n0 = np.median(np.sort(E, axis=1)[:, :-1]) / np.log(2)  # exponential: median = N0 ln 2
     n0 = max(n0, 1e-12 * np.mean(top) + 1e-300)  # noise-free tests
     es = max(np.mean(top) - n0, 1e-3 * n0)
+    n0 += spill(E, n0, es) * es
     # es / (n0 (n0 + es)) without its underflow: a codeword past the audio's
     # end (zero-padded: a header claiming more than arrived) reads as erasures
     return E * (es / (n0 + es) / n0)
+
+
+def spill(E: np.ndarray, n0: float, es: float) -> float:
+    """The share of Es each neighbour of a symbol's strongest tone holds over
+    N0, 0..1: fast fading (30 Hz on c16r25's 25 Hz tones) spreads a tone into
+    its neighbours, which the median N0 never sees (2 of 15 bins), so the
+    metric's confidence grew with SNR while the right tone won no more rows,
+    and the lock's header score fell under LOCK_LLR (#244: no lock 20% at
+    -5 dB, 60% at +20 dB, hilat). Counting it as noise caps the confidence
+    by the spread. ~0 on AWGN and slow fading."""
+    a = E.argmax(axis=1)
+    P = np.pad(E, ((0, 0), (1, 1)), constant_values=n0)  # an edge tone's missing neighbour: noise
+    r = np.arange(len(E))
+    return float(np.clip(np.mean(P[r, a] + P[r, a + 2] - 2 * n0) / 2 / es, 0.0, 1.0))
 
 
 def llrs(g: Grid, E: np.ndarray) -> np.ndarray:
