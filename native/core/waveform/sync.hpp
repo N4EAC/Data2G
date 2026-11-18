@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -67,8 +68,12 @@ struct RawStat {
 
 // sync._raw_stat. repeats 0: the band's. levels_from: the levels from the
 // outputs from there on, by one partition (StreamDetector).
+// sink: each searched bin's outputs and statistic row, while still in cache, in place of S and outs
+// (left empty); called once per bin, possibly on pool threads at once (distinct i).
+using RawSink = std::function<void(std::size_t i, const cdouble* outs, const double* S)>;
 RawStat raw_stat(std::span<const cdouble> z, const Band& band, double reach = config::ACQUIRE_REACH_HZ,
-                 int repeats = 0, std::optional<std::size_t> levels_from = {}, bool keep_outs = false);
+                 int repeats = 0, std::optional<std::size_t> levels_from = {}, bool keep_outs = false,
+                 const RawSink* sink = nullptr);
 
 // (S / lowest noise level, the hypotheses).
 std::pair<Mat<double>, std::vector<double>> detection_stat(std::span<const cdouble> z, const Band& band,
@@ -88,10 +93,12 @@ std::vector<std::size_t> crossings(std::span<const double> D, double threshold, 
 
 // Find the preamble in baseband z. threshold: the band's if unset. search:
 // [start, end) starts to hunt in. S: a precomputed statistic for z's
-// starts (StreamDetector; -1 = do not search). Throws SyncError.
+// starts from col0 on (StreamDetector; -1 = do not search; the starts before
+// col0 are not searched, and search must be unset). Throws SyncError.
 Acquisition acquire(std::span<const cdouble> z, const Band& band, std::optional<double> threshold = {},
                     double reach = config::ACQUIRE_REACH_HZ,
-                    std::optional<std::pair<std::int64_t, std::int64_t>> search = {}, const Mat<double>* S = nullptr);
+                    std::optional<std::pair<std::int64_t, std::int64_t>> search = {}, const Mat<double>* S = nullptr,
+                    std::int64_t col0 = 0);
 
 // sync.pair_products: D[:, t] = sum over j < P of C[:, t + (j + 1) F] conj(C[:, t + j F]) for every start with all
 // P pairs in C (rows, each `cols` long).

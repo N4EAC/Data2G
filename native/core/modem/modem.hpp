@@ -117,6 +117,7 @@ std::optional<std::vector<double>> copy_llr(std::span<const cd> z, std::int64_t 
 struct BandStat {
     std::string_view band;
     const Mat<double>* S;
+    std::int64_t col0 = 0;  // S's first column is this start (the earlier ones: already searched)
 };
 
 struct BestHeader {
