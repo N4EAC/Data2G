@@ -22,4 +22,9 @@ st() {
 st sprs46 --fast-ramp 4:6 &
 st sprs35 --fast-ramp 3:5 &
 wait
+# the fast teacher only from snr_est -8 dB (ramped from -10): below it slow
+# fading read SPREAD_MAX_HZ on 12-25% of CPM rows (spr3 floor set)
+st sprs46f --fast-ramp 4:6 --fast-snr-min -8 &
+st sprs35f --fast-ramp 3:5 --fast-snr-min -8 &
+wait
 date

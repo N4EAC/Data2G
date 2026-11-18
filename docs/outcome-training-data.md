@@ -74,13 +74,20 @@ followed; exploration is `session_data.EXPLORE` (0.2) unless noted.
 | `session_data_cohm_fastlow.csv` | `--fastlow --sessions 1200 --first 15400000` (same) | fastlow | same | 6b4ac87 | |
 | `session_data_cohm_floor.csv` | `--floor --sessions 3000 --first 15500000` (same) | floor | same | 6b4ac87 | the floor on the coherent receiver |
 | `session_data_sev.csv` | `with_native session_data --severe --sessions 2000 --first 16000000` (`runs/sev_round.sh`), `DATA2G_SPREAD_CARRY=1` | ITU-R F.1487 severe profiles (`hfchannel.ITU_PRESETS`) half the time, else Doppler 2-30 Hz and delay 0-8 ms; SNR and drift as regular, 300 s | the installed CNP (cohc4), offsets as shipped, Python shifter | ade53f7 (master ad37335 + ITU presets) | OFDM fails past ~3 Hz (one pilot row per 144 ms) while CPM decodes; no other set shows it (sevle12, not shipped) |
-| `session_data_spr.csv` | `--sessions 2900 --first 17000000` (`runs/spr_round.sh`), `DATA2G_SPREAD_CARRY=1` | regular | the installed CNP (cohc4), offsets as shipped, Python shifter | abdbef3 (lag-fit CPM spread_est, `cpm.spread`; cohc4 never saw it, so its CPM-measured steering is off-distribution) | every CPM-measured row on the new spread input |
+| `session_data_spr.csv` | `--sessions 2900 --first 17000000` (`runs/spr_round.sh`), `DATA2G_SPREAD_CARRY=1` | regular | the installed CNP (cohc4), offsets as shipped, Python shifter | abdbef3 (lag-fit CPM spread_est, `cpm.spread`; cohc4 never saw it, so its CPM-measured steering is off-distribution) | superseded by spr3: AWGN read 12 Hz on CPM (fixed 13a509f), GF decode in float32 (#243) |
 | `session_data_spr_slow.csv` | `--slow --sessions 800 --first 17100000` (same) | slow | same | abdbef3 | |
 | `session_data_spr_high.csv` | `--high --sessions 1200 --first 17200000` (same) | high | same | abdbef3 | |
 | `session_data_spr_awgnhigh.csv` | `--high --kinds awgn --sessions 400 --first 17300000` (same) | high AWGN | same | abdbef3 | |
 | `session_data_spr_fastlow.csv` | `--fastlow --sessions 1200 --first 17400000` (same) | fastlow | same | abdbef3 | |
 | `session_data_spr_floor.csv` | `--floor --sessions 3000 --first 17500000` (same) | floor | same | abdbef3 | |
 | `session_data_spr_sev.csv` | `--severe --sessions 2000 --first 17700000` (same) | severe | same | abdbef3 | |
+| `session_data_spr3.csv` | as `session_data_spr.csv` (same seeds), `O=runs/spr3 runs/spr_round.sh` | regular | cohc4, offsets as shipped, Python shifter | 4af9731 (13a509f: no fading reads 0.0; + #243: native GF check update in double) | supersedes the spr sets: those read AWGN as 12 Hz on CPM and decoded GF in float32 |
+| `session_data_spr3_slow.csv` | `--slow`, as spr (same) | slow | same | 4af9731 | |
+| `session_data_spr3_high.csv` | `--high`, as spr (same) | high | same | 4af9731 | |
+| `session_data_spr3_awgnhigh.csv` | `--high --kinds awgn`, as spr (same) | high AWGN | same | 4af9731 | |
+| `session_data_spr3_fastlow.csv` | `--fastlow`, as spr (same) | fastlow | same | 4af9731 | |
+| `session_data_spr3_floor.csv` | `--floor`, as spr (same) | floor | same | 4af9731 | |
+| `session_data_spr3_sev.csv` | `--severe`, as spr (same) | severe | same | 4af9731 | |
 Older sets carry no link-history or energy columns: their rows read as "no
 history" (the inputs' flag 0).
 
@@ -100,6 +107,7 @@ sent at the same moment; one row per candidate.
 | `outcome_data_general_pri.csv` | `with_native outcome_data --samples 40000 --first 14600000` (`runs/pri_round.sh`) | none | 96bcf2c | the general set on the #135 tree (no session, so nothing primed; the cor set's seeds no longer reproduce: snr_est and some labels moved since 12d1235) |
 | `outcome_data_general_cohm.csv` | `with_native outcome_data --samples 40000 --first 15600000` (`runs/cohm/cohm_round.sh`) | none | 6b4ac87 | the general set on the coherent CPM receiver |
 | `outcome_data_general_spr.csv` | `with_native outcome_data --samples 40000 --first 17600000` (`runs/spr_round.sh`) | none | abdbef3 | the general set on the lag-fit CPM spread_est |
+| `outcome_data_general_spr3.csv` | as `outcome_data_general_spr.csv` (same seeds; `runs/spr3`) | none | 4af9731 | the general set on the fixed estimator and GF decoder |
 
 ## Mixes
 

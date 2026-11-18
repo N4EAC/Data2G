@@ -175,6 +175,9 @@ def main():
     ap.add_argument("--teacher-fast", default="",
                     help="every mode's targets from this model on rows measured as fast (--fast-ramp), on the rows' own inputs")
     ap.add_argument("--fast-ramp", default="4:6", help="LO:HI Hz of the row's spread_est: --teacher-fast from 0 at LO to 1 at HI")
+    ap.add_argument("--fast-snr-min", type=float, default=None,
+                    help="--teacher-fast only where the row's snr_est is at least this (ramped over 2 dB below): "
+                         "under -10 dB slow fading can read SPREAD_MAX_HZ on CPM")
     ap.add_argument("--init",default="", help="start from this CNP's weights (distillation only)")
     ap.add_argument("--lr", type=float, default=1e-3, help="distillation's learning rate")
     ap.add_argument("--hold", default="", help="modes left out of training (zero-shot test)")
@@ -224,6 +227,9 @@ def main():
         lo, hi = (float(v) for v in a.fast_ramp.split(":"))
         spread = np.array([float(r["spread_est"]) for r in rows])
         w = np.clip((spread - lo) / (hi - lo), 0, 1)[:, None]
+        if a.fast_snr_min is not None:
+            snr_est = np.array([float(r["snr_est"]) for r in rows])
+            w = w * np.clip((snr_est - a.fast_snr_min + 2) / 2, 0, 1)[:, None]
         z_t = w * zf + (1 - w) * z_t
         print(f"fast teacher {a.teacher_fast}: weight mean {w.mean():.3f}, full on {np.mean(w == 1):.1%} of rows")
     if a.cond:  # the shifter's conditional offsets (policy.COND_OFFSETS), on each row's own spread_est
