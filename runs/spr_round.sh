@@ -9,7 +9,7 @@
 # seeds 1-12) on all of it, ensembled (sprle12). Output in main runs/spr.
 #   runs/spr_round.sh [data|members|all]
 set -euo pipefail
-O=/home/andrew/code/Data2G/runs/spr
+O=${O:-/home/andrew/code/Data2G/runs/spr}
 cd $O/tree_new
 PY=/home/andrew/code/Data2G/.venv/bin/python
 STEER=/home/andrew/code/Data2G/runs/sev/shipped_cohc4.npz  # == data2g/codes_data/outcome_predictor.npz at ad37335

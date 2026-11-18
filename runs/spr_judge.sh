@@ -6,7 +6,7 @@
 #   <name>  main runs/spr/<name>.npz on tree_new
 #   runs/spr_judge.sh base c4new sprs46 ...
 set -euo pipefail
-O=/home/andrew/code/Data2G/runs/spr
+O=${O:-/home/andrew/code/Data2G/runs/spr}
 PY=/home/andrew/code/Data2G/.venv/bin/python
 C4=/home/andrew/code/Data2G/runs/sev/shipped_cohc4.npz
 SEED0=${SEED0:-1000}
@@ -17,7 +17,7 @@ cells="${cells}mpd:0,mpd:10,mpd:20,mpp:-6,mpp:0,mpp:10,mpg:0,mpg:10,awgn:0,awgn:
 cells="${cells},awgn:-18,awgn:-14,mpp:-14,mpp:-12,mpp:-8,mpd:-13,mpg:-8,awgn:-8"
 for arm in "$@"; do
   case $arm in
-    base) tree=$O/tree_old model=$C4 ;;
+    base) tree=/home/andrew/code/Data2G/runs/spr/tree_old model=$C4 ;;
     c4new) tree=$O/tree_new model=$C4 ;;
     *) tree=$O/tree_new model=$O/$arm.npz ;;
   esac
