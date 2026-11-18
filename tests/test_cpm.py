@@ -201,7 +201,12 @@ def test_spread_tracks_doppler_through_symbol_jitter():
         for _ in range(8):
             h = hfchannel._gaussian_taps(400 * g.T, true, rng)[:: g.T]
             e = np.abs(h) ** 2
-            est.append(cpm.spread(g, e + rng.exponential(np.mean(e), len(e))))
+            est.append(cpm.spread(g, e + rng.exponential(np.mean(e), len(e)), 0.0))
         assert abs(np.median(est) / true - 1) < 0.3, (true, est)
-    assert cpm.spread(g, rng.exponential(1.0, 400)) == cpm.SPREAD_MAX_HZ  # no correlation: too fast
-    assert cpm.spread(g, np.ones(10)) == cpm.UNMEASURED_SPREAD_HZ  # too short
+    # no correlation past lag 0: too fast if the energy fades (Rayleigh per
+    # symbol), else no fading (a steady tone, the noise's own variance)
+    n0, s = 0.1, 1.0
+    awgn = s + n0 + rng.normal(0, np.sqrt(2 * n0 * s + n0 * n0), 400)
+    assert cpm.spread(g, s * rng.exponential(1.0, 400) + n0, n0) == cpm.SPREAD_MAX_HZ
+    assert cpm.spread(g, awgn, n0) == 0.0
+    assert cpm.spread(g, np.ones(10), n0) == cpm.UNMEASURED_SPREAD_HZ  # too short

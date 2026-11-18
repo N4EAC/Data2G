@@ -772,31 +772,48 @@ def refine(g: Grid, x: np.ndarray, s0: int, cfo: float, spec: CpmSpec, n_data: i
 # so it sits at lag 0 only), which the old 0-3 Hz clip pinned at 3.0 on every
 # channel. Measured (2026-11-18, two-path 2 ms, -15..+20 dB): 0.5-4 Hz within
 # about 20% on every grid; c8r50 and c32r62 to 10 Hz; past what the grid
-# resolves, no correlation survives lag 1 and it reads SPREAD_MAX_HZ.
+# resolves, no correlation survives lag 1 and it reads SPREAD_MAX_HZ, if the
+# energy varies at all: AWGN has no correlation past lag 0 either. So with
+# none, the excess variance decides: var(top) less the noise's (2 n0 s +
+# n0^2, chi-square) over s^2 reads 0.00 on AWGN and 0.28-1.06 on fading of
+# 0.1-30 Hz at -10 dB and up (c32r62: -5); under SPREAD_EXCESS_MIN it is
+# no fading seen, 0.0. (At -15 dB the noise term swamps it and fast fading
+# reads 0.0 too: only the CPM floor works there either way.)
 # Native: cpm::measure.
 SPREAD_LAGS = 8
 SPREAD_MIN_SYMS = 16  # shorter: unmeasured (UNMEASURED_SPREAD_HZ: the shifter carries its last)
 UNMEASURED_SPREAD_HZ = 2.0  # equalizer.DEFAULT_SPREAD_HZ, policy.UNMEASURED_SPREAD_HZ
 SPREAD_KEEP = 0.05  # lags used: up to the first under this fraction of lag 1's
 SPREAD_MAX_HZ = 12.0
+SPREAD_EXCESS_MIN = 0.2
+SPREAD_SIG = 2.5  # the fit needs lag 1's correlation over SPREAD_SIG / sqrt(n): white energies pass by chance otherwise
+# and an excess variance of at least this: on AWGN at high SNR the noise's
+# variance is so small that the burst's own energy pattern passed SPREAD_SIG
+# (c8r50 +20 dB read 2.6 Hz)
+SPREAD_EXCESS_FIT = 0.05
 
 
-def spread(g: Grid, top: np.ndarray) -> float:
-    """Doppler spread (2 sigma, Hz) from per-symbol energies: a least-squares
-    fit of log c(k) = a - b k^2 (Gaussian Doppler: c(k) = A exp(-(2 pi sigma
-    k T)^2)) over the lags 1.. whose autocovariance c(k) holds up."""
+def spread(g: Grid, top: np.ndarray, n0: float) -> float:
+    """Doppler spread (2 sigma, Hz) from per-symbol energies (noise n0 per
+    bin): a least-squares fit of log c(k) = a - b k^2 (Gaussian Doppler:
+    c(k) = A exp(-(2 pi sigma k T)^2)) over the lags 1.. whose
+    autocovariance c(k) holds up; with none, too fast or no fading, by the
+    excess variance."""
     n = len(top)
     if n < SPREAD_MIN_SYMS:
         return UNMEASURED_SPREAD_HZ
-    t = top - np.mean(top)
+    mean = np.mean(top)
+    t = top - mean
     c = np.array([np.mean(t[k:] * t[:n - k]) for k in range(1, SPREAD_LAGS + 1)])
-    if not c[0] > 0:
-        return SPREAD_MAX_HZ
+    v = np.mean(t * t)
+    s = max(mean - n0, 1e-12)
+    excess = (v - (2 * n0 * s + n0 * n0)) / (s * s)
     m = 0
-    while m < SPREAD_LAGS and c[m] > SPREAD_KEEP * c[0]:
+    while (excess >= SPREAD_EXCESS_FIT and c[0] > SPREAD_SIG / np.sqrt(n) * v and m < SPREAD_LAGS
+           and c[m] > SPREAD_KEEP * c[0]):
         m += 1
     if m < 2:
-        return SPREAD_MAX_HZ
+        return SPREAD_MAX_HZ if excess >= SPREAD_EXCESS_MIN else 0.0
     x = np.arange(1, m + 1, dtype=np.float64) ** 2
     y = np.log(c[:m])
     mx, my = np.mean(x), np.mean(y)
@@ -816,7 +833,7 @@ def measure(g: Grid, E: np.ndarray, n_sym: int) -> dict:
     n0 = max(np.median(np.sort(E, axis=1)[:, :-1]) / np.log(2), 1e-300)
     snr = np.maximum(top / n0 - 1, 1e-6)
     es = max(float(np.mean(top) - n0), 1e-12)
-    return dict(snr_est=10 * np.log10(es / n0 * g.rate / SNR_REF_BW_HZ), spread_est=spread(g, top), delay_est_ms=0.0,
+    return dict(snr_est=10 * np.log10(es / n0 * g.rate / SNR_REF_BW_HZ), spread_est=spread(g, top, n0), delay_est_ms=0.0,
                 headroom=0.0, frames=max(1.0, n_sym * g.T / FRAME_SAMPLES), snr=snr)
 
 

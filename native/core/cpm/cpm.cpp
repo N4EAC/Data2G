@@ -854,11 +854,12 @@ std::optional<Lock> late_lock(const Grid& g, std::span<const double> x, const Lo
 
 // data2g.cpm.spread: Doppler spread from the winning tone's energy, a
 // least-squares fit of log c(k) = a - b k^2 over the lags 1.. whose
-// autocovariance holds up (constants: cpm.py's SPREAD_*).
-static double spread(const Grid& g, const std::vector<double>& top) {
+// autocovariance holds up; with none, too fast or no fading by the excess
+// variance (constants: cpm.py's SPREAD_*).
+static double spread(const Grid& g, const std::vector<double>& top, double n0) {
     constexpr int LAGS = 8;
     constexpr std::size_t MIN_SYMS = 16;
-    constexpr double KEEP = 0.05, MAX_HZ = 12.0, UNMEASURED_HZ = 2.0;
+    constexpr double KEEP = 0.05, MAX_HZ = 12.0, UNMEASURED_HZ = 2.0, EXCESS_MIN = 0.2, SIG = 2.5, EXCESS_FIT = 0.05;
     const std::size_t n = top.size();
     if (n < MIN_SYMS) return UNMEASURED_HZ;
     const double m0 = np_mean(top);
@@ -869,10 +870,16 @@ static double spread(const Grid& g, const std::vector<double>& top) {
         for (std::size_t i = 0; i + k < n; ++i) p[i] = t[i + k] * t[i];
         c[k - 1] = np_mean(p);
     }
-    if (!(c[0] > 0)) return MAX_HZ;
+    std::vector<double> sq(n);
+    for (std::size_t i = 0; i < n; ++i) sq[i] = t[i] * t[i];
+    const double v = np_mean(sq);
+    const double s = std::max(m0 - n0, 1e-12);
+    const double excess = (v - (2 * n0 * s + n0 * n0)) / (s * s);
     int m = 0;
-    while (m < LAGS && c[m] > KEEP * c[0]) ++m;
-    if (m < 2) return MAX_HZ;
+    while (excess >= EXCESS_FIT && c[0] > SIG / std::sqrt(static_cast<double>(n)) * v && m < LAGS &&
+           c[m] > KEEP * c[0])
+        ++m;
+    if (m < 2) return excess >= EXCESS_MIN ? MAX_HZ : 0.0;
     std::vector<double> x(m), y(m);
     for (int i = 0; i < m; ++i) {
         x[i] = static_cast<double>((i + 1) * (i + 1));
@@ -896,7 +903,7 @@ Measure measure(const Grid& g, const Mat<double>& E, int n_sym) {
     for (std::size_t i = 0; i < top.size(); ++i) out.snr[i] = std::max(top[i] / n0 - 1, 1e-6);
     const double mtop = np_mean(top);
     const double es = std::max(mtop - n0, 1e-12);
-    out.spread_est = spread(g, top);
+    out.spread_est = spread(g, top, n0);
     out.snr_est = 10 * std::log10(es / n0 * g.rate / config::SNR_REF_BW_HZ);
     out.frames = std::max(1.0, static_cast<double>(n_sym * g.T) / config::FRAME_SAMPLES);
     return out;
