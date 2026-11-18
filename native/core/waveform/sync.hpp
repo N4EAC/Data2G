@@ -88,10 +88,12 @@ std::vector<std::size_t> crossings(std::span<const double> D, double threshold, 
 
 // Find the preamble in baseband z. threshold: the band's if unset. search:
 // [start, end) starts to hunt in. S: a precomputed statistic for z's
-// starts (StreamDetector; -1 = do not search). Throws SyncError.
+// starts from col0 on (StreamDetector; -1 = do not search; the starts before
+// col0 are not searched, and search must be unset). Throws SyncError.
 Acquisition acquire(std::span<const cdouble> z, const Band& band, std::optional<double> threshold = {},
                     double reach = config::ACQUIRE_REACH_HZ,
-                    std::optional<std::pair<std::int64_t, std::int64_t>> search = {}, const Mat<double>* S = nullptr);
+                    std::optional<std::pair<std::int64_t, std::int64_t>> search = {}, const Mat<double>* S = nullptr,
+                    std::int64_t col0 = 0);
 
 // sync.pair_products: D[:, t] = sum over j < P of C[:, t + (j + 1) F] conj(C[:, t + j F]) for every start with all
 // P pairs in C (rows, each `cols` long).

@@ -714,11 +714,15 @@ BestHeader best_header(std::span<const cd> z0, std::span<const std::string_view>
     const auto len = static_cast<int64_t>(z0.size());
     for (const auto name : search_bands(bands, accept)) {
         const Mat<double>* S = nullptr;
+        std::int64_t col0 = 0;
         for (const auto& st : stats)
-            if (st.band == name) S = st.S;
+            if (st.band == name) {
+                S = st.S;
+                col0 = st.col0;
+            }
         waveform::Acquisition acq_b;
         try {
-            acq_b = waveform::acquire(z0, waveform::band(name), {}, ACQUIRE_REACH_HZ, {}, S);
+            acq_b = waveform::acquire(z0, waveform::band(name), {}, ACQUIRE_REACH_HZ, {}, S, col0);
         } catch (const SyncError&) {
             continue;
         }

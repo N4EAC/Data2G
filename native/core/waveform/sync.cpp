@@ -423,7 +423,8 @@ std::vector<std::size_t> crossings(std::span<const double> D, double threshold, 
 }
 
 Acquisition acquire(std::span<const cdouble> z, const Band& band, std::optional<double> threshold_in, double reach,
-                    std::optional<std::pair<std::int64_t, std::int64_t>> search, const Mat<double>* S_in) {
+                    std::optional<std::pair<std::int64_t, std::int64_t>> search, const Mat<double>* S_in,
+                    std::int64_t col0) {
     const double threshold = threshold_in ? *threshold_in : band.preamble_threshold();
     const std::size_t n_pre = static_cast<std::size_t>(band.preamble_samples());
     if (z.size() < n_pre + 2 * M) throw SyncError("signal too short");
@@ -437,6 +438,7 @@ Acquisition acquire(std::span<const cdouble> z, const Band& band, std::optional<
     } else {
         std::tie(S_own, freqs) = detection_stat(z, band, reach);
     }
+    if (col0 && (search || !S_in)) throw std::invalid_argument("acquire: col0 needs a caller's S and no search");
     if (search) {
         if (Sp != &S_own) {
             S_own = *Sp;
@@ -455,18 +457,18 @@ Acquisition acquire(std::span<const cdouble> z, const Band& band, std::optional<
     std::vector<double> D(S.cols, -INFINITY);
     for (std::size_t i = 0; i < S.rows; ++i)
         for (std::size_t j = 0; j < S.cols; ++j) D[j] = std::max(D[j], S[i][j]);
-    const double best = D.empty() ? -INFINITY : *std::max_element(D.begin(), D.end());
+    const double best = D.empty() ? (col0 ? -1.0 : -INFINITY) : *std::max_element(D.begin(), D.end());
     if (best < threshold) {
         char msg[96];
         std::snprintf(msg, sizeof msg, "no preamble found (peak %.1f < %g)", best, threshold);
         throw SyncError(msg);
     }
     const std::vector<std::size_t> peaks = crossings(D, threshold, n_pre, 1 + TIME_ALTERNATIVES);
-    std::size_t n = peaks[0];
+    std::size_t n = peaks[0];  // S's column; z's start n + col0
     const std::size_t i = argmax_col(S, n);
     Acquisition acq;
     acq.metric = S[i][n];
-    std::tie(acq.preamble_start, acq.freq_offset) = refine(z, band, static_cast<std::int64_t>(n), freqs[i]);
+    std::tie(acq.preamble_start, acq.freq_offset) = refine(z, band, static_cast<std::int64_t>(n) + col0, freqs[i]);
 
     // runner-ups: other CFO bins at this start more than a grid step either
     // side of the winner's, then the later crossings
@@ -479,12 +481,12 @@ Acquisition acquire(std::span<const cdouble> z, const Band& band, std::optional<
     for (int a = 0; a < ALTERNATIVES; ++a) {
         const std::size_t j = argmax(col.data(), col.size());
         if (col[j] < threshold) break;
-        acq.alternatives.push_back(refine(z, band, static_cast<std::int64_t>(n), freqs[j]));
+        acq.alternatives.push_back(refine(z, band, static_cast<std::int64_t>(n) + col0, freqs[j]));
         blank(j);
     }
     for (std::size_t p = 1; p < peaks.size(); ++p) {
         n = peaks[p];
-        acq.alternatives.push_back(refine(z, band, static_cast<std::int64_t>(n), freqs[argmax_col(S, n)]));
+        acq.alternatives.push_back(refine(z, band, static_cast<std::int64_t>(n) + col0, freqs[argmax_col(S, n)]));
     }
     return acq;
 }
