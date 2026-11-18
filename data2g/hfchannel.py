@@ -43,6 +43,17 @@ FADING_PRESETS = {
     "mps": FadingPreset("mps", 0.15, 2.0),  # slow + selective (measured)
 }
 
+# ITU-R F.1487 Annex 3 severe profiles (two equal paths, Gaussian Doppler,
+# spread = 2 sigma). Kept apart from FADING_PRESETS so the sweeps and
+# training mixes that iterate it don't pick them up; for now only
+# phy_session.ContinuousChannel resolves them (loss_study cells).
+ITU_PRESETS = {
+    "nvis-d": FadingPreset("nvis-d", 1.0, 7.0),  # mid-latitude disturbed NVIS
+    "lowlat-d": FadingPreset("lowlat-d", 10.0, 6.0),  # low latitude disturbed
+    "hilat-m": FadingPreset("hilat-m", 10.0, 3.0),  # high latitude moderate
+    "hilat-d": FadingPreset("hilat-d", 30.0, 7.0),  # high latitude disturbed
+}
+
 
 def _analytic(x: np.ndarray) -> np.ndarray:
     return signal.hilbert(x)
