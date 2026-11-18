@@ -347,10 +347,22 @@ void test_window(const QTemporaryDir& dir) {
     a.command_port = free_port_triple();
     a.kiss_port = a.command_port + 2;  // KISS always runs: a port of its own
     QSettings store(dir.filePath(QStringLiteral("window.ini")), QSettings::IniFormat);
+    // Heights: the offscreen screen is narrower than the window can be.
+    const auto saved_height = [&store] {
+        QWidget probe;
+        probe.restoreGeometry(store.value(QStringLiteral("gui/geometry")).toByteArray());
+        return probe.height();
+    };
+    {
+        QWidget last;  // where the window was left by the run before
+        last.resize(760, 600);
+        store.setValue(QStringLiteral("gui/geometry"), last.saveGeometry());
+    }
     check::current_step = "window: start the station";
     gui::MainWindow w(a, store);
     w.show();
     check::is_true(w.station().running(), "station running");
+    check::equal(w.height(), 600, "the window opens at the size it was left at");
     {
         // macOS: any other role and Qt moves the entry to the application menu, emptying File
         QStringList seen;
@@ -529,6 +541,9 @@ void test_window(const QTemporaryDir& dir) {
     check::is_true(wait_for([&] { return again.state() != QAbstractSocket::ConnectedState; }, 5000),
                    "a port change restarts: the client dropped");
     check::is_true(w.station().running() && w.station().args() == live, "running on the new port");
+    check::current_step = "window: resize";
+    w.resize(w.width(), 620);
+    check::is_true(wait_for([&] { return saved_height() == 620; }, 3000), "a resize is saved without closing the window");
     check::current_step = "window: close";
 }
 
