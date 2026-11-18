@@ -84,7 +84,7 @@ DATA2G_SIMD_CLONES void cscale(const cdouble* __restrict a, cdouble w, cdouble* 
 // (megabytes) are given back after each task instead of held.
 struct Scratch {
     std::vector<cdouble> prod, c, row;
-    std::vector<double> p, pn, re, im;
+    std::vector<double> p, pn, re, im, srow;
 };
 constexpr std::size_t SCRATCH_KEEP = 1 << 16;  // elements per buffer worth holding
 
@@ -301,7 +301,7 @@ double noise_level(const Mat<cdouble>& C) {
 }
 
 RawStat raw_stat(std::span<const cdouble> z, const Band& band, double reach, int repeats,
-                 std::optional<std::size_t> levels_from, bool keep_outs) {
+                 std::optional<std::size_t> levels_from, bool keep_outs, const RawSink* sink) {
     if (repeats <= 0) repeats = band.spec->preamble_repeats;
     const std::vector<cdouble> t = unit_template(band);
     RawStat r;
@@ -313,14 +313,14 @@ RawStat raw_stat(std::span<const cdouble> z, const Band& band, double reach, int
     const auto& refs = band.spec->name == "w48" ? NOISE_REF_HZ_W48 : NOISE_REF_HZ;  // sync.noise_ref_hz
     all.insert(all.end(), refs.begin(), refs.end());
     const std::size_t nf = r.freqs.size(), nc = z.size() - t.size() + 1;
-    r.S = Mat<double>(nf, n_out);
+    if (!sink) r.S = Mat<double>(nf, n_out);
     r.q.resize(all.size());
-    if (keep_outs) r.outs = Mat<cdouble>(nf, nc);
+    if (keep_outs && !sink) r.outs = Mat<cdouble>(nf, nc);
     const double expo_mean = -std::log(1 - NOISE_QUANTILE);  // quantile -> mean of an exponential
     // Per bin, in the pass that makes the row (still in cache): its noise level, and for the
     // searched bins the statistic. A searched bin's row is written straight into outs.
     corr_rows(
-        z, t, all, [&](std::size_t i) { return keep_outs && i < nf ? r.outs[i] : nullptr; },
+        z, t, all, [&](std::size_t i) { return keep_outs && !sink && i < nf ? r.outs[i] : nullptr; },
         [&](std::size_t i, const cdouble* c) {
             Scratch& s = scratch();
             s.p.resize(nc);
@@ -344,7 +344,13 @@ RawStat raw_stat(std::span<const cdouble> z, const Band& band, double reach, int
             // std::complex's NaN fallback
             s.re.assign(n_out, 0.0);
             s.im.assign(n_out, 0.0);
-            repeat_stat(c, repeats, n_out, r.S[i], s.re.data(), s.im.data());
+            if (!sink) {
+                repeat_stat(c, repeats, n_out, r.S[i], s.re.data(), s.im.data());
+                return;
+            }
+            s.srow.resize(n_out);
+            repeat_stat(c, repeats, n_out, s.srow.data(), s.re.data(), s.im.data());
+            (*sink)(i, c, s.srow.data());
         });
     return r;
 }
@@ -597,18 +603,20 @@ void StreamDetector::feed(std::span<const cdouble> z_new) {
     }
     // the level from the new outputs, at least 2000 (0.25 s) of the latest
     const auto levels_from = static_cast<std::size_t>(std::max<std::int64_t>(0, len - M + 1 - std::max<std::int64_t>(added, 2000)));
-    RawStat r = raw_stat(z, band, reach, 0, levels_from, true);
     const std::int64_t zs = fed - len;  // stream index of z[0], so of c[0]
     if (C(0).empty()) c0 = zs;
     const std::int64_t have = c0 + static_cast<std::int64_t>(C(0).size());  // outputs overlap the last chunk's
-    const std::size_t skip = clamp_to(have - zs, r.outs.cols);
-    for (std::size_t i = 0; i < bins(); ++i) {
-        C_[i].insert(C_[i].end(), r.outs[i] + skip, r.outs[i] + r.outs.cols);
-        S_[i].insert(S_[i].end(), r.S[i], r.S[i] + r.S.cols);
-    }
+    const auto n_c = static_cast<std::size_t>(len - M + 1), n_s = static_cast<std::size_t>(len - span + 1);
+    const std::size_t skip = clamp_to(have - zs, n_c);
+    // each bin's rows appended as raw_stat makes them (still in cache; no zeroed matrices copied after)
+    const RawSink sink = [&](std::size_t i, const cdouble* c, const double* s) {
+        C_[i].insert(C_[i].end(), c + skip, c + n_c);
+        S_[i].insert(S_[i].end(), s, s + n_s);
+    };
+    RawStat r = raw_stat(z, band, reach, 0, levels_from, true, &sink);
     levels.push_back(std::move(r.q));
     if (levels.size() > static_cast<std::size_t>(CHUNKS)) levels.erase(levels.begin());
-    tail.assign(z.begin() + static_cast<std::ptrdiff_t>(r.S.cols), z.end());
+    tail.assign(z.begin() + static_cast<std::ptrdiff_t>(n_s), z.end());
 }
 
 namespace {

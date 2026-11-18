@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -67,8 +68,12 @@ struct RawStat {
 
 // sync._raw_stat. repeats 0: the band's. levels_from: the levels from the
 // outputs from there on, by one partition (StreamDetector).
+// sink: each searched bin's outputs and statistic row, while still in cache, in place of S and outs
+// (left empty); called once per bin, possibly on pool threads at once (distinct i).
+using RawSink = std::function<void(std::size_t i, const cdouble* outs, const double* S)>;
 RawStat raw_stat(std::span<const cdouble> z, const Band& band, double reach = config::ACQUIRE_REACH_HZ,
-                 int repeats = 0, std::optional<std::size_t> levels_from = {}, bool keep_outs = false);
+                 int repeats = 0, std::optional<std::size_t> levels_from = {}, bool keep_outs = false,
+                 const RawSink* sink = nullptr);
 
 // (S / lowest noise level, the hypotheses).
 std::pair<Mat<double>, std::vector<double>> detection_stat(std::span<const cdouble> z, const Band& band,
