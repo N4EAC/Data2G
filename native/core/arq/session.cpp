@@ -324,6 +324,13 @@ void Session::disconnect() {
     if (state == SessionState::IDLE || state == SessionState::LISTEN || state == SessionState::CLOSED) return;
     want_disc = true;
     disc_why = "CLIENT";
+    if (state == SessionState::CONNECTING && out) {
+        // a CONNECT not yet on air (the first, or a retry's) is dropped and
+        // the dial ends at the next poll; one on air has its answer waited for
+        out.reset();
+        due.reset();
+        deadline = -INF;
+    }
     if (build_at) build_at = -INF;  // the caller's idle poll: a DISC now instead
 }
 
@@ -405,7 +412,9 @@ void Session::log_stats(const char* label, double now, double since, const std::
 }
 
 void Session::on_timeout(double now) {
-    if (state == SessionState::CONNECTING) {
+    if (state == SessionState::CONNECTING && want_disc) {
+        close("CLIENT unconfirmed");  // the host gave up on the dial: no more tries
+    } else if (state == SessionState::CONNECTING) {
         tries += 1;
         log_write(LOG, INFO, format("no answer to CONNECT %s, try %d of %d", peer.c_str(), tries, tune.connect_tries));
         if (tries >= tune.connect_tries) {
@@ -660,7 +669,7 @@ void Session::on_session_frame(const Frame& f, double now) {
         flush_writes();
         connected(now);
         events.push_back("CONNECTED " + peer);
-        queue(station->build(), now);
+        if (!disc(now)) queue(station->build(), now);  // a dial the host gave up on, answered: DISC first
     } else if (sub == CONNECT_NAK && state == SessionState::CONNECTING && f.key == 0) {
         if (const ConnectNak k = ConnectNak::unpack(body); k.nonce == nonce) {
             const char* why = nak_name(k.reason);

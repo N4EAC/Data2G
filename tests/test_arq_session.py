@@ -207,6 +207,65 @@ def test_connect_retries_in_the_robust_mode_and_is_answered_in_it():
     assert b.state == S.CONNECTED and ack.submode == G.ROBUST_CONNECT
 
 
+def _rx(burst):
+    return FakeRx(burst, random.Random(3), 0.0, {}, {"mismatch": 0})
+
+
+@pytest.mark.parametrize("when", ["before", "between"])
+def test_disconnect_drops_a_connect_not_yet_on_air(when):
+    """DISCONNECT with no CONNECT on air ends the dial at the next poll, with
+    nothing sent (#215: BPQ32 sends ABORT 30 s after its DISCONNECT)."""
+    from data2g.arq import policy as G
+
+    a = S.Session("W1AW", G.GearShifter(), rng=random.Random(1))
+    a.connect("K2XYZ", 2, 0.0)
+    t = 0.0
+    if when == "between":
+        a.on_tx_end(a.poll(0.0), 2.0)
+        t = a.next_event()
+        assert a.poll(t) is None and a.state == S.CONNECTING  # no answer: a retry is queued
+    a.disconnect()
+    assert a.poll(t + 0.1) is None
+    assert a.state == S.CLOSED and a.events == ["DISCONNECTED CLIENT unconfirmed"]
+    assert a.next_event() is None
+
+
+def test_disconnect_lets_the_connect_on_air_finish_then_stops():
+    """The CONNECT on air has its reply window run, and no retry follows."""
+    from data2g.arq import policy as G
+
+    a = S.Session("W1AW", G.GearShifter(), rng=random.Random(1))
+    a.connect("K2XYZ", 2, 0.0)
+    first = a.poll(0.0)
+    a.disconnect()  # keyed, not yet ended
+    assert a.state == S.CONNECTING and not a.events
+    a.on_tx_end(first, 2.0)
+    t = a.next_event()
+    assert t > 2.0 and a.poll(t) is None
+    assert a.state == S.CLOSED and a.events == ["DISCONNECTED CLIENT unconfirmed"]
+    assert a.poll(t + 60.0) is None
+
+
+def test_a_callee_that_answers_a_given_up_dial_gets_the_disc_next():
+    from data2g.arq import policy as G
+
+    a = S.Session("W1AW", G.GearShifter(), rng=random.Random(1))
+    b = S.Session("K2XYZ", G.GearShifter(), rng=random.Random(2))
+    b.listen()
+    a.connect("K2XYZ", 2, 0.0)
+    first = a.poll(0.0)
+    a.disconnect()
+    a.on_tx_end(first, 2.0)
+    b.on_rx(_rx(first), 2.2)
+    ack = b.poll(2.2)
+    b.on_tx_end(ack, 3.0)
+    a.on_rx(_rx(ack), 3.2)
+    assert a.state == S.DISCONNECTING and a.events == ["CONNECTED K2XYZ"]
+    disc = a.poll(3.2)
+    b.on_rx(_rx(disc), 4.0)
+    assert b.state == S.CLOSED and b.events == ["CONNECTED W1AW", "DISCONNECTED PEER"]
+
+
 def test_callee_breaks_idle():
     """Data the callee writes on an idle link goes in its own wake burst, not
     at the caller's next keepalive (KEEPALIVE_S[0] or more away)."""

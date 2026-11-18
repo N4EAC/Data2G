@@ -646,6 +646,11 @@ without). So the last codeword of a write rides in the control's padding when it
   - DISCONNECT breaks idle the same way: the caller sends DISC in place of its
     waiting poll, the callee as a wake. A station with unacked data sends it first.
     Either side retries its DISC on a timeout (DISC_TRIES).
+  - DISCONNECT while dialing ends the dial. A CONNECT on air has its reply window
+    run; a callee that answers gets the DISC next, else the session ends with no
+    more tries. A CONNECT not yet on air is dropped. DISCONNECTED is `CLIENT
+    unconfirmed`. BPQ32 sends ABORT 30 s after an unanswered DISCONNECT, and five
+    tries take about a minute (#215).
   - v1 (until 2026-10) let only the caller start turns, polling 2 s after the last
     exchange and doubling to 16 s (2-4 s with chat on): up to 16 s of callee latency,
     and constant keying.
