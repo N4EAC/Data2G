@@ -43,6 +43,10 @@ _DELAYS = np.arange(-2 * NCP, 2 * NCP + 1)
 TIME_TAPS = 4
 # The same for equalizer.refine, whose data rows are 6 times denser.
 DD_TAPS = 2
+# refine's time pass keeps the Doppler prior's eigenpairs over this much of the window's least observation
+# variance: the reduced-rank form (exact at full rank) differs from the exact solve by ~1e-9 of the estimate's
+# own mse (scripts/refine_lowrank_study.py) and costs ~a third
+DD_LOWRANK_TOL = 1e-4
 # Doppler spread assumed when the burst is too short to measure one.
 DEFAULT_SPREAD_HZ = 2.0
 # The Wiener filters' spread, picked per burst by leave-one-out pilot
@@ -442,13 +446,89 @@ def refine(h_pilot: np.ndarray, t_pilot: np.ndarray, z: np.ndarray, w: np.ndarra
     F, S_ = t_rows.shape
     h = np.zeros((F, S_, nc), dtype=np.complex128)
     mse = np.zeros((F, S_, nc))
-    for c in range(0, F, 16):
-        ix = idx[c:c + 16]
+    exact = _time_lowrank(near, mid, times, vals, var, t_rows, p_sig, spread, h, mse)
+    for c in range(0, len(exact), 16):
+        fs = exact[c:c + 16]
+        ix = idx[fs]
         tj = times[ix]  # (f, J)
         Rt = p_sig * _doppler_corr(tj[:, :, None] - tj[:, None, :], spread)
         Rpp = Rt[:, None] + var[ix].transpose(0, 2, 1)[..., None] * np.eye(J)  # (f, NC, J, J)
-        Rdp = p_sig * _doppler_corr(t_rows[c:c + 16][:, :, None] - tj[:, None, :], spread)  # (f, S, J)
+        Rdp = p_sig * _doppler_corr(t_rows[fs][:, :, None] - tj[:, None, :], spread)  # (f, S, J)
         W = np.linalg.solve(Rpp, np.broadcast_to(Rdp.swapaxes(1, 2)[:, None], (len(ix), nc, J, S_)))  # (f, NC, J, S)
-        h[c:c + 16] = np.einsum("fcjs,fjc->fsc", W, vals[ix])
-        mse[c:c + 16] = np.maximum(p_sig - np.einsum("fcjs,fsj->fsc", W, Rdp), 0.0)
+        he = np.einsum("fcjs,fjc->fsc", W, vals[ix])
+        me = np.maximum(p_sig - np.einsum("fcjs,fsj->fsc", W, Rdp), 0.0)
+        for k, f in enumerate(fs):  # a low-rank frame's carriers whose M was not positive definite: NaN there
+            bad = np.isnan(mse[f, 0]) if np.isnan(mse[f, 0]).any() else slice(None)
+            h[f][:, bad] = he[k][:, bad]
+            mse[f][:, bad] = me[k][:, bad]
     return h, mse
+
+
+def _time_lowrank(near, mid, times, vals, var, t_rows, p_sig, spread, h, mse) -> list:
+    """refine's time pass in its reduced-rank form, into h and mse; returns the frames left to the exact solve.
+
+    One basis for every window: the eigenpairs (largest first) of the Doppler prior over the union of the
+    windows' observation times less their frame's middle (keyed to 0.1 us). A window's observations take their
+    rows U of it; h(t) = psi(t) g, g ~ N(0, diag(lam)), psi(t) = k(t, rel) U / lam. Per carrier, with
+    M = diag(1 / lam) + U^T D^-1 U: h_s = psi_s M^-1 U^T D^-1 v, mse_s = p_sig - psi_s lam psi_s^T + psi_s M^-1 psi_s^T
+    (Woodbury: exact at full rank). Kept: eigenvalues over DD_LOWRANK_TOL of the window's least observation
+    variance; a window whose rank costs more than the exact solve, or with a carrier whose M is not numerically
+    positive definite, is solved exactly (native equalizer::refine)."""
+    F, S_ = t_rows.shape
+    nc = vals.shape[1]
+    key = {}
+    rel = []
+    obs_of, idx_of = [], []
+    for f in range(F):
+        o = np.flatnonzero(near[f])
+        obs_of.append(o)
+        ix = []
+        for t in times[o] - mid[f]:
+            x = t * 1e7
+            k = int(np.sign(x) * np.floor(abs(x) + 0.5))  # llround
+            if k not in key:
+                key[k] = len(rel)
+                rel.append(t)
+            ix.append(key[k])
+        idx_of.append(np.array(ix, dtype=int))
+    rel = np.array(rel)
+    js = len(rel)
+    exact = []
+    lam, U = np.zeros(0), np.zeros((0, 0))
+    if js:
+        lam, U = np.linalg.eigh(p_sig * _doppler_corr(rel[:, None] - rel[None, :], spread))
+        order = np.argsort(-lam, kind="stable")
+        lam, U = lam[order], U[:, order]
+    for f in range(F):
+        o, J = obs_of[f], len(obs_of[f])
+        r = 0
+        if J:
+            r = int(np.sum(lam > DD_LOWRANK_TOL * var[o].min()))
+            if J * r * r / 2 + r ** 3 / 6 + r * r * S_ >= J ** 3 / 6 + J * J * (S_ + 2) / 2:
+                r = 0
+        if not r:
+            exact.append(f)
+            continue
+        ub = U[idx_of[f], :r]  # (J, r)
+        psi = (p_sig * _doppler_corr(t_rows[f][:, None] - mid[f] - rel[None, :], spread)) @ U[:, :r] / lam[:r]  # (S, r)
+        di = 1 / var[o]  # (J, NC)
+        M = np.einsum("jk,jc,jl->ckl", ub, di, ub) + np.diag(1 / lam[:r])  # (NC, r, r)
+        q = np.einsum("jk,jc->ck", ub, di * vals[o])  # (NC, r)
+        ok = np.ones(nc, dtype=bool)
+        try:
+            np.linalg.cholesky(M)
+        except np.linalg.LinAlgError:
+            for c in range(nc):
+                try:
+                    np.linalg.cholesky(M[c])
+                except np.linalg.LinAlgError:
+                    ok[c] = False
+        g = np.linalg.solve(M[ok], q[ok][:, :, None])[:, :, 0]  # (NC, r)
+        Mi_psi = np.linalg.solve(M[ok], np.broadcast_to(psi.T, (ok.sum(), r, S_)))  # (NC, r, S)
+        h[f][:, ok] = np.einsum("sk,ck->sc", psi, g)
+        prior = np.einsum("sk,k,sk->s", psi, lam[:r], psi)
+        mse[f][:, ok] = np.maximum(p_sig - prior[:, None] + np.einsum("sk,cks->sc", psi, Mi_psi), 0.0)
+        if not ok.all():
+            mse[f][:, ~ok] = np.nan
+            exact.append(f)
+    return exact
