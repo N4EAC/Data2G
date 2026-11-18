@@ -765,7 +765,6 @@ ModemRx::Est ModemRx::dd_estimate() const {
     const double g = est.gain, p = est.p_sig;
     Mat<cd> z(rows, nc);
     Mat<double> w(rows, nc);
-    std::vector<double> la1(static_cast<std::size_t>(m)), la0(static_cast<std::size_t>(m)), lp(M), prob(M);
     SymCache& cache = sym_cache_;
     if (cache.valid.size() != n_sym) {
         cache.L.assign(n_sym * static_cast<std::size_t>(m), 0.0);
@@ -773,9 +772,12 @@ ModemRx::Est ModemRx::dd_estimate() const {
         cache.w.assign(n_sym, 0.0);
         cache.valid.assign(n_sym, 0);
     }
-    // split: per symbol, independent
-    for (std::size_t j = 0; j < n_sym; ++j) {
-        if ((j & 255) == 0) cancel::check();
+    // per symbol, independent: chunks on the pool, each writing only its own symbols
+    constexpr std::size_t CHUNK = 1024;
+    pool::parallel_for((n_sym + CHUNK - 1) / CHUNK, [&](std::size_t k) {
+      cancel::check();
+      std::vector<double> la1(static_cast<std::size_t>(m)), la0(static_cast<std::size_t>(m)), lp(M), prob(M);
+      for (std::size_t j = k * CHUNK; j < std::min(n_sym, (k + 1) * CHUNK); ++j) {
         // no posterior for this symbol's codeword: no soft pilot (z, w stay 0), whatever the math says
         if (!K[j * m]) continue;
         const std::size_t row = j / nc, c = j % nc;
@@ -824,7 +826,8 @@ ModemRx::Est ModemRx::dd_estimate() const {
         cache.w[j] = g * g * std::norm(x) / (n0 + est.clip_ratio * (g * g) * p + g * g * p * v);
         z[row][c] = cache.z[j];
         w[row][c] = cache.w[j];
-    }
+      }
+    });
     const auto t = modem::symbol_times(R);
     auto [h, mse] = equalizer::refine(R.hp, t.pilots, z, w, t.rows, R.support, est.p_sig, est.filter_spread_hz, est.n0,
                                       equalizer::bb(config::band(spec.band)), est.slack);
