@@ -647,6 +647,10 @@ Measured and dropped:
   x86 1.7x less hop time at +10% CPU, but on a Pi 4 (pool 4) the same hop
   time at twice the CPU (`stats` per band alone +19 s per 120 s; tasks
   contend for the shared cache). The CFO-bin split (`per_bin`) stays.
+  Re-tested on top of the leaner hop (#238, branch fanout-on-live): all
+  phases fanned out cut the Pi's feed thread 18% -> 15.5% of a core for
+  +73% CPU and a worse p99.9; each phase alone is slower and costs CPU,
+  except the header copy (neutral).
 - `lu_solve` for doubles with back substitution across the right-hand
   sides, fixed at 5, cloned: no measurable change. `-O3` on ldpc.cpp: none.
 
