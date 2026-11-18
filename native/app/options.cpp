@@ -11,6 +11,7 @@
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <system_error>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -30,7 +31,7 @@ namespace {
 
 // After "usage: PROG ", PROG padded to data2g-host's width so the columns line up.
 const char* USAGE =
-    "[-h] [--config FILE] [--mycall MYCALL] [--listen ADDRESS] [--command-port COMMAND_PORT]\n"
+    "[-h] [TCPIP HOST PORT] [--config FILE] [--mycall MYCALL] [--listen ADDRESS] [--command-port COMMAND_PORT]\n"
     "                   [--kiss-port KISS_PORT] [--kiss-busy-limit S] [--kiss-bw {2400,500}] [--broadcast-mode MODE]\n"
     "                   [--list-audio-devices] [--input-device INPUT_DEVICE] [--output-device OUTPUT_DEVICE]\n"
     "                   [--sample-rate SAMPLE_RATE] [--output-volume OUTPUT_VOLUME] [--ptt-on-delay-ms PTT_ON_DELAY_MS]\n"
@@ -59,6 +60,7 @@ const char* HELP =
     "  -h, --help            show this help message and exit\n"
     "  --config FILE         settings saved by data2g-gui/data2g-web, under these flags\n"
     "                        (default: the config dir's Data2G/data2g.conf)\n"
+    "  TCPIP HOST PORT       how RMS Trimode starts VARA: --listen HOST --command-port PORT\n"
     "  --mycall MYCALL\n"
     "  --listen ADDRESS      the VARA and KISS ports' address (default 127.0.0.1)\n"
     "  --command-port COMMAND_PORT  data is on the next port (default 8300)\n"
@@ -170,6 +172,19 @@ T number(const std::string& opt, const std::string& v, const char* prog) {
     usage_error("argument " + opt + ": invalid " + (std::is_same_v<T, int> ? "int" : "float") + " value: '" + v + "'", prog);
 }
 
+// A program path with a space in it, given unquoted, arrives split over the
+// first arguments: RMS Trimode starts VARA that way. Windows finds the
+// program by trying each longer prefix; this finds where it stopped.
+int first_argument(int argc, char** argv) {
+    std::string path = argc ? argv[0] : "";
+    for (int i = 1; i <= argc; ++i) {
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(path, ec) || std::filesystem::is_regular_file(path + ".exe", ec)) return i;
+        if (i < argc) path += " " + std::string(argv[i]);
+    }
+    return 1;
+}
+
 }  // namespace
 
 void usage_error(const std::string& msg, const char* prog) {
@@ -260,7 +275,7 @@ Args parse(int argc, char** argv, Args a, const char* prog, const char* extra_he
     std::map<std::string, std::string> given;
     static const std::set<std::string> tracked = {"--rig-model", "--rig-device", "--no-rig", "--ptt-device", "--ptt-gpio",
                                                     "--record-dir", "--no-record"};
-    for (int i = 1; i < argc; ++i) {
+    for (int i = first_argument(argc, argv); i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-h" || arg == "--help") {
             std::printf("usage: %-11s %s%s%s", prog, USAGE, HELP, extra_help);
@@ -280,6 +295,12 @@ Args parse(int argc, char** argv, Args a, const char* prog, const char* extra_he
             const std::string value = inline_value ? *inline_value : std::string(argv[++i]);
             v->second(arg, value);
             if (tracked.count(arg)) given[arg] = value;
+            continue;
+        } else if (arg == "TCPIP" && i + 2 < argc) {
+            a.listen = argv[i + 1];
+            const std::string port = argv[i + 2];
+            a.command_port = i_(arg, port);
+            i += 2;
             continue;
         } else {
             usage_error("unrecognized arguments: " + std::string(argv[i]), prog);
