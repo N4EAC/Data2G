@@ -17,7 +17,7 @@ cells="${cells}mpd:0,mpd:10,mpd:20,mpp:-6,mpp:0,mpp:10,mpg:0,mpg:10,awgn:0,awgn:
 cells="${cells},awgn:-18,awgn:-14,mpp:-14,mpp:-12,mpp:-8,mpd:-13,mpg:-8,awgn:-8"
 for arm in "$@"; do
   case $arm in
-    base) tree=/home/andrew/code/Data2G/runs/spr/tree_old model=$C4 ;;
+    base) tree=$([ -d $O/tree_old ] && echo $O/tree_old || echo /home/andrew/code/Data2G/runs/spr/tree_old) model=$C4 ;;
     c4new) tree=$O/tree_new model=$C4 ;;
     *) tree=$O/tree_new model=$O/$arm.npz ;;
   esac
