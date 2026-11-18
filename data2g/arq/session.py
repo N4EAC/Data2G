@@ -30,7 +30,8 @@ T_SESS = F.T_SESS  # the extension carrying a session frame
 VERSION = 5  # 2: T_COMP (a v1 peer would deliver compressed codewords raw); 3: deflate primed with frames.ZDICT;
 # 4: T_INLINE (a v3 peer ignores it: each inline codeword waits for its resend in a slot);
 # 5: a CW ID may go ahead of a turn (docs/arq.md §7b): a v4 caller times out under it and keys over the reply
-# (nods, docs/arq.md §3b, need no bump: each side says it knows them, T_NODS)
+# (nods, docs/arq.md §3b, need no bump: each side says it knows them, T_NODS; nor T_REPLY only on change,
+# §8a: T_KEEP)
 CONNECT_TRIES = 5
 CONNECT_CTL_BYTES = 4 + 2 + F.Connect.BYTES  # a CONNECT's Control: core, T_SESS header, body
 DISC_TRIES = 3
@@ -664,7 +665,7 @@ class Session:
             self.call = callee  # the call it dialed (the session key derives from it)
             self.peer, self._nonce, self.cap = caller, nonce, min(c.cap, self.cap)
             self.station = L.Station(1, self.policy, master=False, key=session_key(caller, self.call, nonce),
-                                     cap=self.cap, max_misses=None, chat=self.chat, nod=True)
+                                     cap=self.cap, max_misses=None, chat=self.chat, nod=True, keep=True)
             self._flush_writes()
             self._connected(now)
             self.events.append(f"CONNECTED {caller}")
@@ -676,7 +677,7 @@ class Session:
                 return
             self.cap = min(a.cap, self.cap)
             self.station = L.Station(0, self.policy, master=True, key=session_key(self.call, self.peer, self._nonce),
-                                     cap=self.cap, max_misses=None, chat=self.chat, nod=True)
+                                     cap=self.cap, max_misses=None, chat=self.chat, nod=True, keep=True)
             self._flush_writes()
             self._connected(now)
             self.events.append(f"CONNECTED {self.peer}")

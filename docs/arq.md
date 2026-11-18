@@ -27,6 +27,7 @@ data2g/arq/__init__.py lists the modules and how they layer. By section (Python 
 | §6, §6a turns, timers, idle | `session.py` |
 | §7 session frames, §7a ID frames, §7b CW ID | `frames.py` (`Connect`, `ConnectAck`, `ConnectNak`, `pack_cq`, `pack_id`); `session.py`; `engine.py`; `cwid.py` |
 | §8 gear shifter | `policy.py` (`GearShifter`); `predictor.py`; `modes.py` (the recommendation code) |
+| §8a T_REPLY only on change | `frames.py` (`T_KEEP`); `link.py` (`Station._keeping`, `_reply_held`, `keep_peer`) |
 | §9 host interface | `data2g/host.py` (native: `native/core/host/`) |
 | §9a stream framing, compression | `frames.py` (`to_records`, `deflate`); `link.py` (`TxSide`, `RxSide`) |
 | §3a primed reception | `link.py` (`Station.expect`, `_primed`, `_implausible`, `expected_modes`), `phy.py` (`ModemRx.decode_known`), `session.py` (`_primed_frame`, `expecting`), `cpm.py` (`prime_lock`), `receiver.py` (`ReplySlot`, `Receiver.expect`), `engine.py` (`_expect_reply`) |
@@ -506,6 +507,7 @@ Where the rest comes from:
 | comp (15) | 1 bit per data slot (resends, then new), MSB first, cut after the last set byte: the codeword is deflated (§9a) | a compressed new codeword, or a compressed resend the peer may not know is one |
 | drained (17) | empty: this burst's new codewords end the sender's queued data (a hint, §6a reply hold) | the burst that slices the last queued byte, only if it fits the control's padding |
 | inline (18) | seq (7 bits) and comp flag, a data codeword's payload with trailing zeros cut, its 2-byte check (§5a) | the burst's last new codeword, when it fits the control's padding |
+| keep (20) | empty: the sender keeps `T_REPLY` (§8a) | until the peer acts on a burst that carried it |
 
 ## 5a. Inline codewords (session version 4)
 
@@ -843,6 +845,73 @@ As built (data2g/arq/policy.py):
   This absorbs what the predictor gets wrong on the actual link.
 - Switching away from the mode of the peer's outstanding codewords abandons them (§4).
   The recommender charges a switch with the bytes it holds beyond its cumulative ACK.
+
+## 8a. T_REPLY only on change (`T_KEEP`, 2026-11)
+
+`T_REPLY` (3 B) rides in nearly every control though it changes in about a quarter of
+them (§3b's census), and it is what makes the usual OFDM ACK two codewords: the core is
+4 B and an ACK mode's codeword holds 4 B, so core + `T_REPLY` is ack-4f x2 (1.62 s) or
+ack-1f x2 (0.76 s) where the core alone is x1 (1.05 s, 0.43 s). `DATA2G_KEEP=0` turns it
+off (Python and native) for A/B runs.
+
+- **Who keeps it** (no session version bump). A station that keeps `T_REPLY` says so with
+  `T_KEEP` (empty) until the peer acts on a burst that carried it: in its control's
+  padding, or in `T_REPLY`'s place where the two together would cost a control codeword
+  more (an OFDM ACK mode's control, full with `T_REPLY`). That swap saves no airtime on
+  its own burst (ack-4f: 7 B and 6 B are both x2) and the peer replies in its own mode
+  meanwhile; it is the bootstrap cost, paid until the peer acts on one, since a control
+  that is always full would never carry `T_KEEP` otherwise. A control that cannot grow
+  (CPM's one codeword) keeps its `T_REPLY` and waits for room. A peer without it ignores
+  the TLV and never says it, so nothing changes for it: `T_REPLY` in every control, and
+  a control without one means none. Drop `T_KEEP` at the next session version bump.
+- **The handshake**, by acted-on alone (`Station._keeping`, `_peer_keeping`,
+  `_reply_held`). Each step is a burst of the peer's that acts on one of mine, so it is
+  known to have been heard:
+  1. *I keep it* once I have heard the peer's `T_KEEP` and the peer has acted on a burst
+     of mine that carried `T_KEEP`. From then on a change to none is said in so many
+     words (an empty `T_REPLY`, 2 B); none the peer already holds is still left out, as
+     "none" and "kept" agree on it.
+  2. *I read the peer's controls as kept* (one without `T_REPLY` leaves the
+     recommendation as it was) once the peer has acted on a burst of mine that carried
+     `T_KEEP` and on one that acted on a `T_KEEP` of its own. That is never before the
+     peer's step 1; until then a control without `T_REPLY` means none, as ever.
+  3. *I leave `T_REPLY` out as unchanged* only once I know the peer is at step 2 for me:
+     it has acted on a burst of mine that acted on its `T_KEEP`, and on one that acted
+     on a burst of its own which acted on mine. Before that, `T_REPLY` goes in full.
+  With step 2 alone a station could be read as "none" where it meant "unchanged" (its
+  peer heard a burst and never acted on it), and stay so until its recommendation moved;
+  step 3 closes that. tests/test_keep.py holds the two ends to the same value through
+  600 random loss patterns with nods and both control sizes.
+- **Rule.** A station leaves `T_REPLY` out when the peer holds the value whichever of its
+  bursts the peer has heard: the last burst of mine it acted on left it so, and none
+  since says otherwise. For a mode that needs step 3; for none it needs no step, as a
+  peer that does not keep yet reads the missing `T_REPLY` as none anyway.
+- **Shed.** `T_REPLY` is still among the TLVs a full control sheds (`OPTIONAL_TLVS`), but
+  once I keep it its value goes first (an empty `T_REPLY`, a byte less: none, said, and
+  the peer falls back to its own reply mode). With not a byte to spare it is dropped
+  altogether: then a peer at step 2 keeps its last value for that burst, what it holds
+  is unknown to me, and my next control says it in full.
+- **Nods (§3b)** already keep `T_REPLY`; their "kept fields" test compares what the peer
+  holds after each control (the value said, the value kept, none; never an unknown one).
+  **Primed controls (§3a)**: `T_REPLY` as the peer's last control had it (its value
+  known), until the peer has left a mode out as unchanged (its step 3); from then on
+  without. The other ways (left out, said with its value unknown, none) come after the
+  `T_DUPCTL` ones, as the value-unknown one always did, so the first `PRIME_TRIES` keep
+  the shapes they had before `T_KEEP`. No hypothesis carries `T_KEEP` once the peer has
+  stopped saying it. The expected reply slot listens for the reply mode the peer holds:
+  the one said, or where `T_REPLY` was shed, those said since the last burst the peer
+  acted on; not one left out for `T_KEEP` (the peer picks its own).
+- **Measured** (shift+cpm, DATA2G_PEP_REF_DB=5, paired by seed against `DATA2G_KEEP=0`).
+  Bulk (`scripts/loss_study.py`, 16 seeds x 300 s, delivered bps): awgn -10 +1.3% (SE
+  0.7; 3 seeds better, 0 worse), awgn -6 +3.9% (0.3; 16/0), awgn -4 +4.9% (0.7; 14/0),
+  awgn 5 +4.5% (16/0); mpp -6 +6.3% (5.6; 10/4), mpp -3 +6.0% (3.9; 10/5), mpp 0 +2.6%
+  (2.5; 10/3); mpd -6 -0.7% (2.7; 4/4), mpd -3 +4.2% (2.0; 10/4), mpd 0 -2.0% (3.6;
+  5/10). The steady cells gain; each fading cell is within about two SE. Besides the
+  shorter ACK, a data burst's control drops from two codewords to one, a data codeword
+  more in the same burst. linksim winlink (`scripts/chat_probe.py`, 24 seeds x 900 s,
+  per-seed mean latency of every message): awgn 10 -0.16 s (SE 0.05; 23/1), awgn -4
+  -2.65 s (0.41; 23/1), mpp 0 +0.57 s (0.59; 9/15), mpp -3 -2.72 s (1.54; 16/6), mpd
+  -3 -2.15 s (0.65; 18/5).
 
 ## 9. Host interface (VARA-style TCP)
 
