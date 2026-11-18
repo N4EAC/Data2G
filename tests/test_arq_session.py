@@ -207,6 +207,25 @@ def test_connect_retries_in_the_robust_mode_and_is_answered_in_it():
     assert b.state == S.CONNECTED and ack.submode == G.ROBUST_CONNECT
 
 
+def test_a_refusal_sent_leaves_the_reply_timer_alone():
+    """A NAK BUSY sent while dialing is not the session's burst: its end
+    arms nothing. on_tx_end knows it by identity, so the burst handed back
+    must be the one poll gave (the native binding once rebuilt it)."""
+    from data2g.arq import policy as G
+
+    a = S.Session("W1AW", G.GearShifter(), rng=random.Random(1))
+    c = S.Session("N0CALL", G.GearShifter(), rng=random.Random(2))
+    a.connect("K2XYZ", 2, 0.0)
+    a.on_tx_end(a.poll(0.0), 2.0)
+    deadline = a.next_event()
+    c.connect("W1AW", 2, 2.1)
+    a.on_rx(FakeRx(c.poll(2.1), random.Random(3), 0.0, {}, {"mismatch": 0}), 2.5)
+    nak = a._out
+    assert nak is not None and a.poll(2.5) is nak
+    a.on_tx_end(nak, 3.0)
+    assert a.next_event() == deadline
+
+
 def test_callee_breaks_idle():
     """Data the callee writes on an idle link goes in its own wake burst, not
     at the caller's next keepalive (KEEPALIVE_S[0] or more away)."""

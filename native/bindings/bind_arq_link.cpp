@@ -240,6 +240,13 @@ public:
         if (bursts.size() > 8) bursts.erase(bursts.begin());  // repeats are of the latest few
         return o;
     }
+    // The C++ burst behind a Python one it handed out, so on_tx_end's
+    // identity check (nak) holds; a burst made in Python is converted.
+    TxBurstPtr burst_ptr(const py::object& o) {
+        for (const auto& [p, c] : bursts)
+            if (c.is(o)) return p;
+        return burst_cpp(o);
+    }
     std::vector<std::pair<TxBurstPtr, py::object>> bursts;
 
 protected:
@@ -250,6 +257,12 @@ protected:
         return st;
     }
 };
+
+// One Python object per C++ burst (PySession::burst_obj), so `is` holds across poll and _out.
+static py::object burst_of(Session& s, const TxBurstPtr& b) {
+    auto* p = dynamic_cast<PySession*>(&s);
+    return p ? p->burst_obj(b) : burst_py(b);
+}
 
 template <typename K, typename V, typename F>
 py::dict dict_of(const std::map<K, V>& m, F f) {
@@ -638,7 +651,7 @@ void bind_arq_link(py::module_& m) {
         .def_property_readonly("aliases", [](const Session& s) { return py::tuple(py::cast(s.aliases)); })
         .def_readwrite("stats_interval_s", &Session::stats_interval_s)
         .def_readwrite("accept_connect", &Session::accept_connect)
-        .def_property_readonly("_out", [](const Session& s) { return burst_py(s.out); })
+        .def_property_readonly("_out", [](Session& s) { return burst_of(s, s.out); })
         .def_readonly("_due", &Session::due)
         .def_readonly("_deadline", &Session::deadline)
         .def_readonly("_build_at", &Session::build_at)
@@ -661,10 +674,7 @@ void bind_arq_link(py::module_& m) {
             const auto [unsent, unacked] = s.queued_bytes(vara);
             return py::make_tuple(unsent, unacked);
         }, py::arg("vara") = false)
-        .def("poll", [](Session& s, double now) {
-            auto* p = dynamic_cast<PySession*>(&s);
-            return p ? p->burst_obj(s.poll(now)) : burst_py(s.poll(now));
-        })
+        .def("poll", [](Session& s, double now) { return burst_of(s, s.poll(now)); })
         .def("next_event", &Session::next_event)
         .def("claims", [](const Session& s, py::object rx) {
             PyRx r(std::move(rx));
@@ -674,7 +684,10 @@ void bind_arq_link(py::module_& m) {
             PyRx r(std::move(rx));
             return s.foreign(r);
         })
-        .def("on_tx_end", [](Session& s, const py::object& burst, double now) { s.on_tx_end(burst_cpp(burst), now); })
+        .def("on_tx_end", [](Session& s, const py::object& burst, double now) {
+            auto* p = dynamic_cast<PySession*>(&s);
+            s.on_tx_end(p ? p->burst_ptr(burst) : burst_cpp(burst), now);
+        })
         .def("on_header", &Session::on_header)
         .def("on_cw", &Session::on_cw)
         .def("on_rx", [](Session& s, py::object rx, double now) {
