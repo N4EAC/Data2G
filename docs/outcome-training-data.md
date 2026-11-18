@@ -73,6 +73,7 @@ followed; exploration is `session_data.EXPLORE` (0.2) unless noted.
 | `session_data_cohm_awgnhigh.csv` | `--high --kinds awgn --sessions 400 --first 15300000` (same) | high AWGN | same | 6b4ac87 | |
 | `session_data_cohm_fastlow.csv` | `--fastlow --sessions 1200 --first 15400000` (same) | fastlow | same | 6b4ac87 | |
 | `session_data_cohm_floor.csv` | `--floor --sessions 3000 --first 15500000` (same) | floor | same | 6b4ac87 | the floor on the coherent receiver |
+| `session_data_sev.csv` | `with_native session_data --severe --sessions 2000 --first 16000000` (`runs/sev_round.sh`), `DATA2G_SPREAD_CARRY=1` | ITU-R F.1487 severe profiles (`hfchannel.ITU_PRESETS`) half the time, else Doppler 2-30 Hz and delay 0-8 ms; SNR and drift as regular, 300 s | the installed CNP (cohc4), offsets as shipped, Python shifter | ade53f7 (master ad37335 + ITU presets) | OFDM fails past ~3 Hz (one pilot row per 144 ms) while CPM decodes; no other set shows it (sevle12, not shipped) |
 Older sets carry no link-history or energy columns: their rows read as "no
 history" (the inputs' flag 0).
 
