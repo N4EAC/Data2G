@@ -766,10 +766,48 @@ def refine(g: Grid, x: np.ndarray, s0: int, cfo: float, spec: CpmSpec, n_data: i
     return best
 
 
+# Doppler spread from the winning tone's energy (spread()): autocovariance at
+# lags 1..SPREAD_LAGS. The lag-1 correlation alone read 6-19 Hz on 0.5 Hz
+# fading (each symbol's energy jitters with the modulation and noise: white,
+# so it sits at lag 0 only), which the old 0-3 Hz clip pinned at 3.0 on every
+# channel. Measured (2026-11-18, two-path 2 ms, -15..+20 dB): 0.5-4 Hz within
+# about 20% on every grid; c8r50 and c32r62 to 10 Hz; past what the grid
+# resolves, no correlation survives lag 1 and it reads SPREAD_MAX_HZ.
+# Native: cpm::measure.
+SPREAD_LAGS = 8
+SPREAD_MIN_SYMS = 16  # shorter: unmeasured (UNMEASURED_SPREAD_HZ: the shifter carries its last)
+UNMEASURED_SPREAD_HZ = 2.0  # equalizer.DEFAULT_SPREAD_HZ, policy.UNMEASURED_SPREAD_HZ
+SPREAD_KEEP = 0.05  # lags used: up to the first under this fraction of lag 1's
+SPREAD_MAX_HZ = 12.0
+
+
+def spread(g: Grid, top: np.ndarray) -> float:
+    """Doppler spread (2 sigma, Hz) from per-symbol energies: a least-squares
+    fit of log c(k) = a - b k^2 (Gaussian Doppler: c(k) = A exp(-(2 pi sigma
+    k T)^2)) over the lags 1.. whose autocovariance c(k) holds up."""
+    n = len(top)
+    if n < SPREAD_MIN_SYMS:
+        return UNMEASURED_SPREAD_HZ
+    t = top - np.mean(top)
+    c = np.array([np.mean(t[k:] * t[:n - k]) for k in range(1, SPREAD_LAGS + 1)])
+    if not c[0] > 0:
+        return SPREAD_MAX_HZ
+    m = 0
+    while m < SPREAD_LAGS and c[m] > SPREAD_KEEP * c[0]:
+        m += 1
+    if m < 2:
+        return SPREAD_MAX_HZ
+    x = np.arange(1, m + 1, dtype=np.float64) ** 2
+    y = np.log(c[:m])
+    mx, my = np.mean(x), np.mean(y)
+    b = -np.sum((x - mx) * (y - my)) / np.sum((x - mx) ** 2)
+    return float(min(np.sqrt(max(b, 0.0)) * g.rate / np.pi, SPREAD_MAX_HZ))
+
+
 def measure(g: Grid, E: np.ndarray, n_sym: int) -> dict:
     """The gear shifter's measurements, as arq.phy.measure gives them for
-    OFDM: SNR in the 2500 Hz reference, a fading-rate proxy for spread
-    (symbol energies' decorrelation), and `snr`, per symbol, from the
+    OFDM: SNR in the 2500 Hz reference, Doppler spread (spread(), from the
+    winning tone's energy over time), and `snr`, per symbol, from the
     winning tone's energy over the noise bins (phy.measure makes the
     effective-MI features of it). Native cpm::measure."""
     from .config import FRAME_SAMPLES, SNR_REF_BW_HZ
@@ -778,9 +816,7 @@ def measure(g: Grid, E: np.ndarray, n_sym: int) -> dict:
     n0 = max(np.median(np.sort(E, axis=1)[:, :-1]) / np.log(2), 1e-300)
     snr = np.maximum(top / n0 - 1, 1e-6)
     es = max(float(np.mean(top) - n0), 1e-12)
-    rho = np.corrcoef(top[:-1], top[1:])[0, 1] if len(top) > 3 and np.std(top) > 0 else 1.0
-    spread = float(np.clip(np.sqrt(max(-np.log(max(rho, 1e-3)), 0)) * g.rate / np.pi, 0.0, 3.0))
-    return dict(snr_est=10 * np.log10(es / n0 * g.rate / SNR_REF_BW_HZ), spread_est=spread, delay_est_ms=0.0,
+    return dict(snr_est=10 * np.log10(es / n0 * g.rate / SNR_REF_BW_HZ), spread_est=spread(g, top), delay_est_ms=0.0,
                 headroom=0.0, frames=max(1.0, n_sym * g.T / FRAME_SAMPLES), snr=snr)
 
 

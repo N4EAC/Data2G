@@ -107,6 +107,9 @@ void GearShifter::observe(const Measured& m_in, std::string_view submode, double
     measured_at = now;
     heard = std::string(submode);
     spreads.push_back(m.spread_est);
+    floor_spreads.push_back(mode_at(submode).is_cpm() ? FLOOR_CPM_SPREAD_HZ : m.spread_est);
+    if (floor_spreads.size() > CPM_FLOOR_HIST)
+        floor_spreads.erase(floor_spreads.begin(), floor_spreads.end() - CPM_FLOOR_HIST);
     snrs.push_back(m.snr_est);
     if (snrs.size() > CPM_FLOOR_HIST) snrs.erase(snrs.begin(), snrs.end() - CPM_FLOOR_HIST);
     if (spreads.size() > static_cast<std::size_t>(tables::OUTCOME_GATE_HIST))
@@ -138,14 +141,13 @@ std::optional<std::pair<std::string, double>> GearShifter::expected_reply() cons
 }
 
 bool GearShifter::cpm_floor() const {
-    if (!cpm_floor_on || snrs.empty() || spreads.empty()) return false;
+    if (!cpm_floor_on || snrs.empty() || floor_spreads.empty()) return false;
     const auto median = [](std::vector<double> v) {  // np.median
         std::sort(v.begin(), v.end());
         const std::size_t n = v.size();
         return n % 2 ? v[n / 2] : (v[n / 2 - 1] + v[n / 2]) / 2;
     };
-    const std::size_t k = std::min(spreads.size(), CPM_FLOOR_HIST);
-    if (median(std::vector<double>(spreads.end() - static_cast<std::ptrdiff_t>(k), spreads.end())) < CPM_FLOOR_SPREAD_HZ)
+    if (median(floor_spreads) < CPM_FLOOR_SPREAD_HZ)
         return false;
     return median(snrs) < CPM_FLOOR_SNR_DB;
 }

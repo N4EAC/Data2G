@@ -85,6 +85,12 @@ REPLY_HOLD_MARGIN_S = 0.5  # the reply's start past my burst's end (0.4-0.6 s me
 # -10/-8 20% at 500 Hz; snr:-6/-8 no better than off.
 CPM_FLOOR_DEFAULT = ("snr", -4.0, 1.0)
 CPM_FLOOR_HIST = 3
+# What a CPM burst counts as in the floor's spread condition (floor_spreads).
+# CPM's spread_est read 3.0 on every channel until 2026-11-18 (cpm.spread),
+# so on CPM the condition always held, AWGN and MPG included: the floor's
+# measured gains (AWGN -10/-8 +76-82% above) depend on that. Kept as it was;
+# the model's inputs get the measured value.
+FLOOR_CPM_SPREAD_HZ = 3.0
 LADDER_AFTER = 2
 LADDER_STEP_DB = 3.0
 LINK_HIST = 8  # the link history's window: peer bursts I expected (predictor.N_LINK)
@@ -257,6 +263,7 @@ class GearShifter(L.Policy):
     link_now: list | None = None  # link_features() at the last recommendation
     energies: list = field(default_factory=list)  # the peer's last ENERGY_HIST bursts' energy SNR, dB
     spreads: list = field(default_factory=list)  # the peer's last bursts' spread_est (predictor.GATE)
+    floor_spreads: list = field(default_factory=list)  # as spreads, a CPM burst's FLOOR_CPM_SPREAD_HZ (cpm_floor)
     last_spread: float | None = None  # the peer's last measured (not defaulted) spread_est (SPREAD_CARRY)
     snrs: list = field(default_factory=list)  # the peer's last CPM_FLOOR_HIST bursts' snr_est (CPM_FLOOR)
     snrs_long: list = field(default_factory=list)  # the same, the last GATE_HIST (the gate's steadiness)
@@ -368,6 +375,8 @@ class GearShifter(L.Policy):
         self.measured, self.measured_band, self.measured_at = measured, MODES[submode].band, now
         self.heard = submode
         self.spreads = (self.spreads + [float(measured.get("spread_est", 0.0))])[-P.GATE_HIST:]
+        fs = FLOOR_CPM_SPREAD_HZ if is_cpm(MODES[submode]) else self.spreads[-1]
+        self.floor_spreads = (self.floor_spreads + [fs])[-CPM_FLOOR_HIST:]
         self.snrs = (self.snrs + [float(measured["snr_est"])])[-CPM_FLOOR_HIST:]
         self.snrs_long = (self.snrs_long + [float(measured["snr_est"])])[-P.GATE_HIST:]
 
@@ -376,7 +385,7 @@ class GearShifter(L.Policy):
         if CPM_FLOOR is None:
             return False
         kind, x, spread = CPM_FLOOR
-        if spread and (not self.spreads or float(np.median(self.spreads[-CPM_FLOOR_HIST:])) < spread):
+        if spread and (not self.floor_spreads or float(np.median(self.floor_spreads)) < spread):
             return False
         if kind == "snr":
             return bool(self.snrs) and float(np.median(self.snrs)) < x
