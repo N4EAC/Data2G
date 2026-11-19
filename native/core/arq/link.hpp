@@ -242,6 +242,8 @@ public:
     bool peer_reply_lost = false;  // the peer's last burst said its previous reply was lost
     bool peer_abandon = false;  // the peer's last burst carried T_ABANDON: it holds re-sliced data
     std::optional<int> peer_reply_recommend;
+    std::optional<double> now;     // the caller's clock, set by Session (nullopt: the shifter's fixed gap_s)
+    std::optional<double> tx_end;  // build(): when the burst being built should end, for the shifter (est_tx_end)
     TxSide tx;
     std::map<std::string, std::int64_t> stats;
     RxSide rx;
@@ -393,6 +395,7 @@ private:
     };
     int escalation() const;
     bool data_allowed(bool fresh, const std::string& submode);
+    std::optional<double> est_tx_end(const std::string& submode, int max_cw, std::size_t missing, bool fresh);
     std::optional<std::pair<int, nod::FamilyKey>> nod_of(std::int64_t bn, const std::string& submode, const Core& core,
                                                          int said, const Ext& ext) const;
     static Kept kept(const Core& core, int said, const Ext& ext);

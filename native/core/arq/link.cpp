@@ -358,6 +358,19 @@ bool Station::comp_bit(std::int64_t seq) const {
     return c.comp && !c.comp_known;
 }
 
+// link.py Station._tx_end: one control codeword, then resends and new
+// codewords as queued, up to max_cw
+std::optional<double> Station::est_tx_end(const std::string& submode, int max_cw, std::size_t missing, bool fresh) {
+    if (!now || !policy->has_airtime()) return std::nullopt;
+    std::int64_t n = 1;
+    if (max_cw) {
+        const std::int64_t pb = policy->payload_bytes(submode);
+        const std::int64_t fresh_cw = fresh ? (new_available() + pb - 1) / pb : 0;
+        n += std::min<std::int64_t>(max_cw - 1, static_cast<std::int64_t>(missing) + fresh_cw);
+    }
+    return *now + policy->airtime(submode, static_cast<int>(n), false);
+}
+
 TxBurstPtr Station::build(bool fresh, bool nod_ok) {
     if (latest - confirmed >= BURST_MOD - 1 && last_sent) {
         // 7 of my bursts unconfirmed: repeat the latest instead
@@ -371,6 +384,8 @@ TxBurstPtr Station::build(bool fresh, bool nod_ok) {
     const int esc = sent_esc_ = escalation();
     auto [submode, max_cw] = policy->choose(*this, esc);
     if (!data_allowed(fresh, submode)) max_cw = 0;  // control only
+    const std::vector<std::int64_t> missing = fresh ? tx.missing() : std::vector<std::int64_t>{};
+    tx_end = est_tx_end(submode, max_cw, missing.size(), fresh);
     const auto r = policy->recommend(*this);
     const int rec = r ? r->rec : 0, hint = r ? r->hint : 1;
     const std::optional<int> reply = r ? r->reply : std::nullopt;
@@ -386,7 +401,6 @@ TxBurstPtr Station::build(bool fresh, bool nod_ok) {
     reply_lost = false;
 
     const int cpb = policy->ctl_payload_bytes(submode);
-    const std::vector<std::int64_t> missing = fresh ? tx.missing() : std::vector<std::int64_t>{};
     auto [k, has_new, bitmap, n_ctl, dup] = fit(ext, core.cum, missing, fresh && new_available() > 0, max_cw, submode, fresh);
     // what this burst's ACK conveys, exactly (the snapshot must match it)
     if (!bitmap.empty()) ext[T_BITMAP] = bitmap;

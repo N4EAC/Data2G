@@ -201,6 +201,8 @@ def test_shifter_decisions_match(A, pure, seed):
         which = 0 if g is None else 1 if P.GATE and g is P.outcome_model(P.GATE[0]) else 2
         assert nat.gate() == which and nat.cpm_floor() == ref.cpm_floor()
         st = station(rng, cap)
+        st.tx_end = rng.choice([None, now + rng.uniform(0.5, 30.0)])  # the gap input: gap_s, or from the clock
+        assert nat.gap(st) == pytest.approx(ref.gap(st))
         want, got = ref.recommend(st), nat.recommend(st)
         assert got == want, (seed, step, [G.decode(r) for r in (want[0], want[2])], [A.decode(r) for r in (got[0], got[2])])
         assert nat.want_dup == ref.want_dup and nat.predicted.keys() == ref.predicted.keys()

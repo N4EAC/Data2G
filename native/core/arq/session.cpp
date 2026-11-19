@@ -126,6 +126,7 @@ Bytes Session::read() { return station ? station->read() : Bytes{}; }
 
 TxBurstPtr Session::poll(double now) {
     now_ = now;
+    if (station) station->now = now;  // the shifter's gap input (Station::est_tx_end)
     if (stats_interval_s && live(state) && now >= stats_since + stats_interval_s) {
         log_stats("stats", now, stats_since, stats_prev);
         stats_since = now;
@@ -233,6 +234,7 @@ void Session::on_cw(double now) {
 }
 
 void Session::on_rx(RxBurst& rx, double now) {
+    if (station) station->now = now;
     auto f = session_frame(rx);
     if (!f) f = repeated_frame(rx, now);
     if (f) {
@@ -371,6 +373,7 @@ void Session::close(const std::string& why, TxBurstPtr final_burst, double now) 
 
 void Session::connected(double now) {
     state = SessionState::CONNECTED;
+    station->now = now;
     heard(now);
     last_data = connected_at = stats_since = now;
     stats_prev.clear();

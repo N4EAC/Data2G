@@ -198,6 +198,8 @@ class Session:
 
     def poll(self, now: float) -> B.TxBurst | None:
         self._now = now
+        if self.station is not None:
+            self.station.now = now  # the shifter's gap input (link.Station._tx_end)
         if (self.stats_interval_s and self.state in (CONNECTED, DISCONNECTING)
                 and now >= self._stats_since + self.stats_interval_s):
             self._log_stats("stats", now, self._stats_since, self._stats_prev)
@@ -319,6 +321,8 @@ class Session:
             self._quiet_from = max(self._quiet_from, now)
 
     def on_rx(self, rx: B.RxBurst, now: float):
+        if self.station is not None:
+            self.station.now = now
         ctl = self._session_frame(rx) or self._repeated_frame(rx, now)
         if ctl is not None:
             self._on_session_frame(ctl, now)
@@ -428,6 +432,7 @@ class Session:
 
     def _connected(self, now: float):
         self.state = CONNECTED
+        self.station.now = now
         self._heard(now)
         self._last_data = self._connected_at = self._stats_since = now
         self._stats_prev = {}

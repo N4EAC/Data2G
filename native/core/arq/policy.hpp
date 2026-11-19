@@ -74,6 +74,7 @@ struct StationView {
     int misses = 0;
     int esc_floor = 0;
     bool last_rx_data = true;  // the peer's last burst carried data (expected_reply)
+    std::optional<double> tx_end;  // when my burst being built should end (Station::tx_end; nullopt: gap_s)
 };
 
 struct GearRecommendation {  // link.hpp has Recommendation (the Policy's)
@@ -95,7 +96,7 @@ public:
     using Map = std::map<std::string, double, std::less<>>;
 
     std::optional<double> noise_rule = NOISE_RULE;  // nullopt: off (DATA2G_NOISE_RULE=off)
-    double gap_s = 2.5;
+    double gap_s = 2.5;  // the gap input without a clock (StationView::tx_end nullopt: KISS, tests)
     bool use_cpm = true;
     double min_success = 0.0;
     std::optional<Measured> measured;  // the peer's last burst
@@ -127,6 +128,10 @@ public:
     // usable: nullopt (KISS: no control) = any codeword decoded.
     void outcome(std::string_view submode, int decoded, int sent, std::optional<bool> usable = std::nullopt);
     GearRecommendation recommend(const StationView& st);
+    // the outcome model's gap input (policy.py GearShifter.gap)
+    double gap(const StationView& st) const {
+        return st.tx_end ? *st.tx_end + REPLY_HOLD_MARGIN_S - measured_at : gap_s;
+    }
     // the gate's model applies (policy.py GearShifter.gate)
     // 0 the installed model, 1 the gate's, 2 the fast region's
     int gate() const;
