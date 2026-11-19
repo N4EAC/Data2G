@@ -261,6 +261,17 @@ def test_stream_detector(native, py, name):
             assert abs(c.level() - a.level()) <= SUM_TOL * a.level()
             lo = a.s0 - 50
             close(c.stat(lo, fed), a.stat(lo, fed), SUM_TOL)
+        if k % 3 == 1:  # the pair products, extended as asked for (find_copy)
+            pa, Da = a.products_from(a.c0 + 11, config.FRAME_SAMPLES, 3)
+            pc, Dc = c.products_from(c.c0 + 11, config.FRAME_SAMPLES, 3)
+            assert pa == pc and Dc.shape == Da.shape
+            if Da.size:
+                close(Dc, Da, SUM_TOL)
+            ka, Ka = a.kept_products(config.FRAME_SAMPLES, 3)
+            kc, Kc = c.kept_products(config.FRAME_SAMPLES, 3)
+            assert ka == kc and Kc.shape == Ka.shape
+            if Ka.size:
+                close(Kc, Ka, SUM_TOL)
         if k == 7:
             a.trim(fed - 5000)
             c.trim(fed - 5000)

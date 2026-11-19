@@ -324,6 +324,7 @@ class Receiver:
 
         # each band's detection statistic, computed once per sample (not per search)
         self.detectors = {b: sync.StreamDetector(ofdm.band(b)) for b in self.bands}
+        self.folds = {b: modem.FoldTrack() for b in self.bands}  # per band, find_copy's fold kept running
         self.blanker = audio.Blanker() if blank else None
         self.reset()
 
@@ -362,6 +363,8 @@ class Receiver:
         self.expected = None  # expect()'s window, until it is looked at
         for d in getattr(self, "detectors", {}).values():
             d.reset()
+        for f in getattr(self, "folds", {}).values():
+            f.reset()
 
     def expect(self, grids, lo: int, hi: int, cfo: float):
         """The expected slot (docs/arq.md §3a): a burst of one of these CPM
@@ -622,10 +625,17 @@ class Receiver:
             level = d.level() if d is not None else None
             if level is None:
                 continue
-            a, C = d.outputs_from(self.off)  # from the stream index both the buffer and C cover
+            # from the stream index both the buffer and the products cover
+            a, D = d.products_from(self.off, modem.FRAME_SAMPLES, modem.COPY_PAIRS)
             x = self.buf[a - self.off:]
-            C = C[:, :max(0, len(x) - modem.M + 1)]
-            lock = modem.find_copy(x, band, self.accept, C, level)
+            D = D[:, :max(0, len(x) - modem.M + 1 - modem.COPY_PAIRS * modem.FRAME_SAMPLES)]
+            m = D.shape[1] // modem.FRAME_SAMPLES
+            fold = None
+            if m >= 1:
+                d0, kept = d.kept_products(modem.FRAME_SAMPLES, modem.COPY_PAIRS)
+                R = self.folds[band].fold(kept, d0, a, a + m * modem.FRAME_SAMPLES)
+                fold = np.roll(R, -(a % modem.FRAME_SAMPLES), axis=1)
+            lock = modem.find_copy(x, band, self.accept, level=level, D=D, fold=fold)
             if lock is not None and (best is None or lock["score"] > best[0]["score"]):
                 best = (lock, a - self.off)
         if best is None:
