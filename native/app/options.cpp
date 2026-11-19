@@ -175,13 +175,16 @@ T number(const std::string& opt, const std::string& v, const char* prog) {
 // A program path with a space in it, given unquoted, arrives split over the
 // first arguments: RMS Trimode starts VARA that way. Windows finds the
 // program by trying each longer prefix; this finds where it stopped.
-int first_argument(int argc, char** argv) {
+// Elsewhere argv[0] is the program, and argv is not looked up as a file.
+int first_argument([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
+#ifdef _WIN32
     std::string path = argc ? argv[0] : "";
     for (int i = 1; i <= argc; ++i) {
         std::error_code ec;
         if (std::filesystem::is_regular_file(path, ec) || std::filesystem::is_regular_file(path + ".exe", ec)) return i;
         if (i < argc) path += " " + std::string(argv[i]);
     }
+#endif
     return 1;
 }
 

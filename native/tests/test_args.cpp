@@ -51,6 +51,7 @@ void test_vara_launch() {
     check::is_true(t.listen == "192.168.1.5" && t.command_port == 8320, "TCPIP HOST PORT: the address and the command port");
     check::equal(parse({"TCPIP", "127.0.0.1", "8320", "--command-port", "8400"}).command_port, 8400, "a flag after it wins");
 
+#ifdef _WIN32
     // "C:\Program Files\Data2G\data2g-gui.exe TCPIP 127.0.0.1 8320", unquoted
     const auto dir = std::filesystem::temp_directory_path() / "data2g test args";
     std::filesystem::create_directories(dir);
@@ -64,6 +65,7 @@ void test_vara_launch() {
     check::equal(app::parse(static_cast<int>(argv.size()), argv.data(), {}).command_port, 8320, "a program path split at its space");
     check::equal(app::parse(2, argv.data(), {}).command_port, 8300, "...and with nothing after it");
     std::filesystem::remove_all(dir);
+#endif
 }
 
 void test_tci() {
