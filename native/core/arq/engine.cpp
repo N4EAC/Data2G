@@ -595,6 +595,7 @@ void Engine::run_posted() {
 // --- the receiver stage ----------------------------------------------------------------
 
 void Engine::apply_reset() {
+    preview_dropped();
     receiver_reset();
     cw_.reset();
     gen_ = want_gen_;
@@ -672,6 +673,7 @@ Engine::Out Engine::step(std::span<const double> x) {
     if (const auto& p = receiver_.pending(); p && !p->is_cpm() &&
         p->score() < receiver::Receiver::SUSPECT_SCORE && p->start() <= cw_.hits_from()) {
         log_write(LOG, INFO, format("RX %s header (score %.2f) under a CW ID: dropped", spec_name(*p).c_str(), p->score()));
+        preview_dropped();
         receiver_.drop();
     }
     b.busy = receiver_busy();
@@ -873,6 +875,18 @@ Engine::Done Engine::process(Block& b) {
     d.out.ptt = tx_.has_value();
     transmitting_ = d.out.ptt;
     return d;
+}
+
+// The pending burst, previewed, let go with no BurstEvent: its preview handed on once more, marked dropped,
+// so a front end showing it live does not wait for an on_burst that never comes.
+void Engine::preview_dropped() {
+    const auto& p = receiver_.pending();
+    if (!p || preview_.start != p->start()) return;
+    if (preview_on_ && on_preview_) {
+        preview_.out.dropped = true;
+        on_preview_(preview_.out);
+    }
+    preview_ = {};
 }
 
 // The pending burst's symbols that have arrived since the last block, added to preview_ and
