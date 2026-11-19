@@ -13,6 +13,14 @@ NoiseProfile::NoiseProfile() : win_(BLOCK) {
     for (int n = 0; n < BLOCK; ++n) win_[n] = 0.5 - 0.5 * std::cos(2 * std::numbers::pi * n / (BLOCK - 1));  // np.hanning
 }
 
+namespace {
+double total(const std::array<double, 5>& p) {  // left to right, as Python's sum()
+    double t = 0.0;
+    for (const double v : p) t += v;
+    return t;
+}
+}  // namespace
+
 void NoiseProfile::feed(std::span<const double> x, double t_start) {
     const auto s = static_cast<std::int64_t>(std::nearbyint(t_start * config::FS));
     if (!buf_.empty() && s0_ + static_cast<std::int64_t>(buf_.size()) == s) {
@@ -21,6 +29,10 @@ void NoiseProfile::feed(std::span<const double> x, double t_start) {
         buf_.assign(x.begin(), x.end());
         s0_ = s;
     }
+    // kept_ only changes below: one reference for every block here
+    const double ref_total =
+        kept_total_.size() >= MIN_BLOCKS ? dsp::quantile(std::vector(kept_total_.begin(), kept_total_.end()), 0.5) : 0.0;
+    const auto pad = static_cast<std::int64_t>(std::nearbyint(MUTE_PAD_S * config::FS));
     std::size_t off = 0;
     std::vector<dsp::cdouble> z(BLOCK);
     while (buf_.size() - off >= static_cast<std::size_t>(BLOCK)) {
@@ -55,6 +67,13 @@ void NoiseProfile::feed(std::span<const double> x, double t_start) {
             for (int k = k0; k < k1; ++k) sum += std::norm(spec[static_cast<std::size_t>(k)]);
             b.p[i] = sum / (k1 - k0);
         }
+        if (total(b.p) < MUTE_X * ref_total) {  // a mute: merged into the last mark where they overlap
+            const std::int64_t a = s0_ - pad, e = s0_ + BLOCK + pad;
+            if (!busy_.empty() && busy_.back().first <= a && a <= busy_.back().second)
+                busy_.back().second = std::max(busy_.back().second, e);
+            else
+                busy_.emplace_back(a, e);
+        }
         pending_.push_back(std::move(b));
         off += BLOCK;
         s0_ += BLOCK;
@@ -69,9 +88,10 @@ void NoiseProfile::feed(std::span<const double> x, double t_start) {
                                         [&](const auto& m) { return m.first < b.end && b.start < m.second; });
         if (!marked) {
             kept_.push_back(b.p);
+            kept_total_.push_back(total(b.p));
             kept_impulses_.push_back(b.impulses);
             kept_spec_.push_back(std::move(b.spec));
-            if (kept_.size() > WINDOW) kept_.pop_front(), kept_impulses_.pop_front(), kept_spec_.pop_front();
+            if (kept_.size() > WINDOW) kept_.pop_front(), kept_total_.pop_front(), kept_impulses_.pop_front(), kept_spec_.pop_front();
         }
     }
     std::erase_if(busy_, [&](const auto& m) { return m.second <= now - 2 * commit; });

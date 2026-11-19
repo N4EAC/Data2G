@@ -176,7 +176,14 @@ class NoiseProfile:
     times the block's median 10 ms RMS (on air, recordings 2026-09/10:
     impulses ~22 dB over the noise, 1-3 ms, clustered; Gaussian peaks over
     80 samples stay under 5x). Counted on the raw input, before the
-    blanker: what is on air."""
+    blanker: what is on air.
+
+    Mutes are not noise either: a block more than MUTE_X under the kept
+    blocks' median power (summed over BANDS_HZ), and MUTE_PAD_S each side
+    of it, is marked. Programs sharing the radio (VARA, Winlink) mute or
+    zero the input while they transmit; on two volunteer nodes, 50-86% of
+    the impulses counted sat within 1 s of a mute's edges.
+"""
 
     BANDS_HZ = ((350, 950), (950, 1300), (1300, 1750), (1750, 2100), (2100, 2700))
     BLOCK = FS // 10
@@ -187,6 +194,8 @@ class NoiseProfile:
     PIECE = FS // 100  # impulse detection: 10 ms pieces
     IMPULSE_X = 10.0  # 20 dB
     RECENT = 400  # blocks (40 s) of spectra kept for span energy (span_snr_db)
+    MUTE_X = 0.01  # 20 dB under the kept median: a mute (0 turns it off)
+    MUTE_PAD_S = 1.0
 
     def __init__(self):
         f = np.fft.rfftfreq(self.BLOCK, 1 / FS)
@@ -197,6 +206,7 @@ class NoiseProfile:
         self._pending = deque()  # (start, end, band powers, impulses) not yet COMMIT_S old
         self._busy = []  # marked (start, end)
         self.kept = deque(maxlen=self.WINDOW)  # band powers
+        self.kept_total = deque(maxlen=self.WINDOW)  # their sum (mutes' reference)
         self.kept_impulses = deque(maxlen=self.WINDOW)  # impulses per kept block
         self.kept_spec = deque(maxlen=self.WINDOW)  # each kept block's power spectrum (span_snr_db's floor)
         self.recent = deque(maxlen=self.RECENT)  # (start, end, power spectrum) of every block fed
@@ -209,6 +219,9 @@ class NoiseProfile:
             self._buf = np.concatenate([self._buf, x])
         else:
             self._buf, self._s0 = np.asarray(x, dtype=np.float64), s
+        # kept only changes below: one reference for every block here
+        ref_total = float(np.median(self.kept_total)) if len(self.kept_total) >= self.MIN_BLOCKS else 0.0
+        pad = round(self.MUTE_PAD_S * FS)
         while len(self._buf) >= self.BLOCK:
             blk = self._buf[:self.BLOCK]
             spec = self.spectrum(blk)
@@ -216,7 +229,14 @@ class NoiseProfile:
             pieces = blk.reshape(-1, self.PIECE)
             ref = np.median(np.sqrt(np.mean(pieces ** 2, axis=1)))
             imp = int(np.sum(np.max(np.abs(pieces), axis=1) > self.IMPULSE_X * ref)) if ref > 0 else 0
-            self._pending.append((self._s0, self._s0 + self.BLOCK, [float(spec[b].mean()) for b in self._bins], imp, spec))
+            p = [float(spec[b].mean()) for b in self._bins]
+            if sum(p) < self.MUTE_X * ref_total:  # a mute: merged into the last mark where they overlap
+                a, b = self._s0 - pad, self._s0 + self.BLOCK + pad
+                if self._busy and self._busy[-1][0] <= a <= self._busy[-1][1]:
+                    self._busy[-1] = (self._busy[-1][0], max(self._busy[-1][1], b))
+                else:
+                    self._busy.append((a, b))
+            self._pending.append((self._s0, self._s0 + self.BLOCK, p, imp, spec))
             self._buf, self._s0 = self._buf[self.BLOCK:], self._s0 + self.BLOCK
         now = s + len(x)
         commit = round(self.COMMIT_S * FS)
@@ -224,6 +244,7 @@ class NoiseProfile:
             a, b, p, imp, spec = self._pending.popleft()
             if not any(s0 < b and a < e for s0, e in self._busy):
                 self.kept.append(p)
+                self.kept_total.append(sum(p))
                 self.kept_impulses.append(imp)
                 self.kept_spec.append(spec)
         self._busy = [(s0, e) for s0, e in self._busy if e > now - 2 * commit]
