@@ -100,6 +100,10 @@ Acquisition acquire(std::span<const cdouble> z, const Band& band, std::optional<
                     std::optional<std::pair<std::int64_t, std::int64_t>> search = {}, const Mat<double>* S = nullptr,
                     std::int64_t col0 = 0);
 
+// sync.pair_products: D[:, t] = sum over j < P of C[:, t + (j + 1) F] conj(C[:, t + j F]) for every start with all
+// P pairs in C (rows, each `cols` long).
+Mat<cdouble> pair_products(std::span<const cdouble* const> rows, std::size_t cols, int F, int P);
+
 // detection_stat for a stream, each start's statistic computed once
 // (sync.StreamDetector). The noise level is the median of the last CHUNKS
 // fed chunks' per-bin levels, then the lowest bin's. Matched filter
@@ -133,13 +137,20 @@ public:
         std::size_t cols;
     };
     Outputs outputs_from(std::int64_t start) const;
+    // sync.StreamDetector.products_from: outputs_from for pair_products(C, F, P) (the same F and P every call),
+    // the starts not yet computed computed now.
+    Outputs products_from(std::int64_t start, int F, int P);
+    // sync.StreamDetector.kept_products: every pair product kept (start: d0), products_from's and up to
+    // KEEP_BEHIND before them (a running fold subtracts what leaves its window, modem::FoldTrack).
+    Outputs kept_products(int F, int P);
+    static constexpr std::int64_t KEEP_BEHIND = 4000;  // pair products kept past a trim: two search hops
 
     const Band& band;
     double reach;
     std::int64_t span;
     // State, public as in Python (read-only outside: restart_at / skip_to move `fed`).
     std::vector<cdouble> tail;  // the last span - 1 samples fed
-    std::int64_t s0 = 0, fed = 0, c0 = 0;
+    std::int64_t s0 = 0, fed = 0, c0 = 0, d0 = 0;
     std::vector<std::vector<double>> levels;  // per chunk, each bin's level
 
 private:
@@ -147,7 +158,9 @@ private:
     // hop's trim moves no memory (C is ~8 MB on the live receiver)
     std::vector<std::vector<double>> S_;
     std::vector<std::vector<cdouble>> C_;
-    std::size_t s_off_ = 0, c_off_ = 0;
+    std::vector<std::vector<cdouble>> D_;  // pair_products of C, from d0 (products_from, kept_products)
+    std::size_t s_off_ = 0, c_off_ = 0, d_off_ = 0;
+    void extend_products(int F, int P);
 };
 
 }  // namespace data2g::waveform

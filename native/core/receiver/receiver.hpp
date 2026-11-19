@@ -162,6 +162,7 @@ private:
     struct Detector {
         std::string_view band;
         waveform::StreamDetector d;
+        modem::FoldTrack copy_fold;  // find_copy's, kept running
     };
     struct Stats {  // per band, the statistic for buf[w0:]'s starts
         std::vector<Mat<double>> mats;
@@ -175,7 +176,7 @@ private:
     bool supersede(std::vector<Item>& out, bool whole = false);
     bool release(std::vector<Item>& out);
     bool unconfirmed(std::vector<Item>& out);
-    std::optional<modem::Lock> find_copy() const;
+    std::optional<modem::Lock> find_copy();  // (extends the detectors' pair products)
     std::optional<cpm::Lock> find_cpm();
     std::optional<cpm::Lock> primed();  // expect()'s lock in its next grid, buffer indices, once its window is complete
     std::int64_t decided(std::string_view key) const;

@@ -169,7 +169,10 @@ void Receiver::reset() {
     decided_mid_.clear();
     cpm_wait_.clear();
     expected_.reset();
-    for (auto& d : detectors_) d.d.reset();
+    for (auto& d : detectors_) {
+        d.d.reset();
+        d.copy_fold.reset();
+    }
 }
 
 void Receiver::expect(std::vector<std::string_view> grids, std::int64_t lo, std::int64_t hi, double cfo) {
@@ -259,7 +262,9 @@ void Receiver::trim(int64_t n) {
 Receiver::Stats Receiver::stats(int64_t w0) {
     Stats out;
     out.mats.reserve(detectors_.size());
-    for (auto& [band, d] : detectors_) {
+    for (auto& det : detectors_) {
+        const auto band = det.band;
+        auto& d = det.d;
         if (d.fed < off_) d.restart_at(off_);  // its audio was trimmed away: start over
         auto from = static_cast<std::size_t>(d.fed - off_);
         // A confirmed burst isn't searched, so its audio goes unfed until a search is wanted again (a late
@@ -300,21 +305,33 @@ void Receiver::searched() {
     }
 }
 
-std::optional<modem::Lock> Receiver::find_copy() const {
+std::optional<modem::Lock> Receiver::find_copy() {
     std::optional<modem::Lock> best;
     int64_t best_k = 0;
+    constexpr int64_t PF = static_cast<int64_t>(modem::COPY_PAIRS) * config::FRAME_SAMPLES;
     for (const auto band : config::HEADER_COPY_BANDS) {
         const auto it = std::find_if(detectors_.begin(), detectors_.end(), [&](const Detector& d) { return d.band == band; });
         if (it == detectors_.end()) continue;
-        const auto& d = it->d;
+        auto& d = it->d;
         const auto level = d.level();
         if (!level) continue;
-        const auto c = d.outputs_from(off_);  // from the stream index both the buffer and C cover
+        // from the stream index both the buffer and the products cover
+        const auto c = d.products_from(off_, config::FRAME_SAMPLES, modem::COPY_PAIRS);
         const int64_t a = c.start;
         const auto x = std::span<const double>(buf_).subspan(static_cast<std::size_t>(a - off_));
         const auto cols = static_cast<std::size_t>(std::max<int64_t>(
-            0, std::min(static_cast<int64_t>(c.cols), static_cast<int64_t>(x.size()) - config::M + 1)));
-        const auto lock = modem::find_copy(x, band, &accept_, c.rows, cols, level);
+            0, std::min(static_cast<int64_t>(c.cols), static_cast<int64_t>(x.size()) - config::M + 1 - PF)));
+        const int64_t FR = config::FRAME_SAMPLES, m = static_cast<int64_t>(cols) / FR;
+        Mat<std::complex<double>> fold;
+        if (m >= 1) {  // the running fold, rolled to the products' start
+            const auto k = d.kept_products(config::FRAME_SAMPLES, modem::COPY_PAIRS);
+            const auto& R = it->copy_fold.fold(k.rows, k.cols, k.start, a, a + m * FR);
+            fold = Mat<std::complex<double>>(R.rows, R.cols);
+            const auto s = static_cast<std::size_t>(a % FR);
+            for (std::size_t f = 0; f < R.rows; ++f)
+                for (std::size_t ph = 0; ph < R.cols; ++ph) fold[f][ph] = R[f][(s + ph) % R.cols];
+        }
+        const auto lock = modem::find_copy(x, band, &accept_, c.rows, cols, level, nullptr, m >= 1 ? &fold : nullptr);
         if (lock && (!best || lock->score > best->score)) {
             best = lock;
             best_k = a - off_;
