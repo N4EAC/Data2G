@@ -88,6 +88,13 @@ followed; exploration is `session_data.EXPLORE` (0.2) unless noted.
 | `session_data_spr3_fastlow.csv` | `--fastlow`, as spr (same) | fastlow | same | 4af9731 | |
 | `session_data_spr3_floor.csv` | `--floor`, as spr (same) | floor | same | 4af9731 | |
 | `session_data_spr3_sev.csv` | `--severe`, as spr (same) | severe | same | 4af9731 | |
+| `session_data_spr4.csv` | as spr3 (same seeds), `O=runs/spr4 runs/spr_round.sh` | regular | cohc4, offsets as shipped, Python shifter | 9f2314e (+ robust control mode by measured spread: polls on fast fading in fsk8r50-r1/3, so the peer's spread is measured on c8r50) | the spr5 students' non-severe sets |
+| `session_data_spr4_slow.csv` | `--slow`, as spr3 | slow | same | 9f2314e | |
+| `session_data_spr4_high.csv` | `--high`, as spr3 | high | same | 9f2314e | |
+| `session_data_spr4_awgnhigh.csv` | `--high --kinds awgn`, as spr3 | high AWGN | same | 9f2314e | |
+| `session_data_spr4_fastlow.csv` | `--fastlow`, as spr3 | fastlow | same | 9f2314e | |
+| `session_data_spr4_floor.csv` | `--floor`, as spr3 | floor | same | 9f2314e | |
+| `session_data_spr5_sev.csv` | `--severe`, as spr3 (`runs/spr5_chain.sh`) | severe | same | 54f4c62 (+ #244: Doppler spill in the CPM tone metric; fsk16r25 locks on 30 Hz) | the spr5 students' severe set (the fix changes nothing else measurable, so spr4's other sets stand) |
 Older sets carry no link-history or energy columns: their rows read as "no
 history" (the inputs' flag 0).
 
@@ -108,6 +115,7 @@ sent at the same moment; one row per candidate.
 | `outcome_data_general_cohm.csv` | `with_native outcome_data --samples 40000 --first 15600000` (`runs/cohm/cohm_round.sh`) | none | 6b4ac87 | the general set on the coherent CPM receiver |
 | `outcome_data_general_spr.csv` | `with_native outcome_data --samples 40000 --first 17600000` (`runs/spr_round.sh`) | none | abdbef3 | the general set on the lag-fit CPM spread_est |
 | `outcome_data_general_spr3.csv` | as `outcome_data_general_spr.csv` (same seeds; `runs/spr3`) | none | 4af9731 | the general set on the fixed estimator and GF decoder |
+| `outcome_data_general_spr4.csv` | as spr3 (same seeds; `runs/spr4`) | none | 9f2314e | the spr5 students' offline set |
 
 ## Mixes
 
