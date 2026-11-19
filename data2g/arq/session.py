@@ -153,6 +153,10 @@ class Session:
         if self.state in (IDLE, LISTEN, CLOSED):
             return  # nothing to close; a flag left set would end the next session at its first burst
         self._want_disc, self._disc_why = True, "CLIENT"
+        if self.state == CONNECTING and self._out is not None and self._out is not self._nak:
+            # a CONNECT not yet on air (the first, or a retry's) is dropped and
+            # the dial ends at the next poll; one on air has its answer waited for
+            self._out, self._due, self._deadline = None, None, float("-inf")
         if self._build_at is not None:
             self._build_at = float("-inf")  # the caller's idle poll: a DISC now instead
 
@@ -447,7 +451,9 @@ class Session:
                  d.get("rx_ok", 0) + d.get("rx_lost", 0), d.get("rx_lost", 0), d.get("timeouts", 0))
 
     def _on_timeout(self, now: float):
-        if self.state == CONNECTING:
+        if self.state == CONNECTING and self._want_disc:
+            self._close("CLIENT unconfirmed")  # the host gave up on the dial: no more tries
+        elif self.state == CONNECTING:
             self._tries += 1
             tries = CONNECT_TRIES if self.connect_tries is None else self.connect_tries
             log.info("no answer to CONNECT %s, try %d of %d", self.peer, self._tries, tries)
@@ -681,7 +687,8 @@ class Session:
             self._flush_writes()
             self._connected(now)
             self.events.append(f"CONNECTED {self.peer}")
-            self._queue(self.station.build(), now)
+            if not self._disc(now):  # a dial the host gave up on, answered: DISC first
+                self._queue(self.station.build(), now)
         elif sub == F.CONNECT_NAK and self.state == CONNECTING and key == 0:
             n = F.ConnectNak.unpack(body)
             if n.nonce == self._nonce:
