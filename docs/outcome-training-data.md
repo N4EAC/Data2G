@@ -112,12 +112,29 @@ toward the recordings.
 Older sets carry no link-history or energy columns: their rows read as "no
 history" (the inputs' flag 0).
 
+**Receive passband (since #260).** Every session and offline sample, of
+every kind, hears through a receive passband drawn per station
+(`interference.PASSBAND_SHARES`: wide 60%, narrow 30%, flat 10%), applied to
+signal, floor and interference alike. The `passband` column records it
+(`wide`, `narrow`, `flat`). Sets made before #260 have none: reproduce them
+with `--no-passband` (`session_data.py`, `outcome_data.py`; the column is then
+empty).
+
+**Interference sets.** `session_data --interference` draws each station's
+interference from `interference.DRAWS`. New data uses `onair` (the default
+since #260): impulses, QRM shapes and occupancy from two volunteer nodes'
+noise, and a 1 dB floor wander (the set's `wander_db`, unless `--wander` is
+given). `v1` and `mild` reproduce the 2026-10 rounds' draws (`--interference
+v1 --no-passband`; mild was run with `--wander 1.0`). Details and the
+like-for-like check: `docs/interference-plan.md`.
+
 ### Available, not yet in a set
 
 - `--agc` (issue #257): each station's receiver AGC drawn from
   `data2g.agc.draw()` (none 1/4 of the time, else threshold 0-6 dB over the
   floor, depth 10-30 dB, attack 5-50 ms, release 0.1-3 s), applied to every
-  burst it hears with its noise (`phy_session.ContinuousChannel(agc=)`). The
+  burst it hears with its noise, after its receive passband
+  (`phy_session.ContinuousChannel(agc=)`). The
   range runs from none to a bit more than two volunteer nodes showed on air:
   the gain under a burst fell about as far as its `snr_est` within 0.1 s and
   came back over 1-3 s. Rows get an `agc` column (the receiving station's,
