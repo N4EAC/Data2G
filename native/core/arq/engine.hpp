@@ -193,6 +193,9 @@ struct BurstPreview {
     const modem::Spec* ofdm = nullptr;     // OFDM: the spec, and its symbols (modem::preview_frame)
     std::vector<std::complex<double>> iq;
     Mat<double> shares;                    // CPM: each data symbol's tone shares (cpm::shares)
+    // the lock was let go with no burst to follow (a receiver reset, a CW ID over a suspect header):
+    // the preview ends here, unread, and no on_burst comes for it
+    bool dropped = false;
 };
 
 // The engine's receive helpers, for a receiver of its own (monitor::Monitor).
@@ -498,6 +501,7 @@ private:
     };
     Preview preview_;
     void preview();
+    void preview_dropped();  // before the pending lock is let go silently
 
     // between the stages
     std::atomic<bool> transmitting_{false}, busy_now_{false}, channel_busy_now_{false}, abort_pending_{false};
