@@ -37,6 +37,9 @@ public:
     static constexpr double IMPULSE_X = 10.0;       // over the block's median piece RMS
     static constexpr std::size_t RECENT = 400;      // blocks (40 s) of spectra kept for span_snr_db
     using Spectrum = std::vector<double>;           // a block's power spectrum, rfft bins 0..BLOCK/2
+    // span_snr_db's AGC gauge (receiver.py GAUGE_HZ): the passband outside the burst's band and a guard
+    static constexpr double GAUGE_LO_HZ = 150.0, GAUGE_HI_HZ = 3100.0, GAUGE_GUARD_HZ = 50.0;
+    static constexpr double GAUGE_MIN = 1e-3;  // the most it scales the floor down (30 dB)
 
     NoiseProfile();
     void feed(std::span<const double> x, double t_start);  // heard from t_start (s); a gap starts a new block
@@ -48,7 +51,8 @@ public:
     std::vector<Spectrum> span_spectra(double start, double end) const;
     // A burst's in-band SNR from power alone (receiver.py NoiseProfile.span_snr_db):
     // its blocks' mean power in lo..hi Hz over the floor (the kept blocks'
-    // median, or floor_spectra's), excess over 1, in SNR_REF_BW_HZ; dB.
+    // median, or floor_spectra's), excess over 1, in SNR_REF_BW_HZ; dB. The
+    // floor is scaled by the out-of-band level's fall under the burst (receiver AGC).
     std::optional<double> span_snr_db(const std::vector<Spectrum>& spectra, double lo, double hi,
                                       const std::vector<Spectrum>* floor_spectra = nullptr) const;
     // the span's in-band power over the floor in the kept blocks' own spread (median, MAD), scaled to
