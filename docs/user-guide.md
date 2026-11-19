@@ -301,6 +301,8 @@ As an example, Pat's `varahf` section looks like this at the time of writing:
 
 If something else on the computer already uses these ports (VARA itself, for example), change Data2G's under Settings, Station, **Ports**, or with `--command-port` and `--kiss-port`. Then enter the same numbers in the application. Remember that the data port follows the command port: command port 8500 means data on 8501.
 
+RMS Trimode starts the modem itself: give it `data2g-gui.exe` as its Vara program. It passes its own address and command port (`TCPIP 127.0.0.1 8300`), which Data2G uses for that run in place of the saved ones.
+
 ### Running the application on another computer
 
 By default Data2G only accepts connections from the computer it runs on. To let an application on a laptop reach Data2G on the shack PC:
