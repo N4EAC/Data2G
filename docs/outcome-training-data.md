@@ -22,6 +22,12 @@ Rows: one per burst a receiver had a measurement for (`session_data.py`
 docstring). "Steering" is the model whose recommendations the sessions
 followed; exploration is `session_data.EXPLORE` (0.2) unless noted.
 
+"Every channel kind" is `outcome_data.KINDS` at the set's commit. From #259
+it adds the on-air presets `mpa` (0.25 Hz, 2 ms) and `mpl` (0.3 Hz, 3.5 ms)
+at 0.1 each beside awgn 0.15, mpg 0.2, mpp 0.2, mpd 0.15 and random 0.3
+(normalised: 1/12 of sessions each). Sets made before it have neither, and
+the same `--first` seeds draw other kinds after it.
+
 | file | generator (sessions, `--first`) | kind | steering | code | why |
 |---|---|---|---|---|---|
 | `session_data_v11.csv` | `session_data --sessions 2900 --first 700000` (`runs/v11_round.sh`) | regular: -8..22 dB drifting, every channel kind, 300 s, cap 500 Hz 1/4 | v10, no logit offsets, `DATA2G_BIAS_FIX=1` | f8d8e0c | v12's own sessions |

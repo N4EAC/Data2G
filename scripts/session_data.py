@@ -190,18 +190,18 @@ def session(seed):
         kinds = [k for k, _ in O.KINDS]
         ws = np.array([w for _, w in O.KINDS])
         kind = str(rng.choice(kinds, p=ws / ws.sum()))
-        doppler, delay = (PS.L.PRESETS[kind] if kind != "random"
+        doppler, delay = (PS.PRESETS[kind] if kind != "random"
                           else (float(np.exp(rng.uniform(np.log(0.05), np.log(3.0)))), float(rng.uniform(0, 5))))
         snr0, drift = float(rng.uniform(-19, -4)), 0.0
     elif FASTLOW:
         u = rng.random()
         kind = "mpp" if u < 0.35 else "mpd" if u < 0.7 else "random"
-        doppler, delay = (PS.L.PRESETS[kind] if kind != "random"
+        doppler, delay = (PS.PRESETS[kind] if kind != "random"
                           else (float(np.exp(rng.uniform(np.log(1.0), np.log(3.0)))), float(rng.uniform(0, 5))))
         snr0, drift = float(rng.uniform(-8, 6)), 0.0
     elif SLOW:
         kind = "mpg" if rng.random() < 0.7 else "random"
-        doppler, delay = (PS.L.PRESETS["mpg"] if kind == "mpg"
+        doppler, delay = (PS.PRESETS["mpg"] if kind == "mpg"
                           else (float(np.exp(rng.uniform(np.log(0.05), np.log(0.3)))), float(rng.uniform(0, 2))))
         snr0, drift = float(rng.uniform(-8, 0)), 0.0
     elif SEVERE:
@@ -220,7 +220,7 @@ def session(seed):
         if kind == "random":
             doppler, delay = float(np.exp(rng.uniform(np.log(0.05), np.log(3.0)))), float(rng.uniform(0, 5))
         else:
-            doppler, delay = PS.L.PRESETS[kind]
+            doppler, delay = PS.PRESETS[kind]
         u = rng.random()
         snr0 = float(rng.uniform(10, 30) if HIGH else rng.uniform(-14, -8) if u < 0.005
                      else rng.uniform(22, 40) if u < 0.01 else rng.uniform(-8, 22))
