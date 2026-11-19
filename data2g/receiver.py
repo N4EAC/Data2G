@@ -329,6 +329,7 @@ class Receiver:
 
         self.accept, self.bands = accept, accept.bands
         self.grids = [cpm.GRIDS[g] for g in cpm_grids]
+        self.tracks = [cpm.PresenceTrack(g) for g in self.grids]  # data2g_on_air's CPM reading, per grid
         # the least audio worth searching (a whole preamble and header), and
         # what a trim keeps (so one still arriving survives it)
         self.min_search = search_span(self.bands, cpm_grids)
@@ -340,7 +341,10 @@ class Receiver:
 
         # each band's detection statistic, computed once per sample (not per search)
         self.detectors = {b: sync.StreamDetector(ofdm.band(b)) for b in self.bands}
+        # per band, find_copy's fold and data2g_on_air's, kept running (modem.FoldTrack)
+        self.folds = {b: (modem.FoldTrack(), modem.FoldTrack()) for b in self.bands}
         self.blanker = audio.Blanker() if blank else None
+        self.sense = False  # read data2g_on_air (arq.engine turns it on; offline searches leave it off)
         self.reset()
 
     # new audio between preamble searches (one is ~40 ms of CPU at +-150 Hz):
@@ -377,8 +381,15 @@ class Receiver:
         self.cpm_wait: list = []
         self.expected = None  # expect()'s window, until it is looked at
         self.expected_ofdm = None  # expect_ofdm()'s, likewise
+        self._present = False  # data2g_on_air's latest reading with nothing locked
+        self._heard_to = 0  # stream index where the last burst handled ended (_sense reads past it)
         for d in getattr(self, "detectors", {}).values():
             d.reset()
+        for t in getattr(self, "tracks", ()):
+            t.reset()
+        for pair in getattr(self, "folds", {}).values():
+            for f in pair:
+                f.reset()
 
     def expect(self, grids, lo: int, hi: int, cfo: float):
         """The expected slot (docs/arq.md §3a): a burst of one of these CPM
@@ -453,10 +464,14 @@ class Receiver:
     @property
     def channel_busy(self) -> bool:
         """What the host reports as BUSY: a burst is being received and its
-        frame pilots say it is really there. A false lock (a weak header off
-        noise or a missed burst's data) held BUSY for the whole length it
-        claimed, up to 12 s, and a VARA client doesn't transmit under BUSY."""
-        return self.pending is not None and (self.pilots_ok or self.on_air)
+        frame pilots say it is really there, or with nothing locked one is on
+        the air anyway (data2g_on_air: its start missed). A false lock (a weak
+        header off noise or a missed burst's data) held BUSY for the whole
+        length it claimed, up to 12 s, and a VARA client doesn't transmit
+        under BUSY."""
+        if self.pending is None:
+            return self._present
+        return self.pilots_ok or self.on_air
 
     # BUSY by energy too: in-band power over the recent noise floor (the 5th
     # percentile of 0.1 s block powers over two minutes, so a long burst does
@@ -472,6 +487,54 @@ class Receiver:
             return False
         floor = np.percentile(self.powers, 5)
         return float(np.mean(list(self.powers)[-3:])) > floor * 10 ** (self.ON_AIR_DB / 10)
+
+    @property
+    def data2g_on_air(self) -> bool:
+        """A Data2G burst is on the air: one locked, or (with `sense`) the
+        newest audio carries a burst's frame pilots or CPM tones, its header
+        heard or not (one that began while we transmitted, or under another
+        burst): modem.pilot_present over the last PRESENCE_S, cpm.present
+        over the last CPM_PRESENCE_S. Read every search hop (HOP) while
+        nothing is locked: a burst we never locked holds this as long as it
+        lasts, plus up to its window. Unlike on_air, noise or a tone can't hold it (a false
+        reading is a lone hop; scripts/presence_study.py)."""
+        return self.pending is not None or self._present
+
+    # the newest audio data2g_on_air reads: the OFDM fold's (C covers the
+    # last `keep` while listening) and CPM tones' (scripts/presence_study.py)
+    PRESENCE_S = 1.75
+    CPM_PRESENCE_S = 3.0
+
+    def _sense(self):
+        """data2g_on_air's reading, of audio past the last burst handled (a
+        suspect one's kept tail would read its own pilots)."""
+        from . import cpm
+
+        start = max(self.off, self._heard_to)
+        for band, d in self.detectors.items():
+            level = d.level()
+            if level is None:
+                continue
+            a, D = d.products_from(start, modem.FRAME_SAMPLES, modem.COPY_PAIRS)
+            D = D[:, :max(0, self.off + len(self.buf) - a - modem.M + 1 - modem.COPY_PAIRS * modem.FRAME_SAMPLES)]
+            t0, m = modem.presence_window(D.shape[1], int(self.PRESENCE_S * FS))
+            if m < modem.PRESENCE_MIN_M:
+                continue
+            d0, kept = d.kept_products(modem.FRAME_SAMPLES, modem.COPY_PAIRS)
+            fold = self.folds[band][1].fold(kept, d0, a + t0, a + t0 + m * modem.FRAME_SAMPLES)
+            if modem.presence_verdict(*modem.fold_presence(fold, level, m), m):
+                log.debug("data2g on air: %s pilots", band)
+                self._present = True
+                return
+        lo = max(start, self.off + len(self.buf) - int(self.CPM_PRESENCE_S * FS))
+        for t in self.tracks:
+            t.feed(self.buf, self.off, lo)
+        for t in self.tracks:
+            if t.present():
+                log.debug("data2g on air: %s tones", t.g.name)
+                self._present = True
+                return
+        self._present = False
 
     def _check_pilots(self):
         """pilots_ok from the newest PILOT_PAIRS frame pilot pairs: under the
@@ -643,6 +706,7 @@ class Receiver:
             out.append(("burst", {"header": p, "rx": None,
                                   "audio": self.buf[max(0, p["start"] - self.off):max(0, q["start"] - self.off)]}))
         self.pending = q
+        self._present = False  # (read again once nothing is locked)
         self.pilots_ok = q.get("family") == "cpm" or "copy" in q or q["score"] >= self.SUSPECT_SCORE
         self.confirmed = False
         self._dark = 0
@@ -661,10 +725,17 @@ class Receiver:
             level = d.level() if d is not None else None
             if level is None:
                 continue
-            a, C = d.outputs_from(self.off)  # from the stream index both the buffer and C cover
+            # from the stream index both the buffer and the products cover
+            a, D = d.products_from(self.off, modem.FRAME_SAMPLES, modem.COPY_PAIRS)
             x = self.buf[a - self.off:]
-            C = C[:, :max(0, len(x) - modem.M + 1)]
-            lock = modem.find_copy(x, band, self.accept, C, level)
+            D = D[:, :max(0, len(x) - modem.M + 1 - modem.COPY_PAIRS * modem.FRAME_SAMPLES)]
+            m = D.shape[1] // modem.FRAME_SAMPLES
+            fold = None
+            if m >= 1:
+                d0, kept = d.kept_products(modem.FRAME_SAMPLES, modem.COPY_PAIRS)
+                R = self.folds[band][0].fold(kept, d0, a, a + m * modem.FRAME_SAMPLES)
+                fold = np.roll(R, -(a % modem.FRAME_SAMPLES), axis=1)
+            lock = modem.find_copy(x, band, self.accept, level=level, D=D, fold=fold)
             if lock is not None and (best is None or lock["score"] > best[0]["score"]):
                 best = (lock, a - self.off)
         if best is None:
@@ -736,6 +807,7 @@ class Receiver:
                 # (a burst's own tail read as a header at 1e-6 noise). A
                 # radio's noise at the sound card is far above -80 dBFS.
                 if np.sqrt(np.mean(self.buf[-self.min_search :] ** 2)) < SILENCE_RMS:
+                    self._present = False
                     self._trim(self.keep)
                     for d in self.detectors.values():  # no noise level in silence: skip it
                         d.restart_at(self.off + len(self.buf))
@@ -756,6 +828,8 @@ class Receiver:
                 if p is None and self.expected is None and self.expected_ofdm is not None:
                     p = self._primed_ofdm()
                 if p is None:
+                    if self.sense:
+                        self._sense()
                     # (a waiting candidate's start is within it; and the expected windows, while queued)
                     los = [e[1] for e in (self.expected, self.expected_ofdm) if e is not None]
                     self._trim(max([self.hold] + [self.off + len(self.buf) - lo for lo in los]))
@@ -764,6 +838,7 @@ class Receiver:
                 if p["start"] + self.off <= self.last_start:
                     break  # the suspect burst just handled, still in the kept window
                 self.pending = _shift(p, self.off)
+                self._present = False  # (read again once nothing is locked)
                 # BUSY at once on a clear header (or a copy lock: its pilots
                 # passed already); a suspect one waits for its pilots
                 self.pilots_ok = p.get("family") == "cpm" or "copy" in p or p["score"] >= self.SUSPECT_SCORE
@@ -794,7 +869,7 @@ class Receiver:
                 r = cpm.receive(self.buf, dict(p, start=p["start"] - self.off))
                 out.append(("burst", {"header": p, "rx": r, "audio": self.buf[max(0, p["start"] - self.off):
                                                                                p["end"] - self.off]}))
-                self.last_start = p["start"]
+                self.last_start, self._heard_to = p["start"], p["end"]
                 # keep a little before its end: a CPM burst has no lead-out silence,
                 # and with the sender's clock fast (30 ppm) the next back-to-back
                 # burst's front began 4 samples before this one's computed end; cut
@@ -819,7 +894,7 @@ class Receiver:
                 log.warning("burst lost: %s", e)
                 r = None
             out.append(("burst", {"header": p, "rx": r, "audio": seg}))
-            self.last_start = p["start"]
+            self.last_start, self._heard_to = p["start"], p["end"]
             # a better header inside this burst's span (it was a false lock,
             # and the real one began before it ended) is next, not trimmed away
             if not self.confirmed and self._supersede(out, whole=True):

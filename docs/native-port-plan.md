@@ -145,7 +145,9 @@ latency before it is kept:
 - CFO-grid parallel sync correlation.
 
 One shared pool, sized min(4, cores/2) and settable, because the machine is
-shared and a modem must not saturate a laptop either.
+shared and a modem must not saturate a laptop either. Since 2026-11-17 the
+default is every core up to 4, 4 up to 8 cores, half the cores above (a Pi 4
+gets all 4: its first LDPC pass on a 39-codeword burst halves).
 
 Status 2026-10-02: the pool landed (`core/util/pool`). Fixed threads, one
 job at a time (a second caller, or a nested call, runs inline),
@@ -641,6 +643,14 @@ Kept:
 Measured and dropped:
 - CFO-grid parallel StreamDetector hops: half the latency, +15% CPU, no
   reply-latency value (hops are 250 ms apart).
+- Search hop fan-out per band and CPM grid (2026-11-17, branch acq-fanout):
+  x86 1.7x less hop time at +10% CPU, but on a Pi 4 (pool 4) the same hop
+  time at twice the CPU (`stats` per band alone +19 s per 120 s; tasks
+  contend for the shared cache). The CFO-bin split (`per_bin`) stays.
+  Re-tested on top of the leaner hop (#238, branch fanout-on-live): all
+  phases fanned out cut the Pi's feed thread 18% -> 15.5% of a core for
+  +73% CPU and a worse p99.9; each phase alone is slower and costs CPU,
+  except the header copy (neutral).
 - `lu_solve` for doubles with back substitution across the right-hand
   sides, fixed at 5, cloned: no measurable change. `-O3` on ldpc.cpp: none.
 

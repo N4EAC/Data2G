@@ -44,6 +44,7 @@ inline constexpr std::size_t ENERGY_HIST = 4;  // the energy inputs' window: the
 inline constexpr std::size_t CPM_FLOOR_HIST = 3;
 inline constexpr double CPM_FLOOR_SNR_DB = -4.0;
 inline constexpr double CPM_FLOOR_SPREAD_HZ = 1.0;
+inline constexpr double FLOOR_CPM_SPREAD_HZ = 3.0;  // policy.py: a CPM burst in the floor's spread condition
 // OFDM nods (policy.py ONOD_GATE, docs/arq.md §3c) only where they are heard: not on a link whose median
 // spread_est is at least ONOD_GATE_SPREAD_HZ while its median snr_est is under ONOD_GATE_SNR_DB.
 inline constexpr double ONOD_GATE_SPREAD_HZ = 0.5;
@@ -55,6 +56,8 @@ inline constexpr int CTL_BYTES = 12;
 inline constexpr std::string_view ALT_POLL = "n4-ack-8f";  // escalation 2's mode
 inline constexpr int ROBUST_ESCALATION = 4;  // from here on ROBUST_CONNECT
 inline constexpr std::string_view ROBUST_CONNECT = "fsk16r25-r1/2";
+inline constexpr std::string_view ROBUST_FAST = "fsk8r50-r1/3";  // policy.py: in a session on fast fading
+inline constexpr double ROBUST_FAST_SPREAD_HZ = 6.0;
 
 std::string_view fallback(int cap);
 std::string_view connect_mode(int cap, int tries = 0);
@@ -114,6 +117,7 @@ public:
     bool peer_had_data = true;
     std::vector<LogEntry> log;
     std::vector<double> spreads;  // the peer's last bursts' spread_est (tables::OUTCOME_GATE_HIST)
+    std::vector<double> floor_spreads;  // as spreads, a CPM burst's FLOOR_CPM_SPREAD_HZ (cpm_floor; CPM_FLOOR_HIST)
     // the peer's last measured (not defaulted) spread_est: a defaulted reading
     // takes it instead (policy.py SPREAD_CARRY)
     std::optional<double> last_spread;

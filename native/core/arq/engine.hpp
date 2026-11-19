@@ -240,7 +240,8 @@ public:
     // -- audio side (the engine thread)
     Out step(std::span<const double> x);
     bool busy() const { return busy_now_; }  // a burst arriving (the receiver stage's, latest)
-    bool channel_busy() const { return channel_busy_now_; }  // the host's BUSY ON/OFF
+    // the host's BUSY ON/OFF; not the receiver's while we transmit (it hears nothing then)
+    bool channel_busy() const { return channel_busy_now_ && !transmitting_; }
     // the session peer's last burst it claimed: snr_est (the host's SN); nullopt before one
     std::optional<double> session_snr() const { return session_snr_; }
     // Samples dropped because the worker fell max_backlog_s behind (any thread).
@@ -366,6 +367,7 @@ protected:
     }
     virtual bool receiver_busy() { return receiver_.busy(); }
     virtual bool receiver_channel_busy() { return receiver_.channel_busy(); }
+    virtual bool receiver_data2g_on_air() { return receiver_.data2g_on_air(); }
     virtual void receiver_reset() { receiver_.reset(); }
     virtual void receiver_expect(const std::vector<std::string_view>& grids, std::int64_t lo, std::int64_t hi, double cfo) {
         receiver_.expect(grids, lo, hi, cfo);
@@ -382,6 +384,7 @@ private:
         std::vector<receiver::Receiver::Item> items;
         bool busy = false;
         bool cw = false;  // a CW ID heard (cwid::CwSense) with no burst locked
+        bool on_air = false;  // Receiver::data2g_on_air (KISS channel access only)
         std::uint64_t gen = 0, seq = 0;
         std::int64_t gap = 0;  // samples dropped just before this block
     };
@@ -395,7 +398,7 @@ private:
     Done process(Block& b);  // the session stage
     Done process_safe(Block& b);  // process(); a throw drops the session and plays silence
     void hear(std::vector<receiver::Receiver::Item>& items, double t);
-    TxBurstPtr kiss_burst(std::int64_t k, bool busy);
+    std::vector<TxBurstPtr> kiss_burst(std::int64_t k, bool busy);
     bool cq(ModemRx& rx);
     TxBurstPtr id_frame(const Session& s) const;
     void id_check(double t);

@@ -313,18 +313,17 @@ bool repeat_default() {
 }
 
 bool prime_ofdm_default() {
-    static const bool on = [] {
-        const char* v = std::getenv("DATA2G_PRIME_OFDM");
-        return !(v && std::string_view(v) == "0");
-    }();
+    static const bool on = env_on("DATA2G_PRIME_OFDM");
     return on;
 }
 
 bool onod_default() {
-    static const bool on = [] {
-        const char* v = std::getenv("DATA2G_ONOD");
-        return !(v && std::string_view(v) == "0");
-    }();
+    static const bool on = env_on("DATA2G_ONOD");
+    return on;
+}
+
+bool keep_default() {
+    static const bool on = env_on("DATA2G_KEEP");
     return on;
 }
 
@@ -386,8 +385,7 @@ TxBurstPtr Station::build(bool fresh, bool nod_ok) {
     const auto r = policy->recommend(*this);
     const int rec = r ? r->rec : 0, hint = r ? r->hint : 1;
     const std::optional<int> reply = r ? r->reply : std::nullopt;
-    asked_ = {rec, reply};
-    Ext ext = control_tlvs(bn, reply);
+    auto [ext, reply_same] = control_tlvs(bn, reply);
     Core core;
     core.ftype = fresh ? ARQ : PROBE;
     core.burst_seq = static_cast<int>(pmod(bn, BURST_MOD));
@@ -441,8 +439,8 @@ TxBurstPtr Station::build(bool fresh, bool nod_ok) {
             return ctl_bytes(e, 0, false, 0);
         };
         const std::int64_t room_b = static_cast<std::int64_t>(n_ctl) * cpb;
-        for (int t : OPTIONAL_TLVS)
-            if (size() > room_b) kept.erase(t);
+        while (size() > room_b && shed(kept)) {
+        }
         if (d[T_INLINE].size() < 256 && size() <= room_b) {  // a TLV holds 255 B
             inl = &tx.cws.at(c.seq);
             inl->inlined = true;
@@ -454,17 +452,44 @@ TxBurstPtr Station::build(bool fresh, bool nod_ok) {
     for (auto& [t, v] : data) ext[t] = std::move(v);
     if (dup == 2 && resend.empty() && fresh_cws.empty() && !inl) dup = 1;  // nothing but control after all
     if (dup == 2) core.ftype = ARQ_DUP;
-    if ((!fresh_cws.empty() || inl) && new_available() <= 0 &&
-        ctl_bytes(ext, 0, false, 0) + 2 <= static_cast<std::int64_t>(n_ctl) * cpb) {
+    if ((!fresh_cws.empty() || inl) && new_available() <= 0 && fits_padding(ext, n_ctl, cpb)) {
         // my host's data ends here: the peer may hold its reply for its
         // host's answer (session REPLY_HOLD_S). Only in the padding, like T_COMP
         ext[T_DRAINED] = Bytes{};
     }
-    if (nod_default() && nod && !nods_told_ && ctl_bytes(ext, 0, false, 0) + 2 <= static_cast<std::int64_t>(n_ctl) * cpb)
+    if (nod_default() && nod && !nods_told_ && fits_padding(ext, n_ctl, cpb))
         ext[T_NODS] = Bytes{};  // I hear nods: in the padding, until the peer acted on it
-    if (nod_default() && onod_default() && nod && !onods_told_ &&
-        ctl_bytes(ext, 0, false, 0) + 2 <= static_cast<std::int64_t>(n_ctl) * cpb)
+    if (keep_default() && keep && !keep_told_) {
+        if (fits_padding(ext, n_ctl, cpb)) {
+            ext[T_KEEP] = Bytes{};  // I keep T_REPLY: likewise
+        } else if (auto e = ext.find(T_REPLY); e != ext.end() && n_ctl < policy->max_ctl(submode)) {
+            // the two together would cost a control codeword more (an OFDM ACK mode's control is full with
+            // T_REPLY): T_KEEP in its place, until acted on. It saves no airtime on this burst (ack-4f: 7 B
+            // and 6 B are both two codewords); it is the bootstrap cost, paid until the peer acts on one: a
+            // control that is always full would never carry T_KEEP otherwise, and keeping takes that ACK to
+            // one codeword. Meanwhile the peer reads none and replies in its own mode. A control that cannot
+            // grow (CPM's one codeword) keeps its T_REPLY and waits for room
+            ext.erase(e);
+            ext[T_KEEP] = Bytes{};
+        }
+    }
+    if (nod_default() && onod_default() && nod && !onods_told_ && fits_padding(ext, n_ctl, cpb))
         ext[T_ONODS] = Bytes{};  // and OFDM ones: likewise
+    // left out: the peer's (kept); none to a peer that does not keep it yet; shed while it does, unknown
+    int said = reply_same ? (reply ? *reply : REPLY_NONE) : keeping() ? REPLY_UNKNOWN : REPLY_NONE;
+    if (auto e = ext.find(T_REPLY); e != ext.end()) said = e->second.empty() ? REPLY_NONE : e->second[0];
+    // the reply mode the peer holds: shed while both keep it, one of those I said since the last burst it
+    // acted on (none: its own choice, not known here)
+    asked_.clear();
+    if (rec >= 0) asked_.push_back(rec);
+    if (said == REPLY_UNKNOWN) {
+        for (std::int64_t b = confirmed; b < bn; ++b)
+            if (const int s = this->said(b); s >= 0) asked_.push_back(s);
+    } else if (said >= 0) {
+        asked_.push_back(said);
+    }
+    if (peer_said_keep_) keep_seen_.mark(bn);   // it acts on a peer burst that carried T_KEEP
+    if (peer_acked_keep_) keep_sure_.mark(bn);  // ... on one that acted on a T_KEEP of mine
     Control control{core, ext};
     const auto ctl = control.pack(cpb);
     core.n_ctl = control.core.n_ctl;
@@ -481,11 +506,13 @@ TxBurstPtr Station::build(bool fresh, bool nod_ok) {
     std::optional<std::int64_t> new_end;
     for (const auto* c : carried) new_end = std::max(new_end.value_or(c->seq + 1), c->seq + 1);
     // (an OFDM nod stands for its whole control, whatever codewords that takes in its mode)
-    if (nod_ok && fresh && resend.empty() && !new_end && dup == 1 && (ctl.size() == 1 || !onod::band_of(submode).empty()))
-        burst->nod = nod_of(bn, submode, core, ext);
-    if (!burst->nod && ext.count(T_NODS)) nods_in_.insert(bn);
-    if (!burst->nod && ext.count(T_ONODS)) onods_in_.insert(bn);
-    sent_ctl_[bn] = {rx.cum, core.recommend, core.acted_on, new_end, kept(core, ext)};
+    if (nod_ok && fresh && resend.empty() && !new_end && dup == 1 &&
+        (ctl.size() == 1 || !onod::band_of(submode).empty()))
+        burst->nod = nod_of(bn, submode, core, said, ext);
+    if (!burst->nod && ext.count(T_NODS)) nods_told_.mark(bn);
+    if (!burst->nod && ext.count(T_ONODS)) onods_told_.mark(bn);
+    if (!burst->nod && ext.count(T_KEEP)) keep_told_.mark(bn);
+    sent_ctl_[bn] = {rx.cum, core.recommend, core.acted_on, new_end, kept(core, said, ext)};
     record(bn, burst, std::move(conveyed), resend, carried);
     if (burst->nod) {
         stats["tx_nod"] += 1;
@@ -545,15 +572,54 @@ void Station::start_abandon(int reset) {
     abandon_bursts.clear();
 }
 
+int Station::said(std::int64_t bn) const {
+    const auto e = sent_ctl_.find(bn);
+    return e == sent_ctl_.end() ? REPLY_UNKNOWN : std::get<1>(e->second.kept);
+}
+
+bool Station::reply_held(std::int64_t bn, std::optional<int> reply) const {
+    const int want = reply ? *reply : REPLY_NONE;
+    // none needs no handshake: left out, it says none to a peer that does not keep it, and keeps none for one
+    // that does (an empty T_REPLY only when it changes to none)
+    if (reply && !(keeping() && keep_seen_ && keep_sure_)) return false;
+    for (std::int64_t b = confirmed; b < bn; ++b)
+        if (said(b) != want) return false;
+    return true;
+}
+
+bool Station::fits_padding(const Ext& ext, int n_ctl, int cpb) const {
+    return ctl_bytes(ext, 0, false, 0) + 2 <= static_cast<std::int64_t>(n_ctl) * cpb;
+}
+
+bool Station::shed(Ext& ext) const {
+    for (int t : OPTIONAL_TLVS) {
+        const auto e = ext.find(t);
+        if (e == ext.end()) continue;
+        if (t == T_REPLY && !e->second.empty() && keeping())
+            e->second.clear();  // none, said, a byte less, rather than the peer keeping its last
+        else
+            ext.erase(e);
+        return true;
+    }
+    return false;
+}
+
 // The TLVs that do not depend on what data the burst carries.
-Ext Station::control_tlvs(std::int64_t bn, std::optional<int> reply) {
+std::pair<Ext, bool> Station::control_tlvs(std::int64_t bn, std::optional<int> reply) {
     Ext ext;
     if (abandon_tlv) {
         ext[T_ABANDON] = *abandon_tlv;
         abandon_bursts.insert(bn);
         if ((*abandon_tlv)[1] & 1) ext[T_RESYNC] = {};
     }
-    if (reply) ext[T_REPLY] = Bytes{static_cast<std::uint8_t>(*reply)};
+    const bool reply_same = reply_held(bn, reply);
+    if (reply_same) {
+        // the peer keeps it (T_KEEP)
+    } else if (reply) {
+        ext[T_REPLY] = Bytes{static_cast<std::uint8_t>(*reply)};
+    } else if (keeping()) {
+        ext[T_REPLY] = Bytes{};  // none: said, or the peer would keep its last
+    }
     if (chat) ext[T_CHAT] = {};
     if (policy->want_dup()) ext[T_DUPCTL] = {};
     if (chat || peer_chat) {
@@ -563,7 +629,7 @@ Ext Station::control_tlvs(std::int64_t bn, std::optional<int> reply) {
             ext[T_BUFFER] = Bytes{static_cast<std::uint8_t>(q >> 8), static_cast<std::uint8_t>(q)};
         }
     }
-    return ext;
+    return {std::move(ext), reply_same};
 }
 
 // Shrink the burst until control and resends fit: resends first, then
@@ -585,11 +651,10 @@ Station::Fit Station::fit(Ext& ext, int cum, const std::vector<std::int64_t>& mi
         const int n_ctl = ctl_size(e, cpb, k, has_new, zk);
         const int dup = (fresh && peer_wants_dup && (k || has_new)) ? 2 : 1;
         if (n_ctl <= max_ctl && dup * n_ctl + k <= std::max(max_cw, dup * n_ctl)) return {k, has_new, bitmap, n_ctl, dup};
-        const int* opt = std::find_if(std::begin(OPTIONAL_TLVS), std::end(OPTIONAL_TLVS), [&](int t) { return ext.count(t) > 0; });
         if (k) {
             k -= 1;
-        } else if (opt != std::end(OPTIONAL_TLVS)) {
-            ext.erase(*opt);  // hints and requests: a later burst carries them
+        } else if (shed(ext)) {
+            // hints and requests: a later burst carries them
         } else if (!bitmap.empty()) {
             bitmap.clear();  // costs extra resends, never wrong ones
         } else if (has_new) {
@@ -685,20 +750,18 @@ void Station::log_tx(std::int64_t bn, const TxBurst& burst, bool fresh, const Co
 
 // --- nods (docs/arq.md §3b) ---------------------------------------------------------
 
-Station::Kept Station::kept(const Core& core, const Ext& ext) {
-    const auto r = ext.find(T_REPLY);
-    return {core.size_hint, r != ext.end() && !r->second.empty() ? std::optional<int>(r->second[0]) : std::nullopt,
-            ext.count(T_CHAT) > 0};
-}
+// `said`: the reply recommendation the peer holds after this control (T_REPLY's, the value kept, or
+// REPLY_UNKNOWN, which no nod matches).
+Station::Kept Station::kept(const Core& core, int said, const Ext& ext) { return {core.size_hint, said, ext.count(T_CHAT) > 0}; }
 
 // Control-only reply bn as a nod: (meaning, family key), or nullopt when the peer does not hear nods or its
 // content is not in the codebook against anchors the peer holds too (link.Station._nod_of).
 std::optional<std::pair<int, nod::FamilyKey>> Station::nod_of(std::int64_t bn, const std::string& submode,
-                                                              const Core& core, const Ext& ext) const {
+                                                              const Core& core, int said, const Ext& ext) const {
     const Mode* md = arq::mode(submode);
     if (!(nod_default() && nod && md && !core.reply_lost && core.k == 0 && latest >= 0)) return std::nullopt;
     for (const auto& [t, v] : ext)
-        if (t != T_REPLY && t != T_CHAT && t != T_DUPCTL && t != T_NODS && t != T_ONODS) return std::nullopt;
+        if (t != T_REPLY && t != T_CHAT && t != T_DUPCTL && t != T_NODS && t != T_ONODS && t != T_KEEP) return std::nullopt;
     if (md->is_cpm()) {
         if (!nod_peer) return std::nullopt;
     } else {
@@ -708,6 +771,7 @@ std::optional<std::pair<int, nod::FamilyKey>> Station::nod_of(std::int64_t bn, c
         Ext kept = ext;
         kept.erase(T_NODS);
         kept.erase(T_ONODS);
+        kept.erase(T_KEEP);
         Control c{core, kept};
         if (c.pack(policy->ctl_payload_bytes(NOD_MODE)).size() != 1) return std::nullopt;
     }
@@ -721,7 +785,9 @@ std::optional<std::pair<int, nod::FamilyKey>> Station::nod_of(std::int64_t bn, c
         all = false;
     const int step = (core.recommend & 15) - (r.rec & 15);
     const auto idx = nod::index(all.value_or(false), step, ext.count(T_DUPCTL) > 0);
-    if (!all || (core.recommend >> 4) != (r.rec >> 4) || !idx || kept(core, ext) != r.kept) return std::nullopt;
+    if (!all || (core.recommend >> 4) != (r.rec >> 4) || !idx || said == REPLY_UNKNOWN ||
+        std::get<1>(r.kept) == REPLY_UNKNOWN || kept(core, said, ext) != r.kept)
+        return std::nullopt;
     return std::make_pair(*idx, nod::FamilyKey{key, direction, static_cast<int>(pmod(bn, BURST_MOD)), core.acted_on});
 }
 
@@ -797,6 +863,7 @@ bool Station::handle_inner(RxBurst& rxb) {
     const auto& [ctl, dup] = *got;
     const Core& core = ctl.core;
     const Ext& ext = ctl.ext;
+    const auto reply_was = peer_reply_recommend;
     const auto [was, repeat] = note_peer(core, ext);
     const std::int64_t base0 = tx.base, next0 = tx.next, cum0 = rx.cum;
     bool progress = false, abandoned = false;
@@ -805,6 +872,15 @@ bool Station::handle_inner(RxBurst& rxb) {
     try {
         // never guess on a protocol error: a blind resync can corrupt
         std::tie(acted, progress) = take_ack(core, ext);
+        peer_acked_keep_ = keep_told_.acted(acted);
+        keep_seen_.acted(acted);
+        keep_sure_.acted(acted);
+        // without T_REPLY: none (note_peer), or as it was where the peer keeps it (T_KEEP), this burst's
+        // acted-on counted
+        if (!ext.count(T_REPLY) && peer_keeping()) {
+            peer_reply_recommend = reply_was;
+            peer_omits_ = peer_omits_ || reply_was.has_value();  // a mode left out as unchanged: past its handshake
+        }
         abandoned = take_abandon(rxb, ext);
         data = take_data(rxb, core, ext, dup, acted, outcome);
     } catch (const ProtocolError& e) {
@@ -817,9 +893,11 @@ bool Station::handle_inner(RxBurst& rxb) {
     peer_burst = core.burst_seq;
     peer_ctl_core_[core.burst_seq] = {core.cum, core.recommend, acted, rx_new_end_};
     if (ext.count(T_NODS)) nod_peer = true;  // latched for the session
-    if (nods_in_.count(acted)) nods_told_ = true, nods_in_.clear();
+    nods_told_.acted(acted);
+    if (ext.count(T_KEEP)) keep_peer = true;  // latched for the session
+    peer_said_keep_ = ext.count(T_KEEP) > 0;
     if (ext.count(T_ONODS)) onod_peer = true;  // latched for the session
-    if (onods_in_.count(acted)) onods_told_ = true, onods_in_.clear();
+    onods_told_.acted(acted);
     peer_ctl_[!data.slots.empty()] = last_stream_;
     peer_last_ = std::make_pair(last_stream_, std::make_pair(rxb.submode(), rxb.n_cw()));
     answered_ = false;
@@ -955,8 +1033,7 @@ std::vector<std::string> Station::expected_modes() const {
         if (std::find(out.begin(), out.end(), m) == out.end()) out.push_back(std::move(m));
     };
     if (last_sent) add(last_sent->submode);
-    for (const auto& r : {asked_.first, asked_.second})
-        if (r) add(policy->mode_name(*r));
+    for (const int r : asked_) add(policy->mode_name(r));
     return out;
 }
 
@@ -986,8 +1063,10 @@ std::vector<Station::Hypothesis> Station::expect(const RxBurst& rxb) const {
     }
     for (const auto& [data, pair] : kinds) {
         std::vector<Way> ways = variants(data, n_cw, ctl_slots, pair);
-        // then the same with T_DUPCTL the other way, and with T_REPLY's recommendation unknown
+        // then the same with T_DUPCTL the other way, with T_REPLY's recommendation unknown, and T_REPLY the
+        // other ways a peer that keeps it sends it
         const Tlv dupctl{T_DUPCTL, {}, {}};
+        const std::vector<Way> base = ways;
         const std::size_t n0 = ways.size();
         for (std::size_t j = 0; j < n0; ++j) {
             Way w = ways[j];
@@ -1001,12 +1080,13 @@ std::vector<Station::Hypothesis> Station::expect(const RxBurst& rxb) const {
             Way w = ways[j];
             bool has = false;
             for (auto& t : w.ext)
-                if (t.type == T_REPLY) {
+                if (t.type == T_REPLY && !t.value.empty()) {
                     t.mask = Bytes{0xC0};
                     has = true;
                 }
             if (has) ways.push_back(std::move(w));
         }
+        for (auto& w : reply_changes(base)) ways.push_back(std::move(w));
         for (const auto& w : ways) {
             // an OFDM control-only burst is its control: n_cw codewords, the last ones maybe all padding
             auto h = pack_hypothesis(w, cpb, max_ctl, pair, (ctl_slots || data) ? 0 : n_cw);
@@ -1020,6 +1100,27 @@ std::vector<Station::Hypothesis> Station::expect(const RxBurst& rxb) const {
         out.insert(out.begin() + static_cast<std::ptrdiff_t>(std::min<std::size_t>(1, out.size())), *repeat);
     const int tries = std::max(0, prime_tries());
     if (static_cast<int>(out.size()) > tries) out.resize(static_cast<std::size_t>(tries));
+    return out;
+}
+
+// From a peer that keeps T_REPLY (T_KEEP): each way with T_REPLY the other ways it can be, as the peer's last
+// control: left out, said (its value unknown), or none (empty) (link.Station._reply_changes).
+std::vector<Station::Way> Station::reply_changes(const std::vector<Way>& ways) const {
+    std::vector<Way> out;
+    if (!(keep_default() && keep && keep_peer)) return out;
+    for (const auto& w : ways) {
+        int have = 0;  // 0: left out, 1: said, 2: none
+        for (const auto& t : w.ext)
+            if (t.type == T_REPLY) have = t.value.empty() ? 2 : 1;
+        for (int f = 0; f < 3; ++f) {
+            if (f == have) continue;  // the way itself (a said value: its unknown-value way)
+            Way v = w;
+            std::erase_if(v.ext, [](const Tlv& t) { return t.type == T_REPLY; });
+            if (f == 1) v.ext.push_back({T_REPLY, Bytes{0}, Bytes{0xC0}});
+            if (f == 2) v.ext.push_back({T_REPLY, {}, {}});
+            out.push_back(std::move(v));
+        }
+    }
     return out;
 }
 
@@ -1050,11 +1151,15 @@ std::vector<Station::Way> Station::variants(bool data, int n_cw, int ctl_slots, 
     c[F_REC] = {0, 0};  // the peer's recommendation moves with every measurement: unknown
     c[F_HINT] = {peer_size_hint, base ? 3 : 0};
     std::vector<Tlv> common;
-    // (T_NODS: sent until I acted on it, so mostly as last time)
-    for (int t : {T_CHAT, T_DUPCTL, T_NODS, T_ONODS})
-        if (auto e = pe.find(t); e != pe.end()) common.push_back({t, e->second, Bytes(e->second.size(), 0xFF)});
-    // T_REPLY, a recommendation: as last time
-    if (auto e = pe.find(T_REPLY); e != pe.end() && e->second.size() == 1) common.push_back({T_REPLY, e->second, Bytes{0xFF}});
+    // (T_NODS, T_KEEP: sent until I acted on it, so mostly as last time. T_KEEP no more once the peer has
+    // acted on that, keep_seen_: its last control of this kind may be older)
+    for (int t : {T_CHAT, T_DUPCTL, T_NODS, T_ONODS, T_KEEP})
+        if (auto e = pe.find(t); e != pe.end() && !(t == T_KEEP && keep_seen_))
+            common.push_back({t, e->second, Bytes(e->second.size(), 0xFF)});
+    // T_REPLY, a recommendation: as last time. A peer that keeps it (T_KEEP) says it until its handshake
+    // ends, then mostly leaves it out (unchanged); the other ways come last (reply_changes)
+    if (auto e = pe.find(T_REPLY); e != pe.end() && !peer_omits_)
+        common.push_back({T_REPLY, e->second, Bytes(e->second.size(), 0xFF)});
     if (auto e = pe.find(T_BUFFER); e != pe.end()) common.push_back({T_BUFFER, e->second, Bytes(e->second.size(), 0)});
     if (!base) common = {{T_REPLY, Bytes{0}, Bytes{0xC0}}, {T_DUPCTL, {}, {}}};  // its first ARQ burst: the shifter's
     std::vector<Way> ways;

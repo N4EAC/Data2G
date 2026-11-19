@@ -88,7 +88,12 @@ class ContinuousChannel:
         specs = interference or (INTF.Spec(), INTF.Spec())
         # each timeline from -PRE_S: the stations listened before the session
         self.intf = [INTF.Interference(sp, seed * 2 + i, PRE_S + horizon + 60) for i, sp in enumerate(specs)]
-        dop, dly = (doppler, delay_ms) if doppler is not None else L.PRESETS[chan]
+        if doppler is not None:
+            dop, dly = doppler, delay_ms
+        elif chan in hfchannel.ITU_PRESETS:
+            dop, dly = hfchannel.ITU_PRESETS[chan].doppler_hz, hfchannel.ITU_PRESETS[chan].delay_ms
+        else:
+            dop, dly = L.PRESETS[chan]
         self.doppler, self.delay = dop, int(round(dly * 1e-3 * FS))
         if dop:
             self.rate = max(64 * dop, 8.0)

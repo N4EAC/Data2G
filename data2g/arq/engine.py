@@ -201,6 +201,7 @@ class Engine:
         self._extra: list = []  # bursts outside any session (CQ frames), sent when the channel is free
         self._events: list[str] = []  # host notifications from outside the session (CQFRAME)
         self.kiss = kiss
+        self.receiver.sense = True  # data2g_on_air: BUSY (channel_busy) and the KISS hold (_kiss_burst)
         self.stats_interval_s = stats_interval_s
         self.kiss_rx: list[tuple[int, bytes]] = []  # (port, frame) heard for KISS clients
         self._tx_kiss = False  # the burst on air is a KISS one
@@ -252,8 +253,9 @@ class Engine:
 
     @property
     def channel_busy(self) -> bool:
-        """The host's BUSY ON/OFF (receiver.Receiver.channel_busy, or a CW ID heard)."""
-        return self.receiver.channel_busy or self._cw_heard
+        """The host's BUSY ON/OFF (receiver.Receiver.channel_busy, or a CW ID
+        heard). Not the receiver's while we transmit: it hears nothing then."""
+        return (self.tx is None and self.receiver.channel_busy) or self._cw_heard
 
     @property
     def tx_submode(self) -> str | None:
@@ -662,6 +664,10 @@ class Engine:
             hand_free = t >= self._hand_hold and self._hand_tx is None
             free = t >= self._hold and t >= self._cw_until and hand_free
             busy = self.receiver.busy or cw
+            if busy and self._id_pending is not None:
+                # the peer's trailing ID runs past ID_GUARD_S: its CW after its ID frame
+                # (cw_id "add"), which CwSense needs ~1 s to hear, so a gap opened there
+                self._id_pending[1] = max(self._id_pending[1], t + ID_GUARD_S)
             if not busy and not held:  # a burst still arriving holds any reply (half duplex)
                 self._carrier_hold(t)
                 burst = self.session.poll(t)
@@ -676,9 +682,9 @@ class Engine:
                     bursts = self._cw_ahead([main], t)
             if (bursts is None and self.kiss is not None and free
                     and (self.session.state in (S.IDLE, S.LISTEN, S.CLOSED) or self.session.idle())):
-                burst = self._kiss_burst(k, busy)  # KISS between ARQ sessions, or while one is idle
-                bursts, main = (self._cw_ahead([burst], t), burst) if burst is not None else (None, None)
-                self._tx_kiss = burst is not None
+                kb = self._kiss_burst(k, busy)  # KISS between ARQ sessions, or while one is idle
+                bursts, main = (self._cw_ahead(kb, t), kb[-1]) if kb else (None, None)
+                self._tx_kiss = bool(kb)
             else:
                 self._kiss_busy = 0
             if bursts is None and self._cw_due(t, free and not busy and not held):
@@ -966,19 +972,24 @@ class Engine:
         start = self._tx_end + EXPECT_REPLY_S
         self._energy(start, start + exp[1], exp[0], self.now, MISSED_MIN_DB)
 
-    def _kiss_burst(self, k: int, busy: bool):
-        """The next KISS burst if it may go now. A burst that waited on BUSY
+    def _kiss_burst(self, k: int, busy: bool) -> list | None:
+        """The queued KISS bursts if they may go now, back to back on one PTT
+        (nothing is heard between them); just the next while a HAND LISTEN
+        waits for its frame's burst to end (its window opens there). A burst that waited on BUSY
         is p-persistent after it: each slot (SLOTTIME) is taken with
         probability (P + 1) / 256, so stations that queued under the same
         burst don't all key up as it ends. One queued on a free channel (a
         reply) goes at once. BUSY (`busy`: a burst arriving or a CW ID) holds
-        a burst, but not past busy_limit_s of it unbroken (a stuck BUSY).
-        `k`: this block's samples."""
+        a burst, and so does a Data2G burst we hold no lock on
+        (Receiver.data2g_on_air: one that began while we transmitted, or
+        under another; holding only on a lock, two stations that each missed
+        the other's start talked over each other), but not past busy_limit_s
+        of it unbroken (a stuck BUSY). `k`: this block's samples."""
         link = self.kiss
         if not link.queue:
             self._kiss_busy, self._kiss_deferred = 0, False
             return None
-        if busy:
+        if busy or self.receiver.data2g_on_air:
             self._kiss_busy += k
             self._kiss_deferred = True
             if self._kiss_busy < link.busy_limit_s * FS:
@@ -993,7 +1004,11 @@ class Engine:
                     self._kiss_slot = self.n + int(link.slot_s * FS)
                     return None
         self._kiss_busy, self._kiss_deferred = 0, False
-        return link.next_burst()
+        hl = self._hand_listen
+        if hl is not None and not hl["open"]:
+            b = link.next_burst()
+            return [b] if b is not None else None
+        return link.next_bursts()
 
     def _cq(self, rx) -> bool:
         """A CQ frame (notified: CQFRAME call cap) or an ID frame (ID call key)?

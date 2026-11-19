@@ -5,7 +5,8 @@ from data2g import bulk, codes, hfchannel, modem
 from data2g.arq import phy as PHY
 from data2g.config import FS
 
-TEXT = open(__file__.replace("tests/test_bulk.py", "docs/arq.md"), "rb").read()[:3000]
+# a file that rarely changes: the scenarios below depend on how the text packs (docs/arq.md moved them)
+TEXT = open(__file__.replace("tests/test_bulk.py", "LICENSE"), "rb").read()[:3000]
 
 
 def test_blocks_stand_alone():

@@ -145,6 +145,9 @@ public:
     // The first queued frame's port and mode, with every queued frame of that
     // port that goes in it, as many as fit. nullptr: nothing queued.
     arq::TxBurstPtr next_burst();
+    // Every queued frame, in bursts to go back to back on one PTT (no listening
+    // between them); their acks are due when the last has gone.
+    std::vector<arq::TxBurstPtr> next_bursts();
     // A received burst -> (port, frame)s for the open ports it belongs to
     // (empty for another group's), nullopt if it isn't a broadcast burst.
     // rx: the burst's decoder, shared with the engine's other checks.

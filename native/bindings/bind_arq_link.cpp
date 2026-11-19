@@ -242,15 +242,29 @@ public:
         if (bursts.size() > 8) bursts.erase(bursts.begin());  // repeats are of the latest few
         return o;
     }
+    // The C++ burst behind a Python one it handed out, so on_tx_end's
+    // identity check (nak) holds; a burst made in Python is converted.
+    TxBurstPtr burst_ptr(const py::object& o) {
+        for (const auto& [p, c] : bursts)
+            if (c.is(o)) return p;
+        return burst_cpp(o);
+    }
     std::vector<std::pair<TxBurstPtr, py::object>> bursts;
 
 protected:
     std::shared_ptr<Station> make_station(int direction, bool master_, int key) override {
         auto st = std::make_shared<PyStation>(direction, policy, master_, key, std::nullopt, cap, chat);
         st->nod = true;  // as Session::make_station
+        st->keep = true;
         return st;
     }
 };
+
+// One Python object per C++ burst (PySession::burst_obj), so `is` holds across poll and _out.
+static py::object burst_of(Session& s, const TxBurstPtr& b) {
+    auto* p = dynamic_cast<PySession*>(&s);
+    return p ? p->burst_obj(b) : burst_py(b);
+}
 
 template <typename K, typename V, typename F>
 py::dict dict_of(const std::map<K, V>& m, F f) {
@@ -514,18 +528,29 @@ void bind_arq_link(py::module_& m) {
 
     py::class_<Station, std::shared_ptr<Station>>(a, "Station", py::dynamic_attr())
         .def(py::init([](int direction, py::object policy, bool master, int key, std::optional<int> max_misses, int cap, bool chat,
-                         bool nod) {
+                         bool nod, bool keep) {
                  auto s = std::make_shared<PyStation>(direction, policy_of(std::move(policy)), master, key, max_misses, cap, chat);
                  s->nod = nod;
+                 s->keep = keep;
                  return std::shared_ptr<Station>(s);
              }),
              py::arg("direction"), py::arg("policy"), py::arg("master") = false, py::arg("key") = 0,
-             py::arg("max_misses") = LINK_LOST_MISSES, py::arg("cap") = 2, py::arg("chat") = false, py::arg("nod") = false)
+             py::arg("max_misses") = LINK_LOST_MISSES, py::arg("cap") = 2, py::arg("chat") = false, py::arg("nod") = false,
+             py::arg("keep") = false)
         .def_readwrite("nod", &Station::nod)
+        .def_readwrite("keep", &Station::keep)
+        .def_readwrite("keep_peer", &Station::keep_peer)
+        .def_property_readonly("_keep_told", [](const Station& s) { return s.keep_told_.done; })
+        .def_property_readonly("_keeping", &Station::keeping)
+        .def_readonly("_peer_omits", &Station::peer_omits_)
+        .def("_said", [](const Station& s, std::int64_t bn) -> py::object {
+            const int v = s.said(bn);
+            return v == REPLY_NONE ? py::object(py::none()) : py::object(py::int_(v));
+        })
         .def_readwrite("nod_peer", &Station::nod_peer)
-        .def_readonly("_nods_told", &Station::nods_told_)
+        .def_property_readonly("_nods_told", [](const Station& s) { return s.nods_told_.done; })
         .def_readwrite("onod_peer", &Station::onod_peer)
-        .def_readonly("_onods_told", &Station::onods_told_)
+        .def_property_readonly("_onods_told", [](const Station& s) { return s.onods_told_.done; })
         .def("nod_family", [](const Station& s) -> py::object {
             const auto k = s.nod_family();
             if (!k) return py::none();
@@ -667,7 +692,7 @@ void bind_arq_link(py::module_& m) {
         .def_property_readonly("aliases", [](const Session& s) { return py::tuple(py::cast(s.aliases)); })
         .def_readwrite("stats_interval_s", &Session::stats_interval_s)
         .def_readwrite("accept_connect", &Session::accept_connect)
-        .def_property_readonly("_out", [](const Session& s) { return burst_py(s.out); })
+        .def_property_readonly("_out", [](Session& s) { return burst_of(s, s.out); })
         .def_readonly("_due", &Session::due)
         .def_readonly("_deadline", &Session::deadline)
         .def_readonly("_build_at", &Session::build_at)
@@ -690,10 +715,7 @@ void bind_arq_link(py::module_& m) {
             const auto [unsent, unacked] = s.queued_bytes(vara);
             return py::make_tuple(unsent, unacked);
         }, py::arg("vara") = false)
-        .def("poll", [](Session& s, double now) {
-            auto* p = dynamic_cast<PySession*>(&s);
-            return p ? p->burst_obj(s.poll(now)) : burst_py(s.poll(now));
-        })
+        .def("poll", [](Session& s, double now) { return burst_of(s, s.poll(now)); })
         .def("next_event", &Session::next_event)
         .def("claims", [](const Session& s, py::object rx) {
             PyRx r(std::move(rx));
@@ -703,7 +725,10 @@ void bind_arq_link(py::module_& m) {
             PyRx r(std::move(rx));
             return s.foreign(r);
         })
-        .def("on_tx_end", [](Session& s, const py::object& burst, double now) { s.on_tx_end(burst_cpp(burst), now); })
+        .def("on_tx_end", [](Session& s, const py::object& burst, double now) {
+            auto* p = dynamic_cast<PySession*>(&s);
+            s.on_tx_end(p ? p->burst_ptr(burst) : burst_cpp(burst), now);
+        })
         .def("on_header", &Session::on_header)
         .def("on_cw", &Session::on_cw)
         .def("on_rx", [](Session& s, py::object rx, double now) {

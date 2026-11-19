@@ -44,8 +44,12 @@ inline constexpr int T_PAD = 0, T_NEW = 1, T_ABANDON = 2, T_RV = 3, T_BITMAP = 4
                      // empty: the sender hears nods (docs/arq.md §3b), in control padding until the peer
                      // acted on it; nods go only to a peer that sent it. Dropped at the next version bump.
                      T_NODS = 19,
+                     // empty: the sender keeps T_REPLY (docs/arq.md §8a), in control padding or in T_REPLY's
+                     // place until the peer acted on it. Both having said it is not enough to leave T_REPLY
+                     // out as unchanged, or to read a control without it so: §8a's three steps say when a
+                     // station may do either. Dropped at the next version bump.
+                     T_KEEP = 20,
                      // empty: the sender hears OFDM nods (docs/arq.md §3c), as T_NODS for the CPM ones
-                     // (20 is left to T_KEEP, proposed apart)
                      T_ONODS = 21;
 // An extension type's short name ("ext N" for one not listed): monitor/'s
 // dumps. A new T_* gets its name here too. (Native only.)
