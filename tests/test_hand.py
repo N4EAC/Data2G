@@ -18,6 +18,7 @@ from data2g.arq.engine import Engine
 from data2g.config import FS, SNR_REF_BW_HZ
 from data2g.host import Host
 from data2g.kisslink import KissLink
+from data2g.receiver import Receiver
 
 BLOCK = FS // 10
 ACK = 0x1234  # the KISS ACKMODE tag of the frame that anchors a window (HAND LISTEN's ack)
@@ -790,10 +791,11 @@ def test_hand_overhear_yields_and_refuses():
         assert h.out_cmd.pop() == want, line
 
 
-def test_lost_burst_is_a_ref():
-    """A burst whose header was heard but whose receive failed (behind BUSY and
-    BCAST * MISSED) is a Hand reference too, marked LOST: the case where a
-    bystander can't copy net control's call (issue #210)."""
+def test_lost_burst_is_a_ref(monkeypatch):
+    """A burst whose header was heard but whose data failed is a Hand
+    reference too: the case where a bystander can't copy net control's call
+    (issue #210). One whose receive failed outright is marked LOST
+    (test_released_lock_is_not_reported)."""
     b = Engine("K2XYZ", seed=2, kiss=KissLink())
     b.kiss.enqueue(b"x" * 400)
     out = []
@@ -806,10 +808,33 @@ def test_lost_burst_is_a_ref():
     y = np.concatenate([np.zeros(FS), x, np.zeros(2 * FS)])
     y[FS + int(0.3 * FS):FS + len(x)] = 0.0  # gone after its header
     y += rng.normal(0, 0.05, len(y))
+    # held to its end, not let go when its pilots stop (test_released_lock_is_not_reported)
+    monkeypatch.setattr(Receiver, "RELEASE_S", 0.0)
     a = Engine("W1AW", seed=1, kiss=KissLink())
     lines = []
     for i in range(0, len(y) - BLOCK, BLOCK):
         a.step(y[i:i + BLOCK])
         lines += a.take_hand_events()
-    assert len(lines) == 1 and lines[0].startswith("REF 1 ") and lines[0].endswith(" LOST"), lines
+    assert len(lines) == 1 and lines[0].startswith("REF 1 "), lines  # held: received, its codewords failed
     assert 1 in a.hand_refs
+
+
+@pytest.mark.parametrize("released", [False, True])
+def test_released_lock_is_not_reported(released):
+    """A lock the receiver let go (Receiver._release: a suspect header's pilots
+    absent; _unconfirmed: a CPM lock's mid block absent) was nothing on air
+    (KG9NI, K7EK: 90% of lost bursts): no Hand REF and no BCAST * MISSED.
+    A burst received and lost still is both."""
+    from data2g.arq.modes import MODES
+
+    h = dict(spec=MODES["qpsk-r1/5"], n_cw=3, score=0.30, cfo=0.0)
+
+    class _Lost:
+        def feed(self, x):
+            return [("burst", dict(rx=None, header=h, audio=x, **({"released": True} if released else {})))]
+
+    a = Engine("W1AW", seed=1, kiss=KissLink())
+    a.receiver = _Lost()
+    a._hear(np.zeros(BLOCK), 1.0)
+    assert bool(a.take_hand_events()) == (not released)
+    assert any("MISSED" in e for e in a.kiss.take_events()) == (not released)

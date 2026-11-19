@@ -964,7 +964,8 @@ off (Python and native) for A/B runs.
       One whose header was heard but whose receive failed (the bursts behind
       BUSY and `BCAST * MISSED`) is `REF id end offset snr LOST`: end as its
       header claims, offset the header's cfo, snr from power alone (`nan`
-      before the noise floor has history). A false lock makes one too. The command port is a separate socket, so a client can't
+      before the noise floor has history). A lock the receiver let go (a suspect header whose
+      pilots stayed absent, a CPM lock its mid block didn't confirm) makes none. The command port is a separate socket, so a client can't
       tell which KISS frames a REF line belongs to. A KISS client that needs
       the pairing asks for the same line on the KISS port instead
       (SETHARDWARE `REFS ON`, docs/broadcast.md §5): it arrives there as a

@@ -804,6 +804,13 @@ class Engine:
             span, self._span = self._span, None
             r, h = ev["rx"], ev["header"]
             meas = PHY.measure(r) if r is not None else None
+            if ev.get("released"):
+                # let go (Receiver._release, _unconfirmed): nothing was there. On air
+                # (KG9NI, K7EK, 2026-11) 90% of lost bursts, 7-11 an hour: recorded,
+                # but no Hand REF, energy reading or BCAST * MISSED
+                if self.rec:
+                    self.rec.rx(t, ev["audio"], h, r, meas, self.noise.snapshot())
+                continue
             # every burst heard is a Hand reference (docs/arq.md §9); one whose header was heard but
             # not its data (the bursts behind BUSY and BCAST * MISSED) is LOST, its snr from power alone
             self._hand_ref_n += 1

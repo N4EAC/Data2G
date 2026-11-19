@@ -622,7 +622,8 @@ class Receiver:
             return False
         log.info("%s header (score %.2f): no pilots in %.1f s, let go", p["spec"].name, p["score"],
                  self._dark * self.HOP / FS)
-        out.append(("burst", {"header": p, "rx": None, "audio": self.buf[max(0, p["start"] - self.off):]}))
+        out.append(("burst", {"header": p, "rx": None, "released": True,
+                             "audio": self.buf[max(0, p["start"] - self.off):]}))
         self.drop()
         # as a suspect burst's end: keep the last search window (a real
         # preamble inside the false one's span) and every CPM front waiting
@@ -651,7 +652,8 @@ class Receiver:
         if c >= cpm.CONFIRM_LLR:
             return False
         log.info("%s lock: its mid block and second header copy read %.1f, let go", p["spec"].name, c)
-        out.append(("burst", {"header": p, "rx": None, "audio": self.buf[max(0, p["start"] - self.off):]}))
+        out.append(("burst", {"header": p, "rx": None, "released": True,
+                             "audio": self.buf[max(0, p["start"] - self.off):]}))
         self.drop()
         self._trim(max([self.keep] + [len(self.buf) - (w["first"] - self.off) for w in self.cpm_wait]))
         return True
