@@ -117,15 +117,25 @@ steady floor and no passband. `interference.DRAWS["onair"]`:
   without a limiter). The estimator finds about a quarter of 14 dB impulses,
   so the drawn rate is above the detected 3-9/min.
 - QRM, 0-5 sources: FSK-like hoppers 55% (50-450 Hz log-uniform, INR 3-18 dB,
-  on_s 0.3-2 s, duty 0.05-0.5), noise 37% (300-2400 Hz, INR 3-16 dB, on_s
-  2-15 s, duty 0.1-0.9), carriers 8% (INR 6-20 dB, on_s 0.5-3 s, duty
-  0.05-0.5). The hopper INR reaches 18 dB because the estimator reads hoppers
-  about 3 dB under the drawn level at the top.
+  on_s 0.3-2 s, duty 0.05-0.5), noise 37% (INR 3-16 dB, on_s 2-15 s, duty
+  0.1-0.9), carriers 8% (INR 6-20 dB, on_s 0.5-3 s, duty 0.05-0.5). The
+  hopper INR reaches 18 dB because the estimator reads hoppers about 3 dB
+  under the drawn level at the top.
+- Noise sources: 70% swept (`Qrm.span_hz`, `sweep_s`): 150-1200 Hz wide at
+  any instant (log-uniform), the centre a sine over a 300-2400 Hz span (at
+  least 1.5x the width), period 4-30 s. On air the wide components are ~370 Hz
+  wide at any instant and cover 1300-1500 Hz as they move; that may be one
+  particular source, so the width range is broad. The other 30% stay flat
+  over 300-2400 Hz.
 - Floor wander 1 dB (the set's `wander_db`).
-- Receive passband per station (`interference.PASSBANDS`, `passband()`):
-  wide (-4.7 dB at 300 Hz, -3 at 2400, -8 at 2700, -15 at 2800) 60%, narrow
-  (-15 at 2400) 30%, flat 10%. phy_session applies it to everything the
-  station hears, signal included, so in-band SNR does not change.
+
+The receive passband (`interference.PASSBANDS`, `passband()`) is separate
+from the draw sets: every training session and offline sample draws one per
+station (`PASSBAND_SHARES`: wide 60%, narrow 30%, flat 10%; wide -4.7 dB at
+300 Hz, -3 at 2400, -8 at 2700, -15 at 2800; narrow -15 at 2400). phy_session
+applies it to everything the station hears, signal included, so in-band SNR
+does not change. A radio's IF filter precedes its AGC, so it goes before a
+simulated AGC. `loss_study.py` applies it only with `--passband`.
 
 Like for like (p50 unless noted; on air: the two nodes):
 
@@ -134,21 +144,26 @@ Like for like (p50 unless noted; on air: the two nodes):
 | impulse peak over floor RMS | 12.8-14.5 (p90 14.5-16) | 21.7 (p90 29.7) | 15.7 (p90 24, the loud 2%) |
 | impulses alone in their train | 87-89% | 55% | 92% |
 | detected trains/min | 3.1-9.3 | 5.3 | 1.8 |
-| carriers >= 6 dB per hour; duration; INR | 13-27; 0.8-0.9 s; 9-9.5 dB | 61; 2.6 s; 16 dB | 29; 1.3 s; 12 dB |
-| FSK-like per hour; bw; duration; INR | 630-740; 170 Hz; 0.7 s; 9.2 dB | 185; 300; 1.6; 13 | 378; 170; 1.0; 9.7 |
-| wide per hour; inst. bw; INR | 54-96; 370-380 Hz; 9-10 dB | 65; 730; 15.6 | 25; 1040; 8.3 |
-| time with a component in w48 | 30-41% | 30% | 28% |
+| carriers >= 6 dB per hour | 13-27 | 61 | 38 |
+| FSK-like per hour; bw; duration; INR | 630-740; 170 Hz; 0.7 s; 9.2 dB | 185; 300; 1.6; 13.2 | 381; 180; 1.0; 9.6 |
+| wide per hour; inst. bw; span; duration; INR | 54-96; 370-380; 1270-1500 Hz; 4.0-4.9 s; 9.3-10 dB | 65; 730; 950; 2.1; 15.6 | 37; 620; 1220; 4.0; 7.8 |
+| time with a component in w48 (wide only) | 30-41% (8-17%) | 30% (7%) | 29% (10%) |
 | level std within 5 s | 0.68-1.23 dB | 0.43 | 0.57 |
 | floor at 2400 / 2800 Hz | -3/-15 and -6/-31 | 0/0 | -3.5/-19 (p10 -17/-50) |
 
-Paired loss study (`DATA2G_PEP_REF_DB=5`, 12 seeds, 300 s, the same seeds
-in every arm; each arm's loss is the clean SNR that delivers the same, minus
-the cell's): v1 costs 3.0-4.0 dB, onair 3.8-5.0 dB on AWGN, MPG and MPP at
--4..+8 dB. The passband and wander alone cost 0.2-1.5 dB; onair with noise
-sources capped at 1000 Hz costs 3.1-4.1 dB, about v1.
+Paired loss study (`DATA2G_PEP_REF_DB=5`, 12 seeds, 300 s, the same seeds in
+every arm, AWGN -4..+4, MPG and MPP 0..+8; each arm's loss is the clean SNR
+that delivers the same, minus the cell's):
 
-Open: on air the wide components are narrow at any instant (370 Hz) and
-move across 1300-1500 Hz; the sim's noise sources are flat over their whole
-bandwidth (1040 Hz), which makes them harsher than the air. The NoiseProfile
-impulse count on air (1.2-1.7/min outside mutes) comes from spikes the energy
-detector doesn't flag; the sim's 14 dB impulses don't reach its 20 dB rule.
+| | v1 | onair |
+|---|---|---|
+| no passband | 3.0-4.0 dB | 2.2-4.0 dB (MPG/MPP 2.2-2.7, AWGN 2.8-4.0) |
+| `--passband` (against clean with passbands) | 3.4-4.0 dB | 2.1-3.5 dB |
+
+The passband alone costs 0.3-0.8 dB of throughput at the top cells (clean
+AWGN +4, MPG +8), less lower down. With flat 300-2400 Hz noise sources (the
+first onair draft) onair cost 3.8-5.0 dB.
+
+Open: the NoiseProfile impulse count on air (1.2-1.7/min outside mutes)
+comes from spikes the energy detector doesn't flag; the sim's 14 dB impulses
+don't reach its 20 dB rule.

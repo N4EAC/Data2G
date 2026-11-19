@@ -99,6 +99,7 @@ def ctl_decoded(r, slots) -> bool:
     return True
 
 
+PASSBAND = False  # --passband: each seed's stations' receive passbands drawn, as session_data does
 REC_NOISE = None  # recorded noise for 'rec' cells (main loads it before the pool forks)
 WANDER_DB = 1.0  # 'wander' cells: a clean channel whose floor wanders (phy_session.ContinuousChannel)
 # 'slow' cells: the SNR itself wanders, both ways at once, as slow propagation
@@ -115,10 +116,11 @@ def one(args):
     wander = dict(wander_db=WANDER_DB) if intf == "wander" else {}
     if intf == "slow":
         wander = dict(wander_db=SLOW_DB, wander_tau=SLOW_TAU_S, wander_shared=True)
-    specs, pbs = (spec, spec), (None, None)
+    specs = (spec, spec)
     if intf in INTF.DRAWS:  # each seed's stations drawn as session_data --interference draws them
-        specs, pbs = INTF.draw_session(seed, intf)
+        specs = INTF.draw_session(seed, intf)
         wander = dict(wander_db=INTF.DRAWS[intf].wander_db)
+    pbs = INTF.session_passbands(seed) if PASSBAND else (None, None)
     ch = G.ContinuousChannel(chan, snr, seed, horizon, interference=specs, recorded=rec, passband=pbs, **wander)
     # an interfered cell is its own 'channel' (paired_loss groups by channel and SNR)
     tag = dict(channel=chan if intf in (None, "clean") else f"{chan}/{intf}", snr=snr, seed=seed)
@@ -175,12 +177,17 @@ def main():
     ap.add_argument("--policy", default="shift", help='linksim.make_policy spec ("shift+cpm": CPM modes too)')
     ap.add_argument("--cells", default=None,
                     help="channel:snr[:interference],... (default CELLS); interference: an interference.PRESETS "
-                         "name, an interference.DRAWS name (each seed's stations drawn, with the set's passbands "
-                         "and wander), or rec (noise recorded on air: --recordings)")
+                         "name, an interference.DRAWS name (each seed's stations drawn, with the set's wander), "
+                         "or rec (noise recorded on air: --recordings)")
+    ap.add_argument("--passband", action="store_true",
+                    help="each seed's stations' receive passbands drawn as session_data draws them "
+                         "(default none: earlier studies compare)")
     ap.add_argument("--recordings", default=None, help="recordings directory, for 'rec' cells")
     ap.add_argument("--average-snr", action="store_true",
                     help="allow SNR against each burst's average power (without DATA2G_PEP_REF_DB)")
     a = ap.parse_args()
+    global PASSBAND
+    PASSBAND = a.passband  # set before the pool forks
     if G.PEP_REF_DB is None and not a.average_snr:
         ap.error("DATA2G_PEP_REF_DB is unset: set it (5: noise against each burst's peak, as data2g-host "
                  "transmits) or pass --average-snr")
