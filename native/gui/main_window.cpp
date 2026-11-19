@@ -266,6 +266,16 @@ MainWindow::MainWindow(app::Args args, QSettings& store, QWidget* parent) : QMai
     status_->setObjectName(QStringLiteral("station_state"));
     statusBar()->addWidget(status_, 1);
     resize(720, 560);
+    restoreGeometry(store_.value(QStringLiteral("gui/geometry")).toByteArray());
+    // Saved soon after each move or resize, not at close: the client that
+    // started the modem may end it without closing the window.
+    geometry_changed_ = new QTimer(this);
+    geometry_changed_->setSingleShot(true);
+    geometry_changed_->setInterval(500);
+    connect(geometry_changed_, &QTimer::timeout, this, [this] {
+        store_.setValue(QStringLiteral("gui/geometry"), saveGeometry());
+        store_.sync();
+    });
 
     auto* timer = new QTimer(this);
     connect(timer, &QTimer::timeout, this, &MainWindow::poll);
@@ -274,6 +284,16 @@ MainWindow::MainWindow(app::Args args, QSettings& store, QWidget* parent) : QMai
 }
 
 MainWindow::~MainWindow() = default;
+
+void MainWindow::moveEvent(QMoveEvent* e) {
+    QMainWindow::moveEvent(e);
+    if (geometry_changed_ && isVisible()) geometry_changed_->start();
+}
+
+void MainWindow::resizeEvent(QResizeEvent* e) {
+    QMainWindow::resizeEvent(e);
+    if (geometry_changed_ && isVisible()) geometry_changed_->start();
+}
 
 void MainWindow::build_menu() {
     // NoRole on all three is load-bearing on macOS (as in SSTVAE): Qt's Cocoa
