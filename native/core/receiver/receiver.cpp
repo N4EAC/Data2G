@@ -484,7 +484,7 @@ bool Receiver::release(std::vector<Item>& out) {
         static_cast<double>(dark_) * HOP < release_s * config::FS)
         return false;
     const auto a = static_cast<std::size_t>(std::clamp<int64_t>(p.start() - off_, 0, len()));
-    out.push_back(BurstEvent{p, std::nullopt, std::vector<double>(buf_.begin() + a, buf_.end())});
+    out.push_back(BurstEvent{p, std::nullopt, std::vector<double>(buf_.begin() + a, buf_.end()), 0, true});
     drop();
     // as a suspect burst's end: keep the last search window and every CPM front waiting
     int64_t keep = keep_;
@@ -511,7 +511,7 @@ bool Receiver::unconfirmed(std::vector<Item>& out) {
     here.start -= off_;
     if (cpm::confirm(g, buf_, here) >= cpm::CONFIRM_LLR) return false;
     const auto a = static_cast<std::size_t>(std::clamp<int64_t>(p.start() - off_, 0, len()));
-    out.push_back(BurstEvent{p, std::nullopt, std::vector<double>(buf_.begin() + a, buf_.end())});
+    out.push_back(BurstEvent{p, std::nullopt, std::vector<double>(buf_.begin() + a, buf_.end()), 0, true});
     drop();
     int64_t keep = keep_;
     for (const auto& w : cpm_wait_) keep = std::max(keep, len() - (w.first - off_));

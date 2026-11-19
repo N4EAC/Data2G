@@ -1290,6 +1290,10 @@ void Engine::hear_burst(receiver::BurstEvent& ev, double t) {
     }
     const std::optional<Span> span = std::move(heard_span_);
     heard_span_.reset();
+    if (ev.released) {  // let go, nothing there (engine.py): recorded, but no Hand REF, energy or BCAST * MISSED
+        if (rec_) rec_->rx(t, ev.audio, ev.header, true, meas, noise_.snapshot());
+        return;
+    }
     // heard (decoded or not) in a session: the peer's, most likely
     if (span && (session_->state == SessionState::CONNECTED || session_->state == SessionState::DISCONNECTING))
         energy(span->start, span->end, span->mode, t, std::nullopt, meas ? std::optional(meas->snr_est) : std::nullopt);

@@ -67,6 +67,7 @@ struct BurstEvent {
     std::optional<Rx> rx;  // nullopt: lost
     std::vector<double> audio;  // the segment received
     double receive_ms = 0;      // wall time modem::receive took (sync check, header, channel estimate), for the log
+    bool released = false;      // let go, not received: a suspect lock's pilots absent (RELEASE_S) or a CPM lock unconfirmed
 };
 using Event = std::variant<HeaderEvent, BurstEvent>;
 
