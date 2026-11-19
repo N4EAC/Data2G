@@ -146,7 +146,6 @@ Receiver::Receiver(modem::Accept accept, std::vector<std::string_view> cpm_grids
     // mid block and second header copy are in (find_mid)
     hold_ = keep_;
     for (const auto* g : grids_) hold_ = std::max(hold_, cpm::hdr_span(*g, 2) + config::FS);
-    for (const auto* g : grids_) tracks_.emplace_back(*g);
     detectors_.reserve(bands_.size());
     for (const auto b : bands_) detectors_.push_back({b, waveform::StreamDetector(waveform::band(b))});
     if (blank) blanker_.emplace();
@@ -170,14 +169,7 @@ void Receiver::reset() {
     decided_mid_.clear();
     cpm_wait_.clear();
     expected_.reset();
-    present_ = false;
-    heard_to_ = 0;
-    for (auto& t : tracks_) t.reset();
-    for (auto& d : detectors_) {
-        d.d.reset();
-        d.copy_fold.reset();
-        d.presence_fold.reset();
-    }
+    for (auto& d : detectors_) d.d.reset();
 }
 
 void Receiver::expect(std::vector<std::string_view> grids, std::int64_t lo, std::int64_t hi, double cfo) {
@@ -231,39 +223,6 @@ bool Receiver::on_air() const {
     return mean(last) > floor * std::pow(10.0, ON_AIR_DB / 10);
 }
 
-// receiver.Receiver._sense: of audio past the last burst handled (a suspect one's kept tail would read its own
-// pilots)
-void Receiver::read_presence() {
-    const auto n = static_cast<int64_t>(PRESENCE_S * config::FS);
-    const int64_t start = std::max(off_, heard_to_);
-    constexpr int64_t PF = static_cast<int64_t>(modem::COPY_PAIRS) * config::FRAME_SAMPLES;
-    for (auto& det : detectors_) {
-        auto& d = det.d;
-        const auto level = d.level();
-        if (!level) continue;
-        const auto c = d.products_from(start, config::FRAME_SAMPLES, modem::COPY_PAIRS);
-        const auto cols = static_cast<std::size_t>(std::max<int64_t>(
-            0, std::min(static_cast<int64_t>(c.cols), off_ + len() - c.start - config::M + 1 - PF)));
-        const auto [t0, m] = modem::presence_window(cols, n);
-        if (m < modem::PRESENCE_MIN_M) continue;
-        const auto k = d.kept_products(config::FRAME_SAMPLES, modem::COPY_PAIRS);
-        const auto& R = det.presence_fold.fold(k.rows, k.cols, k.start, c.start + t0,
-                                               c.start + t0 + m * config::FRAME_SAMPLES);
-        if (modem::fold_presence(R, *level, m).present()) {
-            present_ = true;
-            return;
-        }
-    }
-    const int64_t lo = std::max(start, off_ + len() - static_cast<int64_t>(CPM_PRESENCE_S * config::FS));
-    for (auto& t : tracks_) t.feed(buf_, off_, lo);
-    for (const auto& t : tracks_)
-        if (t.present()) {
-            present_ = true;
-            return;
-        }
-    present_ = false;
-}
-
 int64_t Receiver::decided(std::string_view key) const {
     const auto it = decided_.find(key);
     return it == decided_.end() ? 0 : it->second;
@@ -300,9 +259,7 @@ void Receiver::trim(int64_t n) {
 Receiver::Stats Receiver::stats(int64_t w0) {
     Stats out;
     out.mats.reserve(detectors_.size());
-    for (auto& det : detectors_) {
-        const auto band = det.band;
-        auto& d = det.d;
+    for (auto& [band, d] : detectors_) {
         if (d.fed < off_) d.restart_at(off_);  // its audio was trimmed away: start over
         auto from = static_cast<std::size_t>(d.fed - off_);
         // A confirmed burst isn't searched, so its audio goes unfed until a search is wanted again (a late
@@ -343,33 +300,21 @@ void Receiver::searched() {
     }
 }
 
-std::optional<modem::Lock> Receiver::find_copy() {
+std::optional<modem::Lock> Receiver::find_copy() const {
     std::optional<modem::Lock> best;
     int64_t best_k = 0;
-    constexpr int64_t PF = static_cast<int64_t>(modem::COPY_PAIRS) * config::FRAME_SAMPLES;
     for (const auto band : config::HEADER_COPY_BANDS) {
         const auto it = std::find_if(detectors_.begin(), detectors_.end(), [&](const Detector& d) { return d.band == band; });
         if (it == detectors_.end()) continue;
-        auto& d = it->d;
+        const auto& d = it->d;
         const auto level = d.level();
         if (!level) continue;
-        // from the stream index both the buffer and the products cover
-        const auto c = d.products_from(off_, config::FRAME_SAMPLES, modem::COPY_PAIRS);
+        const auto c = d.outputs_from(off_);  // from the stream index both the buffer and C cover
         const int64_t a = c.start;
         const auto x = std::span<const double>(buf_).subspan(static_cast<std::size_t>(a - off_));
         const auto cols = static_cast<std::size_t>(std::max<int64_t>(
-            0, std::min(static_cast<int64_t>(c.cols), static_cast<int64_t>(x.size()) - config::M + 1 - PF)));
-        const int64_t FR = config::FRAME_SAMPLES, m = static_cast<int64_t>(cols) / FR;
-        Mat<std::complex<double>> fold;
-        if (m >= 1) {  // the running fold, rolled to the products' start
-            const auto k = d.kept_products(config::FRAME_SAMPLES, modem::COPY_PAIRS);
-            const auto& R = it->copy_fold.fold(k.rows, k.cols, k.start, a, a + m * FR);
-            fold = Mat<std::complex<double>>(R.rows, R.cols);
-            const auto s = static_cast<std::size_t>(a % FR);
-            for (std::size_t f = 0; f < R.rows; ++f)
-                for (std::size_t ph = 0; ph < R.cols; ++ph) fold[f][ph] = R[f][(s + ph) % R.cols];
-        }
-        const auto lock = modem::find_copy(x, band, &accept_, c.rows, cols, level, nullptr, m >= 1 ? &fold : nullptr);
+            0, std::min(static_cast<int64_t>(c.cols), static_cast<int64_t>(x.size()) - config::M + 1)));
+        const auto lock = modem::find_copy(x, band, &accept_, c.rows, cols, level);
         if (lock && (!best || lock->score > best->score)) {
             best = lock;
             best_k = a - off_;
@@ -469,7 +414,6 @@ bool Receiver::supersede(std::vector<Item>& out, bool whole) {
         out.push_back(BurstEvent{p, std::nullopt, std::vector<double>(buf_.begin() + a, buf_.begin() + std::max(a, b))});
     }
     pending_ = q;
-    present_ = false;  // (read again once nothing is locked)
     pilots_ok_ = q->is_cpm() || q->copy() || q->score() >= SUSPECT_SCORE;
     confirmed_ = false;
     dark_ = 0;
@@ -571,7 +515,6 @@ std::vector<Receiver::Item> Receiver::feed_deferred(std::span<const double> x_in
                 std::vector<double> sq(tail.size());
                 for (std::size_t i = 0; i < tail.size(); ++i) sq[i] = tail[i] * tail[i];
                 if (std::sqrt(mean(sq)) < SILENCE_RMS) {
-                    present_ = false;
                     trim(keep_);
                     for (auto& d : detectors_) d.d.restart_at(off_ + len());  // no noise level in silence: skip it
                     break;
@@ -592,7 +535,6 @@ std::vector<Receiver::Item> Receiver::feed_deferred(std::span<const double> x_in
             if (!p && expected_)
                 if (auto c = primed()) p = Pending{*c};
             if (!p) {
-                if (sense) read_presence();
                 // (a waiting candidate's start is within it; and the expected window, while queued)
                 trim(expected_ ? std::max(hold_, off_ + len() - expected_->lo) : hold_);
                 break;
@@ -601,7 +543,6 @@ std::vector<Receiver::Item> Receiver::feed_deferred(std::span<const double> x_in
             if (p->start() + off_ <= last_start_) break;  // the suspect burst just handled, still in the kept window
             p->shift(off_);
             pending_ = p;
-            present_ = false;  // (read again once nothing is locked)
             // BUSY at once on a clear header (or a copy lock: its pilots
             // passed already); a suspect one waits for its pilots
             pilots_ok_ = p->is_cpm() || p->copy() || p->score() >= SUSPECT_SCORE;
@@ -637,7 +578,6 @@ std::vector<Receiver::Item> Receiver::feed_deferred(std::span<const double> x_in
             req.stream = std::move(stream_);
             out.push_back(std::move(req));
             last_start_ = p.start();
-            heard_to_ = p.end();
             // a CPM burst has no lead-out silence: with the sender's clock fast,
             // the next back-to-back burst's front begins before this one's
             // computed end (receiver.Receiver.feed)
@@ -653,7 +593,6 @@ std::vector<Receiver::Item> Receiver::feed_deferred(std::span<const double> x_in
         req.audio_hi = s1 - s0;
         out.push_back(std::move(req));
         last_start_ = p.start();
-        heard_to_ = p.end();
         // a better header inside this burst's span (it was a false lock, and
         // the real one began before it ended) is next, not trimmed away
         if (!confirmed_ && supersede(out, true)) {

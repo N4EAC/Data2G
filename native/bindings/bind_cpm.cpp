@@ -105,20 +105,6 @@ void bind_cpm(py::module_& m) {
         return np(cpm::energies(grid(g), view(x), start, n_sym, cfo, extra));
     }, py::arg("grid"), py::arg("x"), py::arg("start"), py::arg("n_sym"), py::arg("cfo"), py::arg("extra") = 0);
     c.def("shares", [](const In<double>& E) { return np(cpm::shares(mat(E))); });
-    c.def("presence", [](const std::string& g, const In<double>& x, double reach_hz) {
-        return cpm::presence(grid(g), view(x), reach_hz);
-    }, py::arg("grid"), py::arg("x"), py::arg("reach_hz") = 150.0);
-    c.def("present", [](const std::string& g, const In<double>& x) { return cpm::present(grid(g), view(x)); });
-    py::class_<cpm::PresenceTrack>(c, "PresenceTrack")
-        .def(py::init([](const std::string& g, double reach_hz) { return new cpm::PresenceTrack(grid(g), reach_hz); }),
-             py::arg("grid"), py::arg("reach_hz") = 150.0)
-        .def("reset", &cpm::PresenceTrack::reset)
-        .def("feed", [](cpm::PresenceTrack& t, const In<double>& x, std::int64_t off, std::int64_t lo) {
-            t.feed(view(x), off, lo);
-        })
-        .def("value", &cpm::PresenceTrack::value)
-        .def("present", &cpm::PresenceTrack::present)
-        .def_readonly("n", &cpm::PresenceTrack::n);
     c.def("detect", [](const std::string& g, const In<double>& x, double reach_hz, bool fine, bool front_only, int n_sym,
                        double floor, bool mid) {
         const auto d = cpm::detect(grid(g), view(x), reach_hz, fine, front_only, n_sym, floor, mid);

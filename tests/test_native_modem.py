@@ -24,8 +24,7 @@ TOL = 1e-9
 # never reaches the native ones through module globals (--native)
 OWN = ("crc6", "header_bits", "_signs", "_valid_words", "_valid_signs", "decode_header", "modulate",
        "modulate_bits", "burst_waveform", "ace_cells", "_bin_phase_step", "_demod_frames", "_read_header",
-       "_copy_llr", "_best_header", "find_burst", "pilot_coherence", "find_copy", "_pilot_fold", "pilot_presence", "pilot_present",
-       "_cfo_aliases", "_copy_header",
+       "_copy_llr", "_best_header", "find_burst", "pilot_coherence", "find_copy", "_cfo_aliases", "_copy_header",
        "receive", "resolve_alias", "data_channel", "noise_var", "soft_bits", "burst_soft", "slot_soft", "snr_db",
        "symbol_times", "demodulate", "decode_received")
 
@@ -285,47 +284,7 @@ def test_find_copy_matches(native, py, reference, name, n_cw):
     close(native.modem.cfo_aliases(d, centre), py._cfo_aliases(d, centre))
 
 
-def test_pilot_presence_matches(native, py):
-    """The fold peak and contrast over the newest window: a burst, a tone,
-    noise, and a window longer than C (all of it)."""
-    from data2g.waveform import ofdm, sync
-
-    n = 3 * config.FS
-    rng = np.random.default_rng(7)
-    sigs = [_burst("qpsk-r1/2", 4, snr=-3.0, preset="mpp")[-n:],
-            np.sin(2 * np.pi * 1510.0 * np.arange(n) / config.FS) + rng.normal(size=n), rng.normal(size=n)]
-    for band in ("w", "n10"):
-        for y in sigs:
-            C = sync.repeat_corrs(dsp.to_baseband(y), sync.unit_template(ofdm.band(band)), list(sync.cfo_grid()))
-            level = sync.noise_level(C)
-            D = sync.pair_products(C, config.FRAME_SAMPLES, modem.COPY_PAIRS)
-            close(native.waveform.pair_products(C, config.FRAME_SAMPLES, modem.COPY_PAIRS), D, CORR_TOL)
-            for w in (config.FS, 3 * config.FS // 2, 10 * config.FS):
-                close(native.modem.pilot_presence(D, level, w), py.pilot_presence(D, level, w), CORR_TOL)
-                assert native.modem.pilot_present(D, level, w) == py.pilot_present(D, level, w)
-            lock, peak = native.modem.find_copy(y, band, None, C, level)  # from C, and from its products
-            lock_d, peak_d = native.modem.find_copy(y, band, None, None, level, D)
-            assert lock == lock_d
-            close(peak_d, peak, CORR_TOL)
-    assert native.modem.pilot_presence(D[:, :1000], level, config.FS) == (0.0, 0.0)
-
-
 def test_demodulate_matches(native, py):
     y = _burst("w48-qpsk-r1/3", 4, 1.0, "mpp", seed=6)
     b, n = py.demodulate(y), native.modem.demodulate(y)
     assert n[0] == b.submode.name and n[1] == b.payloads and n[2] == b.crc_ok and n[4] == b.preamble_start
-
-
-def test_fold_track_matches(native):
-    """The running fold: the same adds and subtractions in the same order,
-    so the same sums bit for bit."""
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).parent))
-    from test_modem import _fold_walk
-
-    D, steps = _fold_walk(4)
-    a_py, a_n = modem.FoldTrack(), native.modem.FoldTrack()
-    for a, lo, hi in steps:
-        np.testing.assert_array_equal(a_n.fold(D[:, a:], a, lo, hi), a_py.fold(D[:, a:], a, lo, hi))
