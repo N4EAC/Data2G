@@ -557,7 +557,7 @@ A few options have no place in the dialogs. The ones an operator might want:
 | `--kiss-bw 500` | Limits KISS and broadcast transmissions to 500 Hz modes. The default is 2400. |
 | `--broadcast-mode MODE` | The submode for broadcast packets when the application doesn't choose one. The default is `qpsk-r1/5`, or `n10-qpsk-r1/5` with `--kiss-bw 500`. |
 | `--kiss-busy-limit S` | A broadcast held back by a busy channel is sent anyway after this many seconds. The default is 60. |
-| `--dd-budget S` | Time allowed per burst for an extra decoding pass that tracks fast fading. The default is 1 second. Lower it, down to 0, on a slow machine. |
+| `--dd-budget S` | Time allowed per burst for an extra decoding pass that tracks fast fading. The default is 1 second. In a session it also stops when your reply is due. 0 turns it off. |
 | `--threads N` | CPU threads used for decoding. The default is every core up to 4, 4 threads for 5 to 8 cores, and half the cores above 8. |
 | `--log-level DEBUG` | A much more detailed log. |
 | `--config FILE` | Use a different settings file. |
@@ -688,7 +688,7 @@ Try these in order, and stop when the audio counters stay at zero and fast links
 
 1. **Run headless.** Use `web` or `host` instead of the GUI. If you do run the GUI, right-click the waterfall and choose 1 or 2 fps, and turn off **Live constellation**.
 2. **Lower Decoder effort** to 20, then 15.
-3. **Lower the DD budget.** Start Data2G with `--dd-budget 0.5`, then `--dd-budget 0` if that isn't enough. This limits an extra decoding pass that helps in fast fading. At 0 you give up a decibel or two of sensitivity on fading signals.
+3. **Lower the DD budget.** In a session this pass already stops when your reply is due, so try this only for broadcast (KISS) traffic or if links still stall. Start Data2G with `--dd-budget 0.5`, then `--dd-budget 0` if that isn't enough. This limits an extra decoding pass that helps in fast fading. At 0 you give up a decibel or two of sensitivity on fading signals.
 4. **Try fewer threads.** Data2G decodes on all four cores of a Pi 4. If the Pi also runs other programs, `--threads 2` leaves them room, at the cost of slower decodes.
 
 Other things that matter on a Pi:

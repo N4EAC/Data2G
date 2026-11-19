@@ -313,6 +313,11 @@ class BlindFail:
 
 
 def handshake(cls, forge=None, t_turn_b=1.0):
+    a, b = connect(cls, forge, t_turn_b)
+    return a.state, b.state, list(a.events), list(b.events)
+
+
+def connect(cls, forge=None, t_turn_b=1.0):
     a = cls("W1AW", CpmConnect(), rng=random.Random(1))
     b = cls("K2XYZ", CpmConnect(), rng=random.Random(2))
     b.t_turn = t_turn_b
@@ -325,7 +330,25 @@ def handshake(cls, forge=None, t_turn_b=1.0):
     if ack is not None:
         b.on_tx_end(ack, 11.0)
         a.on_rx(BlindFail(ack, forge), 11.5)
-    return a.state, b.state, list(a.events), list(b.events)
+    return a, b
+
+
+def turnarounds(cls):
+    from data2g.arq import session as S
+    a, b = connect(cls, t_turn_b=2.5)
+    assert (a.state, b.state) == (S.CONNECTED, S.CONNECTED)
+    return a.turnaround(), b.turnaround(), cls("W1AW", CpmConnect()).turnaround()
+
+
+def test_turnaround_is_the_peers_t_turn():
+    """Each side's reply deadline (engine DD budget) is the other's t_turn,
+    learnt from its CONNECT or CONNECT_ACK; before a session, its own."""
+    from data2g.arq import session as S
+    assert turnarounds(S.Session) == (2.5, 1.0, 1.0)
+
+
+def test_cpp_turnaround(native, pure):
+    assert turnarounds(native.arq.Session) == (2.5, 1.0, 1.0)
 
 
 def test_primed_connect_and_connect_ack():

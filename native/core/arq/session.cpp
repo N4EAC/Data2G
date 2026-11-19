@@ -369,6 +369,13 @@ void Session::close(const std::string& why, TxBurstPtr final_burst, double now) 
     deadline.reset();
 }
 
+// Seconds from the end of a burst I hear to my reply's start before my peer gives up
+// waiting: its t_turn in a session, else mine (session.py).
+double Session::turnaround() const {
+    if ((state == SessionState::CONNECTED || state == SessionState::DISCONNECTING) && peer_t_turn) return *peer_t_turn;
+    return t_turn;
+}
+
 void Session::connected(double now) {
     state = SessionState::CONNECTED;
     heard(now);
@@ -655,6 +662,7 @@ void Session::on_session_frame(const Frame& f, double now) {
         peer = caller;
         nonce = n;
         cap = std::min(c.cap, cap);
+        peer_t_turn = c.t_turn10 / 10.0;
         station = make_station(1, false, session_key(caller, call, n));
         flush_writes();
         connected(now);
@@ -665,6 +673,7 @@ void Session::on_session_frame(const Frame& f, double now) {
         const ConnectAck a = ConnectAck::unpack(body);
         if (a.nonce != nonce) return;
         cap = std::min(a.cap, cap);
+        peer_t_turn = a.t_turn10 / 10.0;
         station = make_station(0, true, session_key(call, peer, nonce));
         flush_writes();
         connected(now);

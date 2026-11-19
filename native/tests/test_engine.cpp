@@ -246,6 +246,36 @@ void noise_rule_config() {
     check::is_true(!rule(0.0), "0: off");
 }
 
+// DD's turnaround budget: the peer's t_turn (from the handshake) past the burst's end, less PTT,
+// TX latency and the time since the block came in; the dd_budget_s cap; none outside a session.
+class BudgetEngine : public Engine {
+public:
+    using Engine::Engine;
+    using Engine::dd_budget;
+};
+
+void turnaround_budget() {
+    check::current_step = "turnaround budget";
+    EngineConfig c;
+    c.dd_budget_s = 5.0;
+    BudgetEngine e("W1AW", c), b("K2XYZ");
+    check::is_true(e.dd_budget(10.0, 10.3) == std::optional(5.0), "idle: the cap");
+    b.listen();  // a new session: its t_turn after
+    b.session().t_turn = 2.0;
+    e.connect("K2XYZ", 2);
+    check::is_true(link(e, b, 12, 60, [&] { return both(e, b, SessionState::CONNECTED); }, 0), "connected");
+    check::is_true(e.session().turnaround() == 2.0 && b.session().turnaround() == 1.0, "each waits the other's t_turn");
+    e.set_tx_latency(0.2);
+    e.set_ptt_delay(0.1);
+    const double left = e.dd_budget(10.0, 10.3).value_or(-1);  // 2.0 - 0.3 - 0.2 - 0.1, less ms since the last block
+    check::is_true(left > 1.2 && left <= 1.4 + 1e-9, "what the turn leaves");
+    check::is_true(e.dd_budget(10.0, 12.0) == std::optional(0.0), "past the deadline: none");
+    EngineConfig u;
+    u.dd_budget_s = std::nullopt;
+    BudgetEngine unlimited("W1AW", u);
+    check::is_true(!unlimited.dd_budget(10.0, 10.3), "no limit (studies) stays none");
+}
+
 // The host's nods setting (--no-nods): the next session's stations, never one in progress.
 void nods_setting() {
     check::current_step = "nods setting";
@@ -557,6 +587,7 @@ int main() {
     tx_burst_and_abort();
     noise_rule_config();
     nods_setting();
+    turnaround_budget();
     sync_session(dir);
     sync_kiss();
     worker_latency();

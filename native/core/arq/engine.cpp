@@ -642,6 +642,7 @@ Engine::Out Engine::step(std::span<const double> x) {
     }
     if (gen_ != want_gen_) apply_reset();
     Block b;
+    b.arrived = std::chrono::steady_clock::now();
     if (gap_) {
         log_write(LOG, WARNING, format("decode worker fell %.0f s behind: %.1f s of audio dropped, receiver reset",
                                        cfg_.max_backlog_s, static_cast<double>(gap_) / config::FS));
@@ -761,6 +762,7 @@ Engine::Done Engine::process(Block& b) {
     }
     const auto k = static_cast<std::int64_t>(b.x.size());
     const double t = now() + static_cast<double>(k) / config::FS;  // the block's end: when anything in it is known
+    arrived_ = b.arrived;
     Done d;
     d.out.audio.assign(static_cast<std::size_t>(k), 0.0);
     if (rec_) rec_->audio(tx_ ? d.out.audio : b.x);
@@ -1234,6 +1236,19 @@ void Engine::nod_collect(std::span<const double> x, double t) {
     session_->on_rx(rx, t);
 }
 
+// DD's seconds for a burst that ended at `end` (stream time; `t`: the block's end): dd_budget_s, and in a
+// session no further than my reply's latest start, the peer's t_turn past `end` less my PTT and TX latency
+// and the time already spent since the block came in (receive, soft bits). It may be nothing. No limit
+// (nullopt or inf: paired studies) leaves DD unlimited (engine.py _dd_budget).
+std::optional<double> Engine::dd_budget(double end, double t) const {
+    const auto cap = cfg_.dd_budget_s;
+    if (!cap || std::isinf(*cap) || session_->state == SessionState::IDLE || session_->state == SessionState::CLOSED)
+        return cap;
+    const double spent = std::chrono::duration<double>(std::chrono::steady_clock::now() - arrived_).count();
+    const double left = (end - t) + session_->turnaround() - tx_latency_ - static_cast<double>(ptt_delay_) / config::FS;
+    return std::max(0.0, std::min(*cap, left - spent));
+}
+
 void Engine::hear_burst(receiver::BurstEvent& ev, double t) {
     // on_read: the burst's decoder handed over last, on every return (after Tally and Timing below are done with it)
     struct Handoff {
@@ -1317,7 +1332,7 @@ void Engine::hear_burst(receiver::BurstEvent& ev, double t) {
             cfg_.kiss->missed(spec_name(ev.header), ev.header.n_cw(), span ? span_snr(*span) : std::nullopt);
         return;
     }
-    const auto rxp = std::make_shared<ModemRx>(*r, &store_, cfg_.dd_budget_s, soft, cfg_.dd);
+    const auto rxp = std::make_shared<ModemRx>(*r, &store_, dd_budget(span ? span->end : t, t), soft, cfg_.dd);
     ModemRx& rx = *rxp;
     if (on_read_) handoff.rx = rxp;
     timing.rx = &rx;

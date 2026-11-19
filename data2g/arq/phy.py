@@ -37,8 +37,11 @@ DD_ITERS = 2
 CPM_DD = os.environ.get("DATA2G_CPM_DD", "1") == "1"
 CPM_DD_ITERS = 4
 # a live receiver's DD stops starting refines this long after the burst's
-# decode began: the reply must start within REPLY_START_S of the sender's
-# turn, and a 12 s 256l burst with every slot failing took 54 s of DD
+# decode began (a 12 s 256l burst with every slot failing took 54 s of DD).
+# In a session the engine also stops it at the turnaround deadline: my reply
+# keyed within the peer's t_turn of its burst's end (engine._dd_budget), so
+# DD gets what the plain decode leaves, which may be nothing. inf: no limit
+# at all (paired studies, tools/with_native.py --dd-budget inf)
 DD_BUDGET_S = 1.0
 # A control is a few bytes (median 12, at most 28 in linksim sessions) zeroed
 # to its codeword's payload (frames.Control.pack). A control slot that fails

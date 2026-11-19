@@ -20,6 +20,7 @@ on its own thread).
 import dataclasses
 import json
 import logging
+import math
 import random
 import threading
 import time
@@ -192,6 +193,7 @@ class Engine:
         self.tx_latency_s = 0.0
         self.rec = Recorder(record_dir, self.call) if record_dir else None
         self.n = 0  # samples processed
+        self._arrived = time.monotonic()  # when step's block came in (_dd_budget)
         self.tx = None  # [burst, audio, position]
         self.session = None
         self.store = {}  # soft bits per codeword key, across bursts (phy.ModemRx)
@@ -639,6 +641,7 @@ class Engine:
         (a burst's peak at 1.0), PTT."""
         k = len(x)
         t = self.now + k / FS  # the block's end: when anything in it is known
+        self._arrived = time.monotonic()  # the block's end, on the clock DD's budget runs on
         out = np.zeros(k)
         if self.rec:
             self.rec.audio(x if self.tx is None else np.zeros(k))
@@ -781,6 +784,19 @@ class Engine:
     def next_event(self) -> float | None:
         return self.session.next_event()
 
+    def _dd_budget(self, end: float, t: float) -> float | None:
+        """DD's seconds for a burst that ended at `end` (stream time; `t`: the
+        block's end): DD_BUDGET_S, and in a session no further than my reply's
+        latest start, the peer's t_turn past `end` less my PTT and TX latency
+        and the time already spent since the block came in (receive, soft
+        bits). It may be nothing. An infinite DD_BUDGET_S (paired studies)
+        leaves DD unlimited."""
+        cap = PHY.DD_BUDGET_S
+        if cap is None or math.isinf(cap) or self.session.state in (S.IDLE, S.CLOSED):
+            return cap
+        left = (end - t) + self.session.turnaround() - self.tx_latency_s - self.ptt_delay / FS
+        return max(0.0, min(cap, left - (time.monotonic() - self._arrived)))
+
     def _hear(self, x: np.ndarray, t: float):
         if self._nod is not None:
             self._nod_feed(x, t)
@@ -826,7 +842,7 @@ class Engine:
                     # maybe an open port's: BCAST * MISSED
                     self.kiss.missed(h["spec"].name, h["n_cw"], self._span_snr(*span) if span else None)
                 continue
-            rx = PHY.ModemRx(r, self.store, PHY.DD_BUDGET_S)
+            rx = PHY.ModemRx(r, self.store, self._dd_budget(end, t))
             # in a session, its peer's bursts are the likely ones: the session
             # claims the burst before KISS tries its keys on it (two failed
             # decodes per ARQ burst: ~10% of a Pat exchange's CPU). Asked

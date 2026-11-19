@@ -26,6 +26,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <complex>
 #include <condition_variable>
 #include <cstdint>
@@ -373,6 +374,7 @@ protected:
     }
     virtual std::vector<double> tx_audio(const TxBurst& b) { return arq::tx_audio(b); }
     virtual void hear_burst(receiver::BurstEvent& ev, double t);
+    std::optional<double> dd_budget(double end, double t) const;
 
 private:
     struct Block {
@@ -383,6 +385,7 @@ private:
         bool on_air = false;  // Receiver::data2g_on_air (KISS channel access only)
         std::uint64_t gen = 0, seq = 0;
         std::int64_t gap = 0;  // samples dropped just before this block
+        std::chrono::steady_clock::time_point arrived{};  // when step() took it: DD's turnaround clock
     };
     struct Done {
         Out out;
@@ -424,6 +427,7 @@ private:
     receiver::NoiseProfile noise_;  // the passband's noise between bursts (recorded with each burst heard)
     std::atomic<std::int64_t> ptt_delay_;  // set_ptt_delay on the session stage; read on both
     std::atomic<double> tx_latency_{0.0};
+    std::chrono::steady_clock::time_point arrived_{};  // the block being processed: Block::arrived
     std::optional<Recorder> rec_;
     std::int64_t n_ = 0;
     std::optional<Tx> tx_;

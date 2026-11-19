@@ -37,9 +37,11 @@ CONNECT_CTL_BYTES = 4 + 2 + F.Connect.BYTES  # a CONNECT's Control: core, T_SESS
 DISC_TRIES = 3
 # failed connect frames further apart are not one CONNECT's tries (a robust try and its wait: under 15 s)
 REPEAT_GAP_S = 30.0
-# past t_turn: a reply's header must have been heard by then: the peer's
-# decode and PTT (~0.7 s), audio latency both ways, the reply's lead-in,
-# preamble and header (0.4-0.6 s) and the receiver's search step (0.25 s)
+# past t_turn: a reply's header must have been heard by then. t_turn is the
+# replier's from my burst's end to its reply keyed (decode, DD, PTT: the
+# engine's turnaround deadline); this covers the rest: audio latency both
+# ways, the reply's lead-in, preamble and header (0.4-0.6 s) and the
+# receiver's search step (0.25 s)
 # (the audio loopback timed out on replies already on air at 1.0). On air
 # (recordings/20261002-224419) a reply's whole head was in at 1.9 s and its
 # header reported at 2.2 s: 1.5 left no margin for a slower peer or radio
@@ -94,6 +96,7 @@ class Session:
     policy: L.Policy  # connect_mode and airtime too
     t_turn: float = 1.0
     rng: random.Random = field(default_factory=random.Random)
+    peer_t_turn: float | None = None  # from its CONNECT or CONNECT_ACK: how long it waits for my reply
     state: str = IDLE
     peer: str = ""
     cap: int = 2
@@ -426,6 +429,13 @@ class Session:
         self._deadline = None
         return None
 
+    def turnaround(self) -> float:
+        """Seconds from the end of a burst I hear to my reply's start before my
+        peer gives up waiting: its t_turn in a session, else mine."""
+        if self.state in (CONNECTED, DISCONNECTING) and self.peer_t_turn is not None:
+            return self.peer_t_turn
+        return self.t_turn
+
     def _connected(self, now: float):
         self.state = CONNECTED
         self._heard(now)
@@ -670,6 +680,7 @@ class Session:
                 return self._refuse(c, f["mode"], NAK_REFUSED, now)
             self.call = callee  # the call it dialed (the session key derives from it)
             self.peer, self._nonce, self.cap = caller, nonce, min(c.cap, self.cap)
+            self.peer_t_turn = c.t_turn10 / 10
             self.station = L.Station(1, self.policy, master=False, key=session_key(caller, self.call, nonce),
                                      cap=self.cap, max_misses=None, chat=self.chat, nod=True, keep=True)
             self._flush_writes()
@@ -682,6 +693,7 @@ class Session:
             if a.nonce != self._nonce:
                 return
             self.cap = min(a.cap, self.cap)
+            self.peer_t_turn = a.t_turn10 / 10
             self.station = L.Station(0, self.policy, master=True, key=session_key(self.call, self.peer, self._nonce),
                                      cap=self.cap, max_misses=None, chat=self.chat, nod=True, keep=True)
             self._flush_writes()
