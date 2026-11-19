@@ -124,6 +124,9 @@ def substitutions(native):
         def recommend(self, station):
             return self._n.recommend(station)
 
+        def gap(self, st):
+            return self._n.gap(st)
+
         def payload_bytes(self, m):
             return A.payload_bytes(m)
 

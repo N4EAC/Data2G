@@ -52,6 +52,7 @@ arq::StationView station(const py::object& s) {
         v.misses = s.attr("misses").cast<int>();
         v.esc_floor = s.attr("esc_floor").cast<int>();
         v.last_rx_data = s.attr("last_rx_data").cast<bool>();
+        v.tx_end = s.attr("tx_end").cast<std::optional<double>>();
         return v;
     }
     v.cap = s.attr("cap").cast<int>();
@@ -67,6 +68,7 @@ arq::StationView station(const py::object& s) {
     v.misses = attr(s, "misses", 0);
     v.esc_floor = attr(s, "esc_floor", 0);
     v.last_rx_data = py::bool_(attr<py::object>(s, "last_rx_data", py::bool_(true)));
+    v.tx_end = attr<std::optional<double>>(s, "tx_end", std::nullopt);
     return v;
 }
 
@@ -252,6 +254,7 @@ void bind_arq(py::module_& m) {
             s.outcome(submode, decoded, sent, usable);
         }, py::arg("submode"), py::arg("decoded"), py::arg("sent"), py::arg("usable") = py::none())
         .def("gate", &Shifter::gate)
+        .def("gap", [](const Shifter& s, const py::object& st) { return s.gap(station(st)); })
         .def("recommend", [](Shifter& s, const py::object& st) {
             const auto r = s.recommend(station(st));
             return py::make_tuple(r.data, r.hint, r.reply);

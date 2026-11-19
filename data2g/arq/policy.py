@@ -221,6 +221,7 @@ class StationView(NamedTuple):
     esc_floor: int = 0
     timeouts: int = 0  # stats["timeouts"] (link_features: Python only)
     last_rx_data: bool = True  # the peer's last burst carried data (expected_reply)
+    tx_end: float | None = None  # when my burst being built should end (link.Station._tx_end; None: gap_s)
 
 
 def view(station) -> StationView:
@@ -233,7 +234,7 @@ def view(station) -> StationView:
         return StationView(station.cap, station.tx.pending(), station.peer_recommend, station.peer_reply_recommend,
                            station.peer_size_hint, station.peer_wants_dup, bool(station.chat or station.peer_chat),
                            station.peer_queued, len(station.rx.buf), station.misses, station.esc_floor,
-                           station.stats.get("timeouts", 0), station.last_rx_data)
+                           station.stats.get("timeouts", 0), station.last_rx_data, station.tx_end)
     except AttributeError:
         pass
 
@@ -246,12 +247,13 @@ def view(station) -> StationView:
                        peer_size_hint=g("peer_size_hint", 1), peer_wants_dup=g("peer_wants_dup", False),
                        chat=bool(g("chat", False) or g("peer_chat", False)), peer_queued=g("peer_queued", 0),
                        held=len(rx.buf) if rx is not None else 0, misses=g("misses", 0), esc_floor=g("esc_floor", 0),
-                       timeouts=g("stats", {}).get("timeouts", 0), last_rx_data=g("last_rx_data", True))
+                       timeouts=g("stats", {}).get("timeouts", 0), last_rx_data=g("last_rx_data", True),
+                       tx_end=g("tx_end", None))
 
 
 @dataclass
 class GearShifter(L.Policy):
-    gap_s: float = 2.5
+    gap_s: float = 2.5  # the gap input without a clock (StationView.tx_end None: KISS, tests)
     use_cpm: bool = True  # recommend CPM modes (only once the outcome model has learned them)
     # data modes need P(usable) x P(codeword) at least this: the KISS TNC
     # sets it (no resends there; a lost codeword is a lost AX.25 frame and a
@@ -509,6 +511,15 @@ class GearShifter(L.Policy):
         n = len(self.turns)
         return [self.turns.count("lost") / n, self.turns.count("miss") / n, n / LINK_HIST, 1.0]
 
+    def gap(self, st: StationView) -> float:
+        """The outcome model's gap input: from the peer burst measured
+        (observe's now) to the start of the one predicted, as
+        scripts/session_data.py's rows have it (t0 - snap["t"]). That burst
+        is the peer's reply to mine: past my burst's end by
+        REPLY_HOLD_MARGIN_S (sims 0.45 s, on air 0.4-0.6 s). A timeout's
+        poll or a held reply starts later than this."""
+        return self.gap_s if st.tx_end is None else st.tx_end + REPLY_HOLD_MARGIN_S - self.measured_at
+
     def recommend(self, station) -> tuple[int, int, int]:
         """-> (data mode, size hint, reply mode) for the peer's next burst:
         the mode it should use if it sends data, and if it sends none."""
@@ -523,6 +534,7 @@ class GearShifter(L.Policy):
         prev = None
         if self.prev is not None:
             prev = (self.prev[0], self.prev[1], min(self.measured_at - self.prev[2], PREV_MAX_S))
+        gap = self.gap(st)
 
         # the outcome model (P from real decodes, scripts/train_outcome.py)
         # replaced the MI predictor's output corrections: at -4 dB AWGN on
@@ -547,7 +559,7 @@ class GearShifter(L.Policy):
         def predicted(s, n_cw):
             key = (round(burst_seconds(s, n_cw), 2), shift.get(s.band, 0.0))
             if key not in omemo:
-                omemo[key] = P.predict_outcome(P.shifted(m, key[1]), self.measured_band, self.gap_s, key[0], cands, prev,
+                omemo[key] = P.predict_outcome(P.shifted(m, key[1]), self.measured_band, gap, key[0], cands, prev,
                                                gated, cond)
             return omemo[key][s.name]
 
