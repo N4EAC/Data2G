@@ -224,7 +224,7 @@ fits but on the ACK modes (§3).
   port's (HEARD / LOST as usual; an ambiguous key as in §2 Collisions). Control and
   all data lost can't be tied to a port: the frozen 16-bit PHY header has no room for
   a group. Every open port gets a `BCAST * MISSED submode n_cw [snr]` hint; it may be
-  another group's burst. `snr` is the in-band energy over the burst against the noise
+  another group's burst. A lock the receiver let go (pilots absent: a false lock) gets none. `snr` is the in-band energy over the burst against the noise
   floor, on HEARD's scale; absent until a noise floor is known (a few seconds after
   start). Receiver AGC can pull it low under strong signals. Only outside an ARQ session: during one, a lost burst is
   most likely the peer's.
