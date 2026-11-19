@@ -11,11 +11,14 @@ them.
 
 - Impulse trains: Poisson-timed trains of impulses `gap_ms` apart, each a
   short white burst through the radio's passband (it rings 1-3 ms), its peak
-  `height_db` over the floor's RMS (on air: ~22 dB, 1-3 ms, 20-40 ms apart).
+  `height_db` over the floor's RMS (2026-09/10 recordings: ~22 dB, 1-3 ms,
+  20-40 ms apart; two nodes in 2026-11, behind a limiter: ~14 dB, mostly alone).
 - QRM sources: a steady carrier, an FSK-like hopper (8 tones across `bw_hz`,
   a new tone each symbol), or band-limited noise; `inr_db` is its power over
   the floor's in its own band (a carrier: in 50 Hz); on for episodes of mean
-  `on_s`, `duty` of the time."""
+  `on_s`, `duty` of the time.
+- A receive passband (PASSBANDS, passband()): the radio's filter, which the
+  session channel applies to signal and noise alike."""
 
 from dataclasses import dataclass, field
 
@@ -207,7 +210,8 @@ def describe(spec: Spec) -> str:
 
 @dataclass(frozen=True)
 class Ranges:
-    """What draw() produces; the benchmark's held-out cells go outside v1's."""
+    """What draw() produces; the benchmark's held-out cells go outside v1's.
+    The fields from height_sd_db on default to v1's draw (its random stream unchanged)."""
 
     p_clean: float = 0.35
     p_impulses: float = 0.5
@@ -218,19 +222,40 @@ class Ranges:
     inr_db: tuple = (0.0, 30.0)
     on_s: tuple = (0.5, 30.0)  # log-uniform
     duty: tuple = (0.05, 0.8)
+    height_sd_db: float = 4.0
+    loud: float = 0.0  # share of impulse draws at loud_db instead (a radio without a limiter)
+    loud_db: tuple = (20.0, 26.0)
+    kind_p: tuple | None = None  # KINDS' shares; None: v1's stream (uniform, bw uniform over BW_HZ)
+    qrm: dict | None = None  # per kind, over the above and BW_HZ: inr_db, on_s, duty, bw_hz (log-uniform)
+    wander_db: float = 0.0  # the floor's wander (phy_session.ContinuousChannel), unless a study sets its own
+    passbands: tuple = ()  # (PASSBANDS name, share) for draw_passband(); the rest flat
 
 
 # v1: interference_round{,2}.sh. mild (round 3): judgement, not fitted to the
 # recordings (too few and unrepresentative): more clean receivers, fewer and
 # weaker QRM sources on less of the time, slightly weaker impulses. With v1's
 # data the model learned caution in clean low-SNR fading (-15..-25%).
+# onair (#260): shapes and ranges from ~100 h of two volunteer nodes' noise
+# (2026-11), through the same estimators as on the sim: impulses ~14 dB over a
+# passband-limited floor (8.5-14.5 over the white one) and mostly alone, 2% of
+# draws loud (a radio without a limiter); FSK-like hoppers the main kind, short
+# and moderate; few, short carriers; noise up to 2400 Hz wide; v1's occupancy;
+# the floor wanders 1 dB; receive passbands. docs/interference-plan.md has the
+# like-for-like numbers.
 DRAWS = {
     "v1": Ranges(),
     "mild": Ranges(p_clean=0.5, p_impulses=0.4, trains_per_min=(1.0, 30.0), per_train=(1.0, 6.0),
                    height_db=(15.0, 26.0), qrm_max=2, inr_db=(0.0, 20.0), duty=(0.05, 0.5)),
+    "onair": Ranges(p_impulses=0.9, trains_per_min=(3.0, 60.0), per_train=(1.0, 1.5), height_db=(8.5, 14.5),
+                    height_sd_db=2.0, loud=0.02, qrm_max=5, kind_p=(0.08, 0.55, 0.37),
+                    qrm=dict(carrier=dict(inr_db=(6.0, 20.0), on_s=(0.5, 3.0), duty=(0.05, 0.5)),
+                             fsk=dict(bw_hz=(50.0, 450.0), inr_db=(3.0, 18.0), on_s=(0.3, 2.0), duty=(0.05, 0.5)),
+                             noise=dict(bw_hz=(300.0, 2400.0), inr_db=(3.0, 16.0), on_s=(2.0, 15.0), duty=(0.1, 0.9))),
+                    wander_db=1.0, passbands=(("wide", 0.6), ("narrow", 0.3))),
 }
 BW_HZ = {"carrier": (50.0, 50.0), "fsk": (50.0, 500.0), "noise": (200.0, 1000.0)}
 KINDS = ("carrier", "fsk", "noise")
+DEFAULT_DRAWS = "onair"  # what new training data draws (session_data --interference)
 
 
 def draw(rng: np.random.Generator, draws: str = "v1") -> Spec:
@@ -240,13 +265,66 @@ def draw(rng: np.random.Generator, draws: str = "v1") -> Spec:
         return Spec()
     imp = None
     if rng.random() < r.p_impulses:
-        imp = Impulses(trains_per_min=float(np.exp(rng.uniform(*np.log(r.trains_per_min)))),
-                       per_train=float(rng.uniform(*r.per_train)), height_db=float(rng.uniform(*r.height_db)))
+        trains = float(np.exp(rng.uniform(*np.log(r.trains_per_min))))
+        per = float(rng.uniform(*r.per_train))
+        h = r.loud_db if r.loud and rng.random() < r.loud else r.height_db
+        imp = Impulses(trains_per_min=trains, per_train=per, height_db=float(rng.uniform(*h)),
+                       height_sd_db=r.height_sd_db)
     qrm = []
     for _ in range(int(rng.integers(0 if imp else 1, r.qrm_max + 1))):
-        kind = str(rng.choice(KINDS))
-        bw = float(rng.uniform(*BW_HZ[kind]))
+        if r.qrm is None:
+            kind = str(rng.choice(KINDS))
+            bw = float(rng.uniform(*BW_HZ[kind]))
+            inr, on, duty = r.inr_db, r.on_s, r.duty
+        else:
+            kind = str(rng.choice(KINDS, p=r.kind_p))
+            k = r.qrm[kind]
+            bw = float(np.exp(rng.uniform(*np.log(k.get("bw_hz", BW_HZ[kind])))))
+            inr, on, duty = k.get("inr_db", r.inr_db), k.get("on_s", r.on_s), k.get("duty", r.duty)
         qrm.append(Qrm(kind, float(rng.uniform(PASSBAND_HZ[0] + bw / 2, PASSBAND_HZ[1] - bw / 2)), bw,
-                       float(rng.uniform(*r.inr_db)), float(np.exp(rng.uniform(*np.log(r.on_s)))),
-                       float(rng.uniform(*r.duty))))
+                       float(rng.uniform(*inr)), float(np.exp(rng.uniform(*np.log(on)))),
+                       float(rng.uniform(*duty))))
     return Spec(imp, tuple(qrm))
+
+
+def draw_passband(rng: np.random.Generator, draws: str = "v1") -> str | None:
+    """One station's receive passband (a PASSBANDS name; None: flat), from DRAWS[draws]."""
+    u, acc = rng.random(), 0.0
+    for name, share in DRAWS[draws].passbands:
+        acc += share
+        if u < acc:
+            return name
+    return None
+
+
+def draw_session(seed: int, draws: str) -> tuple:
+    """Both stations' (interference Specs, receive passbands) for a session's seed."""
+    irng = np.random.default_rng(np.random.SeedSequence([seed, 5]))
+    prng = np.random.default_rng(np.random.SeedSequence([seed, 6]))  # its own: v1's Specs as before
+    return (draw(irng, draws), draw(irng, draws)), (draw_passband(prng, draws), draw_passband(prng, draws))
+
+
+# --- the receive passband ------------------------------------------------------------------
+
+# A radio's receive filter: gain (dB) at frequencies (Hz), linear in dB between
+# them. From the floor's shape on two volunteer nodes (2026-11, against its
+# 500-2500 Hz median): wide is the one's (-4.7 at 300 Hz, -3 at 2400, -8 at
+# 2700, -15 at 2800), narrow the other's narrower setting (-15 at 2400).
+PASSBANDS = {
+    "wide": ((0, -40), (150, -25), (200, -12), (300, -4.7), (400, -1), (500, 0), (700, 1), (1000, 0.8), (1500, 0),
+             (2000, -1.2), (2400, -3), (2500, -3.6), (2600, -4.8), (2700, -8), (2800, -15), (2900, -25),
+             (3000, -35), (FS / 2, -50)),
+    "narrow": ((0, -40), (150, -15), (200, -6), (300, -2.5), (400, -0.8), (500, 0), (2000, -1.5), (2200, -5),
+               (2400, -15), (2500, -22), (2600, -30), (2700, -40), (2800, -50), (FS / 2, -60)),
+}
+
+
+def passband(y: np.ndarray, name: str | None) -> np.ndarray:
+    """y through the receive passband PASSBANDS[name] (None: y itself), zero-phase."""
+    if name is None or len(y) == 0:
+        return y
+    f_db = np.array(PASSBANDS[name], dtype=float)
+    f = np.fft.rfftfreq(len(y), 1 / FS)
+    # ponytail: one circular FFT per block, so a block's last few ms leak into its first;
+    # the session's blocks start and end in noise (PAD_S, StationNoise's 1 s chunks)
+    return np.fft.irfft(np.fft.rfft(y) * 10 ** (np.interp(f, f_db[:, 0], f_db[:, 1]) / 20), len(y))

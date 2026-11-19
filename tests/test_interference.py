@@ -79,8 +79,52 @@ def test_draw_is_in_range(draws):
     for s in specs:
         assert len(s.qrm) <= r.qrm_max
         for q in s.qrm:
+            k = (r.qrm or {}).get(q.kind, {})
+            inr, duty, on = k.get("inr_db", r.inr_db), k.get("duty", r.duty), k.get("on_s", r.on_s)
             assert I.PASSBAND_HZ[0] <= q.f_hz - q.bw_hz / 2 and q.f_hz + q.bw_hz / 2 <= I.PASSBAND_HZ[1]
-            assert r.inr_db[0] <= q.inr_db <= r.inr_db[1] and r.duty[0] <= q.duty <= r.duty[1]
+            assert inr[0] <= q.inr_db <= inr[1] and duty[0] <= q.duty <= duty[1] and on[0] <= q.on_s <= on[1]
+            if "bw_hz" in k:
+                assert k["bw_hz"][0] <= q.bw_hz <= k["bw_hz"][1]
+
+
+def test_old_draws_reproduce():
+    """v1 and mild draw what they drew before onair was added (earlier studies' data reproduces)."""
+    import hashlib
+
+    for draws, digest in (("v1", "2573e18219e440b1"), ("mild", "40326ffa3a9fdad5")):
+        rng = np.random.default_rng(123)
+        s = "".join(repr(I.draw(rng, draws)) for _ in range(500))
+        assert hashlib.sha256(s.encode()).hexdigest()[:16] == digest
+        assert I.DRAWS[draws].wander_db == 0 and I.draw_passband(rng, draws) is None
+
+
+def test_onair_draw_shape():
+    """onair: impulses mostly alone, a few loud draws; FSK hoppers the main QRM kind, carriers ~10%;
+    every station a passband in its shares (wide 0.6, narrow 0.3, flat the rest)."""
+    rng = np.random.default_rng(9)
+    specs = [I.draw(rng, "onair") for _ in range(2000)]
+    imps = [s.impulses for s in specs if s.impulses]
+    assert all(1.0 <= im.per_train <= 1.5 and im.height_sd_db == 2.0 for im in imps)
+    loud = np.mean([im.height_db > 17 for im in imps])
+    assert 0.005 < loud < 0.05
+    kinds = [q.kind for s in specs for q in s.qrm]
+    share = {k: kinds.count(k) / len(kinds) for k in I.KINDS}
+    assert share["fsk"] > 0.5 and 0.05 < share["carrier"] < 0.12
+    pbs = [I.draw_passband(rng, "onair") for _ in range(4000)]
+    assert pbs.count("wide") / 4000 == pytest.approx(0.6, abs=0.03)
+    assert pbs.count("narrow") / 4000 == pytest.approx(0.3, abs=0.03)
+
+
+@pytest.mark.parametrize("name", sorted(I.PASSBANDS))
+def test_passband_shape(name):
+    """White noise through a passband: its gain per band is the table's (linear in dB between points)."""
+    x = np.random.default_rng(2).normal(size=60 * FS)
+    y = I.passband(x, name)
+    table = np.array(I.PASSBANDS[name], dtype=float)
+    for f in (300, 1000, 2000, 2400, 2700):
+        got = 10 * np.log10(band_power(y, f - 20, f + 20) / band_power(x, f - 20, f + 20))
+        assert got == pytest.approx(np.interp(f, table[:, 0], table[:, 1]), abs=0.6)
+    assert I.passband(x, None) is x
 
 
 def _phy_session():
@@ -100,6 +144,26 @@ def test_clean_channel_hears_as_before():
     x = np.random.default_rng(1).normal(0, 0.1, 4000)
     a, b = PS.ContinuousChannel("mpg", 3.0, 9, 60), PS.ContinuousChannel("mpg", 3.0, 9, 60)
     np.testing.assert_array_equal(a.apply(x, 5.0), b.apply(x, 5.0, rx=1))
+
+
+def test_passband_is_per_station_on_signal_and_noise():
+    """Station 1's narrow passband takes a 2700 Hz tone and the floor there down
+    alike (in-band SNR unchanged); station 0 (flat) hears what a channel without
+    passbands gives; the passband reaches the station's noise profile too."""
+    PS = _phy_session()
+    x = np.cos(2 * np.pi * 2700 * np.arange(2 * FS) / FS) * 0.1
+    flat = PS.ContinuousChannel("awgn", 20.0, 5, 60)
+    ch = PS.ContinuousChannel("awgn", 20.0, 5, 60, passband=(None, "narrow"))
+    np.testing.assert_array_equal(ch.apply(x, 5.0, rx=0), flat.apply(x, 5.0, rx=0))
+    ch = PS.ContinuousChannel("awgn", 20.0, 5, 60, passband=(None, "narrow"))
+    a, b = flat.apply(x, 5.0, rx=1), ch.apply(x, 5.0, rx=1)
+    assert 10 * np.log10(band_power(b, 2690, 2710) / band_power(a, 2690, 2710)) == pytest.approx(-40, abs=1)
+    assert 10 * np.log10(band_power(b, 2600, 2650) / band_power(a, 2600, 2650)) == pytest.approx(-34, abs=2)
+    sn = PS.StationNoise(ch)
+    sn.feed(0, 30.0)
+    sn.feed(1, 30.0)
+    top = [sn.profile[i].snapshot()["noise_db"][4] - sn.profile[i].snapshot()["noise_db"][1] for i in (0, 1)]
+    assert top[0] == pytest.approx(0, abs=1) and top[1] < -6
 
 
 def test_each_station_hears_its_own_interference():

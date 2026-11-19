@@ -98,6 +98,16 @@ followed; exploration is `session_data.EXPLORE` (0.2) unless noted.
 Older sets carry no link-history or energy columns: their rows read as "no
 history" (the inputs' flag 0).
 
+**Interference sets.** `session_data --interference` draws each station's
+interference and receive passband from `interference.DRAWS`. New data uses
+`onair` (the default since #260): impulses, QRM shapes and occupancy from two
+volunteer nodes' noise, a 1 dB floor wander (the set's `wander_db`, unless
+`--wander` is given) and a receive passband per station (wide 60%, narrow 30%,
+flat 10%), applied to signal, floor and interference. The `intf` column then
+ends in `pb:<name>`. `v1` and `mild` reproduce the 2026-10 rounds' draws
+(`--interference v1`; mild was run with `--wander 1.0`). Details and the
+like-for-like check: `docs/interference-plan.md`.
+
 ## Offline sets
 
 `outcome_data.py`: one sample is a measured history plus 4 candidate bursts
