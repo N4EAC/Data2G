@@ -358,39 +358,3 @@ def test_a_cpm_burst_whose_front_faded_locks_on_its_mid_block():
         assert ok, (name, [ev["header"]["spec"].name for ev in got])
     y = np.random.default_rng(4).normal(size=60 * FS)
     assert all(cpm.find_mid(g, y[i:i + 2 * FS]) is None for g in cpm.GRIDS.values() for i in range(0, len(y), 2 * FS))
-
-
-@pytest.mark.parametrize("kind", ["ofdm", "cpm"])
-def test_a_burst_joined_partway_reads_as_data2g_on_air(kind):
-    """A burst heard from its middle (no preamble, header or copy: one that
-    began while we transmitted): with `sense`, data2g_on_air and BUSY
-    hold while it lasts and let go soon after; noise before it never reads.
-    Without `sense`, data2g_on_air is just a lock (busy)."""
-    from data2g import cpm
-    from data2g.arq.policy import slots_for
-
-    rng = np.random.default_rng(3)
-    if kind == "ofdm":
-        spec = SUBMODES["qpsk-r1/2"]
-        x = modem.modulate([rng.bytes(codes.payload_bytes(spec)) for _ in range(slots_for(spec, 12.0))], spec)
-    else:
-        g = cpm.GRIDS["c16r25"]
-        x = cpm.bandpass(g, cpm.tones(g, rng.integers(0, g.m, 300)))  # 12 s of tones: data, as far as presence sees
-    x = x[3 * FS:9 * FS]
-    y = hfchannel.awgn(hfchannel.freq_shift(np.concatenate([np.zeros(8 * FS), x, np.zeros(5 * FS)]), 31.0), 0,
-                       seed=5, s_power=hfchannel.active_power(x))
-    for sense in (True, False):
-        rx = receiver.Receiver(modem.Accept.of(None, 16.0), cpm_grids=tuple(cpm.GRIDS))
-        rx.sense = sense
-        on = []
-        for i in range(0, len(y), FS // 10):
-            rx.feed(y[i:i + FS // 10])
-            on.append((i / FS, rx.data2g_on_air, rx.busy, rx.channel_busy))
-        if not sense:
-            assert all(a == b for _, a, b, _ in on)
-            continue
-        assert not any(a or c for t, a, _, c in on if t < 8.0)
-        assert all(a for t, a, _, _ in on if 10.0 <= t < 14.0)
-        assert not any(a or c for t, a, _, c in on if t >= 17.0)
-        # BUSY with it, while nothing is locked (a lock keeps its own pilots-or-energy rule)
-        assert all(c for t, a, b, c in on if 10.0 <= t < 14.0 and not b)

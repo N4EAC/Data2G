@@ -812,86 +812,6 @@ std::vector<double> pilot_coherence(std::span<const double> x, const Lock& lock,
     return out;
 }
 
-namespace {
-// modem._pilot_fold: fold[f, ph] = sum over frames i (in order) of D[f, t0 + i * FR + ph], D the pair products
-// (waveform::pair_products of the matched filter's outputs, COPY_PAIRS pairs a frame apart)
-Mat<cd> pilot_fold(std::span<const cd* const> D_rows, size_t t0, size_t mm) {
-    const size_t FR = FRAME_SAMPLES;
-    Mat<cd> fold(D_rows.size(), FR);
-    for (size_t f = 0; f < D_rows.size(); ++f) {
-        const cd* d = D_rows[f] + t0;
-        for (size_t i = 0; i < mm; ++i)
-            for (size_t ph = 0; ph < FR; ++ph) fold[f][ph] = i ? fold[f][ph] + d[i * FR + ph] : d[ph];
-    }
-    return fold;
-}
-}  // namespace
-
-void FoldTrack::acc(std::span<const cd* const> D_rows, int64_t a, int64_t u0, int64_t u1, bool add) {
-    const int64_t F = FRAME_SAMPLES;
-    for (int64_t u = u0; u < u1;) {
-        const int64_t q = u % F, k = std::min(u1 - u, F - q);
-        for (size_t f = 0; f < D_rows.size(); ++f) {
-            // as doubles (std::complex is two, array-compatible): the same sums, and the loop vectorizes
-            double* __restrict r = reinterpret_cast<double*>(R_[f] + q);
-            const double* __restrict d = reinterpret_cast<const double*>(D_rows[f] + (u - a));
-            if (add)
-                for (int64_t i = 0; i < 2 * k; ++i) r[i] += d[i];
-            else
-                for (int64_t i = 0; i < 2 * k; ++i) r[i] -= d[i];
-        }
-        u += k;
-    }
-}
-
-const Mat<cd>& FoldTrack::fold(std::span<const cd* const> D_rows, size_t dcols, int64_t a, int64_t lo, int64_t hi) {
-    if (!have_ || n_ >= RENEW || !(lo_ <= lo && lo <= hi_ && hi_ <= hi) || lo_ < a ||
-        hi > a + static_cast<int64_t>(dcols)) {
-        R_ = Mat<cd>(D_rows.size(), FRAME_SAMPLES);
-        acc(D_rows, a, lo, hi, true);
-        have_ = true;
-        n_ = 0;
-    } else {
-        acc(D_rows, a, hi_, hi, true);
-        acc(D_rows, a, lo_, lo, false);
-        ++n_;
-    }
-    lo_ = lo;
-    hi_ = hi;
-    return R_;
-}
-
-std::pair<int64_t, int64_t> presence_window(size_t dcols, int64_t window) {
-    const int64_t PF = static_cast<int64_t>(COPY_PAIRS) * FRAME_SAMPLES;
-    const int64_t n = static_cast<int64_t>(dcols) + PF;  // the outputs the products were made from
-    const int64_t W = std::min<int64_t>(n, window);
-    return {n - W, W < PF ? 0 : (W - PF) / FRAME_SAMPLES};
-}
-
-Presence fold_presence(const Mat<cd>& fold, double level, int64_t m) {
-    Presence out;
-    std::vector<double> mag(fold.cols, -equalizer::INF);
-    for (size_t f = 0; f < fold.rows; ++f)
-        for (size_t ph = 0; ph < fold.cols; ++ph) mag[ph] = std::max(mag[ph], std::abs(fold[f][ph]));
-    const double top = *std::max_element(mag.begin(), mag.end());
-    out.m = static_cast<int>(m);
-    out.peak = top / (level * std::sqrt(static_cast<double>(m * COPY_PAIRS)));
-    out.contrast = top / (dsp::quantile(mag, 0.5) + 1e-300);
-    return out;
-}
-
-Presence pilot_presence(std::span<const cd* const> D_rows, size_t dcols, double level, int64_t window) {
-    const auto [t0, m] = presence_window(dcols, window);
-    if (m < 1) return {};
-    return fold_presence(pilot_fold(D_rows, static_cast<size_t>(t0), static_cast<size_t>(m)), level, m);
-}
-
-bool Presence::present() const {
-    return m >= PRESENCE_MIN_M && peak >= PRESENCE_PEAK &&
-           contrast >= PRESENCE_CONTRAST[std::min<std::size_t>(static_cast<std::size_t>(m - PRESENCE_MIN_M),
-                                                                PRESENCE_CONTRAST.size() - 1)];
-}
-
 std::vector<double> cfo_aliases(cd d, double centre) {
     const double alias = static_cast<double>(FS) / FRAME_SAMPLES;
     const double frac = std::arg(d) / (2 * PI) * alias;
@@ -905,37 +825,56 @@ std::vector<double> cfo_aliases(cd d, double centre) {
 std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, const Accept* accept,
                               const Mat<cd>* C_in, std::optional<double> level, double* peak) {
     if (!C_in && level) throw std::invalid_argument("find_copy: level without C");
-    if (!C_in) return find_copy(x, band, accept, std::span<const cd* const>{}, 0, level, peak);
-    const Mat<cd> D = waveform::pair_products(C_in->row_ptrs(), C_in->cols, FRAME_SAMPLES, COPY_PAIRS);
-    return find_copy(x, band, accept, D.row_ptrs(), D.cols, level, peak);
+    std::vector<const cd*> rows;
+    if (C_in)
+        for (size_t i = 0; i < C_in->rows; ++i) rows.push_back((*C_in)[i]);
+    return find_copy(x, band, accept, rows, C_in ? C_in->cols : 0, level, peak);
 }
 
 std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, const Accept* accept,
-                              std::span<const cd* const> D_rows, size_t dcols, std::optional<double> level,
-                              double* peak, const Mat<cd>* fold_in) {
+                              std::span<const cd* const> C_rows, size_t cols, std::optional<double> level,
+                              double* peak) {
     const auto& b = waveform::band(band);
     const auto z0 = waveform::to_baseband(x);
     const auto freqs = waveform::cfo_grid();
-    Mat<cd> D_own;
+    Mat<cd> C_own;
     std::vector<const cd*> own_rows;
-    if (D_rows.empty()) {
+    if (C_rows.empty()) {
         if (level) throw std::invalid_argument("find_copy: level without C");
-        const Mat<cd> C = waveform::repeat_corrs(z0, waveform::unit_template(b), freqs);
-        level = waveform::noise_level(C);
-        D_own = waveform::pair_products(C.row_ptrs(), C.cols, FRAME_SAMPLES, COPY_PAIRS);
-        own_rows = D_own.row_ptrs();
-        D_rows = own_rows;
-        dcols = D_own.cols;
+        C_own = waveform::repeat_corrs(z0, waveform::unit_template(b), freqs);
+        level = waveform::noise_level(C_own);
+        for (size_t i = 0; i < C_own.rows; ++i) own_rows.push_back(C_own[i]);
+        C_rows = own_rows;
+        cols = C_own.cols;
     } else if (!level) {
         throw std::invalid_argument("find_copy: C without level");
     }
-    const size_t F = D_rows.size();
-    const int64_t m = static_cast<int64_t>(dcols) / FRAME_SAMPLES;
+    const size_t F = C_rows.size();
+    const int64_t n = static_cast<int64_t>(cols) - static_cast<int64_t>(COPY_PAIRS) * FRAME_SAMPLES;
+    const int64_t m = n >= 0 ? n / FRAME_SAMPLES : -((-n + FRAME_SAMPLES - 1) / FRAME_SAMPLES);
     if (m < 1) return std::nullopt;
-    const size_t FR = FRAME_SAMPLES;
-    Mat<cd> own;
-    if (!fold_in) own = pilot_fold(D_rows, 0, static_cast<size_t>(m));
-    const Mat<cd>& fold = fold_in ? *fold_in : own;
+    const size_t FR = FRAME_SAMPLES, mm = static_cast<size_t>(m);
+    // fold[f, ph] = sum over frames i (in order) of D[f, i * FR + ph],
+    // D = sum_j d[:, j FR : j FR + m FR], d[:, t] = C[:, FR + t] conj(C[:, t])
+    Mat<cd> fold(F, FR);
+    std::vector<cd> drow(mm * FR);
+    for (size_t f = 0; f < F; ++f) {
+        const cd* c = C_rows[f];
+        // c[FR + u] * conj(c[u]) with the products spelled out: std::complex's operator* carries
+        // numpy-unlike NaN handling that stops the loop vectorizing (same values for finite input)
+        for (size_t t = 0; t < mm * FR; ++t) {
+            double sr = 0.0, si = 0.0;
+            for (size_t j = 0; j < static_cast<size_t>(COPY_PAIRS); ++j) {
+                const size_t u = j * FR + t;
+                const double ar = c[FR + u].real(), ai = c[FR + u].imag(), br = c[u].real(), bi = c[u].imag();
+                sr += ar * br + ai * bi;
+                si += ai * br - ar * bi;
+            }
+            drow[t] = {sr, si};
+        }
+        for (size_t i = 0; i < mm; ++i)
+            for (size_t ph = 0; ph < FR; ++ph) fold[f][ph] = i ? fold[f][ph] + drow[i * FR + ph] : drow[ph];
+    }
     std::vector<double> mag(FR, -equalizer::INF);
     for (size_t f = 0; f < F; ++f)
         for (size_t ph = 0; ph < FR; ++ph) mag[ph] = std::max(mag[ph], std::abs(fold[f][ph]));

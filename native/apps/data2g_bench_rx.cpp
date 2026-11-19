@@ -2,8 +2,7 @@
 // machine with no Python. Each file is one burst (made by a script of numpy's channel simulator):
 //
 //   data2g-bench-rx [--threads N] [--reps R] [--dd-budget S] BURST.d2gb ...
-//   data2g-bench-rx --listen SECONDS [--cpm-only] [--sense]  (the streaming Receiver on noise, per 20 ms feed;
-//                                                    --sense: data2g_on_air read too, as with KISS)
+//   data2g-bench-rx --listen SECONDS [--cpm-only]   (the streaming Receiver on noise, per 20 ms feed)
 //   data2g-bench-rx --shifter N                     (GearShifter::recommend on random observations)
 //   data2g-bench-rx --listen S --expect             (... an expected slot 1 s ahead every 8 s, all CPM grids: #135)
 //   data2g-bench-rx --primed BURST.d2gb ...         (+ cpm::prime_lock on the true start's window and PRIME_TRIES
@@ -300,14 +299,12 @@ CpmRun run_cpm(const std::string& mode, int n_data, double sigma, bool stream, s
 }
 
 // The streaming Receiver on Gaussian noise, 20 ms feeds: CPU per feed (the listening load per audio feed).
-bool sense_on = false;  // --sense: Receiver::sense (data2g_on_air, KISS channel access)
 bool cwsense_on = BENCH_CWID;  // --no-cwsense: #134's tree without its detector (#135's listening load alone)
 
 void listen(double seconds, bool cpm_only, int expect) {
     std::vector<std::string_view> grids;
     for (const auto& g : tables::CPM_GRIDS) grids.push_back(g.name);
     receiver::Receiver rx(cpm_only ? modem::Accept{} : modem::Accept::of(), grids);
-    rx.sense = sense_on;
 #if BENCH_CWID
     cwid::CwSense cw;
 #endif
@@ -348,9 +345,9 @@ void listen(double seconds, bool cpm_only, int expect) {
     for (double v : ts) sum += v;
     std::sort(ts.begin(), ts.end());
     const auto q = [&](double p) { return 1e6 * ts[static_cast<std::size_t>(p * (ts.size() - 1))]; };
-    std::printf("listen %s%s%s%s%d: %.0f us per 20 ms feed (%.2f%% of a core), p50 %.0f p99 %.0f p99.9 %.0f max %.0f us over "
+    std::printf("listen %s%s%s%d: %.0f us per 20 ms feed (%.2f%% of a core), p50 %.0f p99 %.0f p99.9 %.0f max %.0f us over "
                 "%zu feeds, %d windows\n",
-                cpm_only ? "cpm only" : "all bands", sense_on ? " +sense" : "", cwsense_on ? " +cwsense" : "", expect ? " +expect " : "", expect,
+                cpm_only ? "cpm only" : "all bands", cwsense_on ? " +cwsense" : "", expect ? " +expect " : "", expect,
                 1e6 * sum / ts.size(), 100 * sum / (ts.size() * 0.02), q(0.5), q(0.99), q(0.999), 1e6 * ts.back(),
                 ts.size(), windows);
 }
@@ -467,7 +464,6 @@ int main(int argc, char** argv) {
         else if (a == "--cwid") cw = true;
         else if (a == "--nod" && more) nod_n = std::max(1, std::atoi(argv[++i]));
         else if (a == "--no-cwsense") cwsense_on = false;
-        else if (a == "--sense") sense_on = true;
         else if (a == "--shifter" && more) shifter_n = std::atoi(argv[++i]);
         else if (a == "--dd-budget" && more) {
             const std::string v = argv[++i];

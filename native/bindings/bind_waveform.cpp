@@ -114,10 +114,6 @@ void bind_waveform(py::module_& m) {
         return waveform::refine(view(z), band_of(b), n, f);
     });
     w.def("noise_level", [](const In<cdouble>& C) { return waveform::noise_level(mat(C)); });
-    w.def("pair_products", [](const In<cdouble>& C, int F, int P) {
-        const auto c = mat(C);
-        return np(waveform::pair_products(c.row_ptrs(), c.cols, F, P));
-    });
     w.def("crossings", [](const In<double>& D, double thr, std::size_t span, std::size_t limit) {
         return waveform::crossings(view(D), thr, span, limit);
     });
@@ -143,19 +139,6 @@ void bind_waveform(py::module_& m) {
             }));
         })
         .def("feed", [](SD& d, const In<cdouble>& z) { d.feed(view(z)); })
-        .def("kept_products", [](SD& d, int F, int P) {
-            const auto o = d.kept_products(F, P);
-            return py::make_tuple(o.start, rows<cdouble>(o.rows.size(), [&](std::size_t i) {
-                return std::span<const cdouble>(o.rows[i], o.cols);
-            }));
-        })
-        .def_readonly("d0", &SD::d0)
-        .def("products_from", [](SD& d, std::int64_t start, int F, int P) {
-            const auto o = d.products_from(start, F, P);
-            return py::make_tuple(o.start, rows<cdouble>(o.rows.size(), [&](std::size_t i) {
-                return std::span<const cdouble>(o.rows[i], o.cols);
-            }));
-        })
         .def("trim", &SD::trim)
         .def("level", &SD::level)
         .def("stat", [](const SD& d, std::int64_t lo, std::int64_t hi) { return np_move(d.stat(lo, hi)); })
