@@ -190,6 +190,7 @@ void bind_arq(py::module_& m) {
         .def_readwrite("data_lost", &Shifter::data_lost)
         .def_readwrite("ladder_left", &Shifter::ladder_left)
         .def_readwrite("spreads", &Shifter::spreads)
+        .def_readwrite("floor_spreads", &Shifter::floor_spreads)
         .def_readwrite("last_spread", &Shifter::last_spread)
         .def_readwrite("energies", &Shifter::energies)
         .def_readwrite("snrs", &Shifter::snrs)

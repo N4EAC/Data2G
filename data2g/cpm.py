@@ -619,14 +619,29 @@ def tone_metric(g: Grid, E: np.ndarray) -> np.ndarray:
     """(n_sym, m) tone energies of one codeword -> (n_sym, m) log P(E | tone
     sent) up to a per-symbol constant. Noncoherent square-law metric, exact
     for Rayleigh fading: E_m g, g = Es / (N0 (N0 + Es)), Es and N0 the
-    codeword's."""
+    codeword's, N0 plus the Doppler spill (spill())."""
     top = E.max(axis=1)
     n0 = np.median(np.sort(E, axis=1)[:, :-1]) / np.log(2)  # exponential: median = N0 ln 2
     n0 = max(n0, 1e-12 * np.mean(top) + 1e-300)  # noise-free tests
     es = max(np.mean(top) - n0, 1e-3 * n0)
+    n0 += spill(E, n0, es) * es
     # es / (n0 (n0 + es)) without its underflow: a codeword past the audio's
     # end (zero-padded: a header claiming more than arrived) reads as erasures
     return E * (es / (n0 + es) / n0)
+
+
+def spill(E: np.ndarray, n0: float, es: float) -> float:
+    """The share of Es each neighbour of a symbol's strongest tone holds over
+    N0, 0..1: fast fading (30 Hz on c16r25's 25 Hz tones) spreads a tone into
+    its neighbours, which the median N0 never sees (2 of 15 bins), so the
+    metric's confidence grew with SNR while the right tone won no more rows,
+    and the lock's header score fell under LOCK_LLR (#244: no lock 20% at
+    -5 dB, 60% at +20 dB, hilat). Counting it as noise caps the confidence
+    by the spread. ~0 on AWGN and slow fading."""
+    a = E.argmax(axis=1)
+    P = np.pad(E, ((0, 0), (1, 1)), constant_values=n0)  # an edge tone's missing neighbour: noise
+    r = np.arange(len(E))
+    return float(np.clip(np.mean(P[r, a] + P[r, a + 2] - 2 * n0) / 2 / es, 0.0, 1.0))
 
 
 def llrs(g: Grid, E: np.ndarray) -> np.ndarray:
@@ -766,10 +781,65 @@ def refine(g: Grid, x: np.ndarray, s0: int, cfo: float, spec: CpmSpec, n_data: i
     return best
 
 
+# Doppler spread from the winning tone's energy (spread()): autocovariance at
+# lags 1..SPREAD_LAGS. The lag-1 correlation alone read 6-19 Hz on 0.5 Hz
+# fading (each symbol's energy jitters with the modulation and noise: white,
+# so it sits at lag 0 only), which the old 0-3 Hz clip pinned at 3.0 on every
+# channel. Measured (2026-11-18, two-path 2 ms, -15..+20 dB): 0.5-4 Hz within
+# about 20% on every grid; c8r50 and c32r62 to 10 Hz; past what the grid
+# resolves, no correlation survives lag 1 and it reads SPREAD_MAX_HZ, if the
+# energy varies at all: AWGN has no correlation past lag 0 either. So with
+# none, the excess variance decides: var(top) less the noise's (2 n0 s +
+# n0^2, chi-square) over s^2 reads 0.00 on AWGN and 0.28-1.06 on fading of
+# 0.1-30 Hz at -10 dB and up (c32r62: -5); under SPREAD_EXCESS_MIN it is
+# no fading seen, 0.0. (At -15 dB the noise term swamps it and fast fading
+# reads 0.0 too: only the CPM floor works there either way.)
+# Native: cpm::measure.
+SPREAD_LAGS = 8
+SPREAD_MIN_SYMS = 16  # shorter: unmeasured (UNMEASURED_SPREAD_HZ: the shifter carries its last)
+UNMEASURED_SPREAD_HZ = 2.0  # equalizer.DEFAULT_SPREAD_HZ, policy.UNMEASURED_SPREAD_HZ
+SPREAD_KEEP = 0.05  # lags used: up to the first under this fraction of lag 1's
+SPREAD_MAX_HZ = 12.0
+SPREAD_EXCESS_MIN = 0.2
+SPREAD_SIG = 2.5  # the fit needs lag 1's correlation over SPREAD_SIG / sqrt(n): white energies pass by chance otherwise
+# and an excess variance of at least this: on AWGN at high SNR the noise's
+# variance is so small that the burst's own energy pattern passed SPREAD_SIG
+# (c8r50 +20 dB read 2.6 Hz)
+SPREAD_EXCESS_FIT = 0.05
+
+
+def spread(g: Grid, top: np.ndarray, n0: float) -> float:
+    """Doppler spread (2 sigma, Hz) from per-symbol energies (noise n0 per
+    bin): a least-squares fit of log c(k) = a - b k^2 (Gaussian Doppler:
+    c(k) = A exp(-(2 pi sigma k T)^2)) over the lags 1.. whose
+    autocovariance c(k) holds up; with none, too fast or no fading, by the
+    excess variance."""
+    n = len(top)
+    if n < SPREAD_MIN_SYMS:
+        return UNMEASURED_SPREAD_HZ
+    mean = np.mean(top)
+    t = top - mean
+    c = np.array([np.mean(t[k:] * t[:n - k]) for k in range(1, SPREAD_LAGS + 1)])
+    v = np.mean(t * t)
+    s = max(mean - n0, 1e-12)
+    excess = (v - (2 * n0 * s + n0 * n0)) / (s * s)
+    m = 0
+    while (excess >= SPREAD_EXCESS_FIT and c[0] > SPREAD_SIG / np.sqrt(n) * v and m < SPREAD_LAGS
+           and c[m] > SPREAD_KEEP * c[0]):
+        m += 1
+    if m < 2:
+        return SPREAD_MAX_HZ if excess >= SPREAD_EXCESS_MIN else 0.0
+    x = np.arange(1, m + 1, dtype=np.float64) ** 2
+    y = np.log(c[:m])
+    mx, my = np.mean(x), np.mean(y)
+    b = -np.sum((x - mx) * (y - my)) / np.sum((x - mx) ** 2)
+    return float(min(np.sqrt(max(b, 0.0)) * g.rate / np.pi, SPREAD_MAX_HZ))
+
+
 def measure(g: Grid, E: np.ndarray, n_sym: int) -> dict:
     """The gear shifter's measurements, as arq.phy.measure gives them for
-    OFDM: SNR in the 2500 Hz reference, a fading-rate proxy for spread
-    (symbol energies' decorrelation), and `snr`, per symbol, from the
+    OFDM: SNR in the 2500 Hz reference, Doppler spread (spread(), from the
+    winning tone's energy over time), and `snr`, per symbol, from the
     winning tone's energy over the noise bins (phy.measure makes the
     effective-MI features of it). Native cpm::measure."""
     from .config import FRAME_SAMPLES, SNR_REF_BW_HZ
@@ -778,9 +848,7 @@ def measure(g: Grid, E: np.ndarray, n_sym: int) -> dict:
     n0 = max(np.median(np.sort(E, axis=1)[:, :-1]) / np.log(2), 1e-300)
     snr = np.maximum(top / n0 - 1, 1e-6)
     es = max(float(np.mean(top) - n0), 1e-12)
-    rho = np.corrcoef(top[:-1], top[1:])[0, 1] if len(top) > 3 and np.std(top) > 0 else 1.0
-    spread = float(np.clip(np.sqrt(max(-np.log(max(rho, 1e-3)), 0)) * g.rate / np.pi, 0.0, 3.0))
-    return dict(snr_est=10 * np.log10(es / n0 * g.rate / SNR_REF_BW_HZ), spread_est=spread, delay_est_ms=0.0,
+    return dict(snr_est=10 * np.log10(es / n0 * g.rate / SNR_REF_BW_HZ), spread_est=spread(g, top, n0), delay_est_ms=0.0,
                 headroom=0.0, frames=max(1.0, n_sym * g.T / FRAME_SAMPLES), snr=snr)
 
 

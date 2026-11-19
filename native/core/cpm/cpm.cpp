@@ -492,13 +492,24 @@ Detection detect(const Grid& g, std::span<const double> x, double reach_hz, bool
 
 namespace {
 
-// cpm.tone_metric's factor: the square law's Es / (N0 (N0 + Es)), the codeword's Es and N0.
+// cpm.spill: the share of Es each neighbour of a row's strongest tone holds over N0, 0..1 (#244).
+double spill(const Mat<double>& E, double n0, double es) {
+    std::vector<double> nb(E.rows);
+    for (std::size_t r = 0; r < E.rows; ++r) {
+        const auto a = static_cast<std::size_t>(std::max_element(E[r], E[r] + E.cols) - E[r]);  // np.argmax: first
+        nb[r] = (a > 0 ? E[r][a - 1] : n0) + (a + 1 < E.cols ? E[r][a + 1] : n0) - 2 * n0;
+    }
+    return std::clamp(np_mean(nb) / 2 / es, 0.0, 1.0);
+}
+
+// cpm.tone_metric's factor: the square law's Es / (N0 (N0 + Es)), the codeword's Es, N0 plus the spill.
 double metric_scale(const Mat<double>& E) {
     const auto top = row_max(E);
     const double mtop = np_mean(top);
     double n0 = median_rest(E) / std::numbers::ln2;  // exponential: median = N0 ln 2
     n0 = std::max(n0, 1e-12 * mtop + 1e-300);
     const double es = std::max(mtop - n0, 1e-3 * n0);
+    n0 += spill(E, n0, es) * es;
     return es / (n0 + es) / n0;
 }
 
@@ -852,6 +863,49 @@ std::optional<Lock> late_lock(const Grid& g, std::span<const double> x, const Lo
     return make_lock(g, cand.start, cand.cfo, cand.score, h, tables::CPM.hdr_copies);
 }
 
+// data2g.cpm.spread: Doppler spread from the winning tone's energy, a
+// least-squares fit of log c(k) = a - b k^2 over the lags 1.. whose
+// autocovariance holds up; with none, too fast or no fading by the excess
+// variance (constants: cpm.py's SPREAD_*).
+static double spread(const Grid& g, const std::vector<double>& top, double n0) {
+    constexpr int LAGS = 8;
+    constexpr std::size_t MIN_SYMS = 16;
+    constexpr double KEEP = 0.05, MAX_HZ = 12.0, UNMEASURED_HZ = 2.0, EXCESS_MIN = 0.2, SIG = 2.5, EXCESS_FIT = 0.05;
+    const std::size_t n = top.size();
+    if (n < MIN_SYMS) return UNMEASURED_HZ;
+    const double m0 = np_mean(top);
+    std::vector<double> t(n), c(LAGS);
+    for (std::size_t i = 0; i < n; ++i) t[i] = top[i] - m0;
+    for (int k = 1; k <= LAGS; ++k) {
+        std::vector<double> p(n - k);
+        for (std::size_t i = 0; i + k < n; ++i) p[i] = t[i + k] * t[i];
+        c[k - 1] = np_mean(p);
+    }
+    std::vector<double> sq(n);
+    for (std::size_t i = 0; i < n; ++i) sq[i] = t[i] * t[i];
+    const double v = np_mean(sq);
+    const double s = std::max(m0 - n0, 1e-12);
+    const double excess = (v - (2 * n0 * s + n0 * n0)) / (s * s);
+    int m = 0;
+    while (excess >= EXCESS_FIT && c[0] > SIG / std::sqrt(static_cast<double>(n)) * v && m < LAGS &&
+           c[m] > KEEP * c[0])
+        ++m;
+    if (m < 2) return excess >= EXCESS_MIN ? MAX_HZ : 0.0;
+    std::vector<double> x(m), y(m);
+    for (int i = 0; i < m; ++i) {
+        x[i] = static_cast<double>((i + 1) * (i + 1));
+        y[i] = std::log(c[i]);
+    }
+    const double mx = np_mean(x), my = np_mean(y);
+    std::vector<double> sxy(m), sxx(m);
+    for (int i = 0; i < m; ++i) {
+        sxy[i] = (x[i] - mx) * (y[i] - my);
+        sxx[i] = (x[i] - mx) * (x[i] - mx);
+    }
+    const double b = -np_sum(sxy) / np_sum(sxx);
+    return std::min(std::sqrt(std::max(b, 0.0)) * g.rate / PI, MAX_HZ);
+}
+
 Measure measure(const Grid& g, const Mat<double>& E, int n_sym) {
     const auto top = row_max(E);
     const double n0 = std::max(median_rest(E) / std::numbers::ln2, 1e-300);
@@ -860,22 +914,7 @@ Measure measure(const Grid& g, const Mat<double>& E, int n_sym) {
     for (std::size_t i = 0; i < top.size(); ++i) out.snr[i] = std::max(top[i] / n0 - 1, 1e-6);
     const double mtop = np_mean(top);
     const double es = std::max(mtop - n0, 1e-12);
-    double rho = 1.0;
-    const std::size_t n = top.size();
-    double var = 0;
-    for (double t : top) var += (t - mtop) * (t - mtop);
-    if (n > 3 && var > 0) {  // Pearson of top[:-1] against top[1:] (np.corrcoef, clipped)
-        std::vector<double> a(top.begin(), top.end() - 1), b(top.begin() + 1, top.end());
-        const double ma = np_mean(a), mb = np_mean(b);
-        double sab = 0, saa = 0, sbb = 0;
-        for (std::size_t i = 0; i + 1 < n; ++i) {
-            sab += (a[i] - ma) * (b[i] - mb);
-            saa += (a[i] - ma) * (a[i] - ma);
-            sbb += (b[i] - mb) * (b[i] - mb);
-        }
-        rho = std::clamp(sab / std::sqrt(saa * sbb), -1.0, 1.0);
-    }
-    out.spread_est = std::clamp(std::sqrt(std::max(-std::log(std::max(rho, 1e-3)), 0.0)) * g.rate / PI, 0.0, 3.0);
+    out.spread_est = spread(g, top, n0);
     out.snr_est = 10 * std::log10(es / n0 * g.rate / config::SNR_REF_BW_HZ);
     out.frames = std::max(1.0, static_cast<double>(n_sym * g.T) / config::FRAME_SAMPLES);
     return out;

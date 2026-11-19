@@ -31,6 +31,7 @@ from pathlib import Path
 
 import numpy as np
 
+from data2g import hfchannel as HC
 from data2g import interference as INTF
 from data2g.arq import policy as G
 from data2g.arq import predictor as P
@@ -73,6 +74,12 @@ EXPLORE_FASTER = False
 # time, so the model had to extrapolate CPM at the floor (awgn -18: 1-codeword
 # bursts where 2 deliver twice the rate).
 FLOOR = False
+# --severe: ITU-R F.1487 severe profiles (hfchannel.ITU_PRESETS) half the
+# time, else Doppler 2-30 Hz (log-uniform) and delay 0-8 ms; SNR and drift
+# as the regular kind. Doppler past MPD's 2 Hz breaks OFDM tracking (one
+# pilot row per 144 ms) while CPM control still decodes, which the regular
+# kinds never show the model.
+SEVERE = False
 KINDS_ONLY = ()  # --kinds: only these channel kinds (outcome_data.KINDS names); with --high, AWGN allowed
 MEAS = ["snr_est", "spread_est", "delay_est_ms", "headroom", "frames"] + [f"mi_{c}" for c in P.CONSTS]
 FIELDS = (["seed", "kind", "doppler", "delay_ms", "snr", "snr_next", "cap", "band", "gap"] + MEAS
@@ -197,6 +204,15 @@ def session(seed):
         doppler, delay = (PS.L.PRESETS["mpg"] if kind == "mpg"
                           else (float(np.exp(rng.uniform(np.log(0.05), np.log(0.3)))), float(rng.uniform(0, 2))))
         snr0, drift = float(rng.uniform(-8, 0)), 0.0
+    elif SEVERE:
+        if rng.random() < 0.5:
+            kind = str(rng.choice(sorted(HC.ITU_PRESETS)))
+            doppler, delay = HC.ITU_PRESETS[kind].doppler_hz, HC.ITU_PRESETS[kind].delay_ms
+        else:
+            kind = "random"
+            doppler, delay = float(np.exp(rng.uniform(np.log(2.0), np.log(30.0)))), float(rng.uniform(0, 8))
+        snr0 = float(rng.uniform(-8, 30))
+        drift = float(rng.normal(0, 1.0))
     else:
         kinds = [(k, w) for k, w in O.KINDS if (k in KINDS_ONLY if KINDS_ONLY else not (HIGH and k == "awgn"))]
         ws = np.array([w for _, w in kinds])
@@ -238,6 +254,7 @@ def main():
     ap.add_argument("--fastlow", action="store_true", help="sustained low SNR on fast fading, edges explored (FASTLOW)")
     ap.add_argument("--explore-faster", action="store_true", help="FASTLOW's exploration on any kind (EXPLORE_FASTER)")
     ap.add_argument("--floor", action="store_true", help="sustained SNR at the CPM floor, -19..-4 dB (FLOOR)")
+    ap.add_argument("--severe", action="store_true", help="ITU severe profiles and 2-30 Hz Doppler (SEVERE)")
     ap.add_argument("--high", action="store_true", help="high SNR on fading channels (HIGH)")
     ap.add_argument("--kinds", default="", help="comma-separated channel kinds only (KINDS_ONLY), e.g. awgn")
     ap.add_argument("--interference", nargs="?", const="v1", default=None, choices=sorted(INTF.DRAWS),
@@ -250,11 +267,12 @@ def main():
     if PS.PEP_REF_DB is None and not a.average_snr:
         ap.error("DATA2G_PEP_REF_DB is unset: set it (5: noise against each burst's peak, as data2g-host "
                  "transmits) or pass --average-snr")
-    global SLOW, HIGH, INTERFERENCE, WANDER_DB, KINDS_ONLY, FASTLOW, EXPLORE_FASTER, FLOOR
+    global SLOW, HIGH, INTERFERENCE, WANDER_DB, KINDS_ONLY, FASTLOW, EXPLORE_FASTER, FLOOR, SEVERE
     # set before the pool forks: the workers inherit them
     SLOW, HIGH, INTERFERENCE, WANDER_DB = a.slow, a.high, a.interference, a.wander
     KINDS_ONLY = tuple(filter(None, a.kinds.split(",")))
     FASTLOW, EXPLORE_FASTER, FLOOR = a.fastlow, a.explore_faster, a.floor
+    SEVERE = a.severe
     new = not os.path.exists(a.out) or os.path.getsize(a.out) == 0
     done = set() if new else {int(r["seed"]) for r in csv.DictReader(open(a.out))}
     todo = [s for s in range(a.first, a.first + a.sessions) if s not in done]
