@@ -18,7 +18,6 @@ from data2g.arq.engine import Engine
 from data2g.config import FS, SNR_REF_BW_HZ
 from data2g.host import Host
 from data2g.kisslink import KissLink
-from data2g.receiver import Receiver
 
 BLOCK = FS // 10
 ACK = 0x1234  # the KISS ACKMODE tag of the frame that anchors a window (HAND LISTEN's ack)
@@ -791,11 +790,14 @@ def test_hand_overhear_yields_and_refuses():
         assert h.out_cmd.pop() == want, line
 
 
-def test_lost_burst_is_a_ref(monkeypatch):
+def test_lost_burst_is_a_ref(monkeypatch, pure):
     """A burst whose header was heard but whose data failed is a Hand
     reference too: the case where a bystander can't copy net control's call
     (issue #210). One whose receive failed outright is marked LOST
     (test_released_lock_is_not_reported)."""
+    from data2g.arq.engine import Engine
+    from data2g.receiver import Receiver
+
     b = Engine("K2XYZ", seed=2, kiss=KissLink())
     b.kiss.enqueue(b"x" * 400)
     out = []
@@ -820,11 +822,12 @@ def test_lost_burst_is_a_ref(monkeypatch):
 
 
 @pytest.mark.parametrize("released", [False, True])
-def test_released_lock_is_not_reported(released):
+def test_released_lock_is_not_reported(released, pure):
     """A lock the receiver let go (Receiver._release: a suspect header's pilots
     absent; _unconfirmed: a CPM lock's mid block absent) was nothing on air
-    (KG9NI, K7EK: 90% of lost bursts): no Hand REF and no BCAST * MISSED.
+    (two volunteer nodes: 90% of lost bursts): no Hand REF and no BCAST * MISSED.
     A burst received and lost still is both."""
+    from data2g.arq.engine import Engine
     from data2g.arq.modes import MODES
 
     h = dict(spec=MODES["qpsk-r1/5"], n_cw=3, score=0.30, cfo=0.0)
