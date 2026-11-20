@@ -101,7 +101,17 @@ the same `--first` seeds draw other kinds after it.
 | `session_data_spr4_fastlow.csv` | `--fastlow`, as spr3 | fastlow | same | 9f2314e | |
 | `session_data_spr4_floor.csv` | `--floor`, as spr3 | floor | same | 9f2314e | |
 | `session_data_spr5_sev.csv` | `--severe`, as spr3 (`runs/spr5_chain.sh`) | severe | same | 54f4c62 (+ #244: Doppler spill in the CPM tone metric; fsk16r25 locks on 30 Hz) | the spr5 students' severe set (the fix changes nothing else measurable, so spr4's other sets stand) |
-| `session_data_<round>_short.csv` (available, not generated yet) | `--short --sessions 800`, the round's next free `--first` | AWGN 40%, MPG 30%, else Doppler 0.01-0.1 Hz; 0..15 dB drifting; linksim's chat or winlink workload (half each), 300 s | the round's | (#261) | on-air rows sit at snr_est 5..15, spread_est < 0.1 with ack replies measured on short bursts (22% of real rows; 4.1% of the spr4/spr5 session rows, mostly measured on 70-80 frame bulk bursts) |
+| `session_data_oa.csv` | `--agc --sessions 2900 --first 19000000` (`runs/onair_round.sh`), `DATA2G_SPREAD_CARRY=1` | regular; every set below: receiver AGC (`--agc`) and a receive passband per station; every kind incl. mpa/mpl | the installed CNP (sprs46f), offsets as shipped, Python shifter | 8345234 (onair-integration: #263-#269 + false-lock-not-reported) | every input moved (#255 mutes, #257 gauge, #258 snr_est noise, #260 passband): the onair students' sets |
+| `session_data_oa_slow.csv` | `--slow --agc --sessions 800 --first 19100000` (same) | slow | same | 8345234 |  |
+| `session_data_oa_high.csv` | `--high --agc --sessions 1200 --first 19200000` (same) | high | same | 8345234 |  |
+| `session_data_oa_awgnhigh.csv` | `--high --kinds awgn --agc --sessions 400 --first 19300000` (same) | high AWGN | same | 8345234 |  |
+| `session_data_oa_fastlow.csv` | `--fastlow --agc --sessions 1200 --first 19400000` (same) | fastlow | same | 8345234 |  |
+| `session_data_oa_floor.csv` | `--floor --agc --sessions 3000 --first 19500000` (same) | floor | same | 8345234 |  |
+| `session_data_oa_sev.csv` | `--severe --agc --sessions 2000 --first 19700000` (same) | severe | same | 8345234 |  |
+| `session_data_oa_short.csv` | `--short --agc --sessions 800 --first 19800000` (same) | AWGN 40%, MPG 30%, else Doppler 0.01-0.1 Hz; 0..15 dB drifting; linksim's chat or winlink workload (half each), 300 s | same | 8345234 | on-air rows sit at snr_est 5..15, spread_est < 0.1 with ack replies measured on short bursts (#261); added, not weighted |
+| `session_data_oa_intf.csv` | `--interference --agc --sessions 1000 --first 20000000` (same) | regular, each station's interference from the onair draws (1 dB floor wander) | same | 8345234 | on-air noise shapes (#260), a third of the clean set: interfered data has cost clean low-SNR fading before |
+| `session_data_oa_intf_slow.csv` | `--interference --slow --agc --sessions 300 --first 20100000` (same) | slow, onair | same | 8345234 |  |
+| `session_data_oa_intf_high.csv` | `--interference --high --agc --sessions 400 --first 20200000` (same) | high, onair | same | 8345234 |  |
 
 **Sizing `--short`.** A 100-session pilot (seeds 18000000-18000099, 2.6 min on 4 workers, peak RSS 0.3 GB) gave
 37.5 rows per session, 38% of them in that cell: median 4 frames measured and 1.05 s per burst (on air 4 and 1.05 s;
@@ -128,21 +138,14 @@ given). `v1` and `mild` reproduce the 2026-10 rounds' draws (`--interference
 v1 --no-passband`; mild was run with `--wander 1.0`). Details and the
 like-for-like check: `docs/interference-plan.md`.
 
-### Available, not yet in a set
-
-- `--agc` (issue #257): each station's receiver AGC drawn from
-  `data2g.agc.draw()` (none 1/4 of the time, else threshold 0-6 dB over the
-  floor, depth 10-30 dB, attack 5-50 ms, release 0.1-3 s), applied to every
-  burst it hears with its noise, after its receive passband
-  (`phy_session.ContinuousChannel(agc=)`). The
-  range runs from none to a bit more than two volunteer nodes showed on air:
-  the gain under a burst fell about as far as its `snr_est` within 0.1 s and
-  came back over 1-3 s. Rows get an `agc` column (the receiving station's,
-  empty for none). Off by default: without the flag nothing changes.
-- The energy reading (`NoiseProfile.span_snr_db`) scales its floor by the
-  out-of-band level's fall under the burst (#257). Without AGC it changes the
-  sims' readings by little (see the PR); sets made before it carry the
-  ungauged reading.
+**Receiver AGC (since #257; every onair session set).** `--agc`: each station's receiver AGC drawn from
+`data2g.agc.draw()` (none 1/4 of the time, else threshold 0-6 dB over the floor, depth 10-30 dB, attack 5-50 ms,
+release 0.1-3 s, its own seed stream `[seed, 7]`), applied to every burst it hears with its noise, after its receive
+passband (a radio's IF filter precedes its AGC; the AGC's floor stays the flat floor's power, as its on-air
+calibration was made). The range runs from none to a bit more than two volunteer nodes showed on air: the gain
+under a burst fell about as far as its `snr_est` within 0.1 s and came back over 1-3 s. Rows get an `agc` column
+(the receiving station's, empty for none). The energy reading (`NoiseProfile.span_snr_db`) scales its floor by
+the out-of-band level's fall under the burst (#257); sets made before it carry the ungauged reading.
 
 ## Offline sets
 
@@ -162,6 +165,8 @@ sent at the same moment; one row per candidate.
 | `outcome_data_general_spr.csv` | `with_native outcome_data --samples 40000 --first 17600000` (`runs/spr_round.sh`) | none | abdbef3 | the general set on the lag-fit CPM spread_est |
 | `outcome_data_general_spr3.csv` | as `outcome_data_general_spr.csv` (same seeds; `runs/spr3`) | none | 4af9731 | the general set on the fixed estimator and GF decoder |
 | `outcome_data_general_spr4.csv` | as spr3 (same seeds; `runs/spr4`) | none | 9f2314e | the spr5 students' offline set |
+| `outcome_data_general_oa.csv` | `with_native outcome_data --samples 40000 --first 19600000` (`runs/onair_round.sh`) | none | 8345234 | the general set on the integration tree: passband per sample, on-air presets in KINDS |
+| `outcome_data_n10top_oa.csv` | `with_native outcome_data --cands n10-64l-r3/4,n10-256l-r3/4 --samples 8000 --first 20300000` (same) | none | 8345234 | the two top n10 modes, likewise (replaces `outcome_data_n10top_gt.csv`: snr_est and passband moved) |
 
 ## Mixes
 
