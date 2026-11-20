@@ -319,13 +319,32 @@ def draw(rng: np.random.Generator, draws: str = "v1") -> Spec:
 
 
 def draw_passband(rng: np.random.Generator) -> str | None:
-    """One station's receive passband (a PASSBANDS name; None: flat), PASSBAND_SHARES."""
+    """One station's receive passband, PASSBAND_SHARES: an "ssb:..." filter of its
+    own (draw_ssb), a PASSBANDS name, or None (flat)."""
     u, acc = rng.random(), 0.0
     for name, share in PASSBAND_SHARES:
         acc += share
         if u < acc:
-            return name
+            return draw_ssb(rng) if name == "ssb" else name
     return None
+
+
+def draw_ssb(rng: np.random.Generator) -> str:
+    """A current SSB receive filter: -6 dB edges at 150-300 Hz and 2.7-3.1 kHz
+    above it, skirts to -40 dB over 60-140 Hz (low) and 100-300 Hz (high), a
+    -1.5..+1.5 dB tilt across the passband. "ssb:lo:hi:skirt_lo:skirt_hi:tilt"."""
+    lo = rng.uniform(150, 300)
+    hi = lo + rng.uniform(2700, 3100)
+    return f"ssb:{lo:.0f}:{hi:.0f}:{rng.uniform(60, 140):.0f}:{rng.uniform(100, 300):.0f}:{rng.uniform(-1.5, 1.5):.1f}"
+
+
+def passband_table(name: str) -> tuple:
+    """The (Hz, dB) points of a passband: PASSBANDS[name], or a draw_ssb filter's."""
+    if not name.startswith("ssb:"):
+        return PASSBANDS[name]
+    lo, hi, sl, sh, tilt = (float(v) for v in name.split(":")[1:])
+    return ((0, -60), (lo - sl, -40), (lo, -6), (lo + 50, -2), (lo + 150, -tilt / 2), (hi - 150, tilt / 2),
+            (hi - 50, -2), (hi, -6), (hi + sh, -40), (FS / 2, -60))
 
 
 def draw_session(seed: int, draws: str) -> tuple:
@@ -355,15 +374,18 @@ PASSBANDS = {
 }
 
 
-# Almost every radio receives through a filter; a few SDRs are as good as flat.
-PASSBAND_SHARES = (("wide", 0.6), ("narrow", 0.3))  # the rest (0.1) flat
+# Almost every radio receives through a current SSB filter (draw_ssb: 2.7-3.1 kHz
+# wide); an old narrow one (the narrow node's, 2 kHz) a little, so the model copes;
+# a few SDRs are as good as flat. "wide" (the other node's, ~2.4 kHz) is kept for
+# studies but not drawn.
+PASSBAND_SHARES = (("ssb", 0.85), ("narrow", 0.05))  # the rest (0.1) flat
 
 
 def passband(y: np.ndarray, name: str | None) -> np.ndarray:
-    """y through the receive passband PASSBANDS[name] (None: y itself), zero-phase."""
+    """y through the receive passband `name` (passband_table; None: y itself), zero-phase."""
     if name is None or len(y) == 0:
         return y
-    f_db = np.array(PASSBANDS[name], dtype=float)
+    f_db = np.array(passband_table(name), dtype=float)
     f = np.fft.rfftfreq(len(y), 1 / FS)
     # ponytail: one circular FFT per block, so a block's last few ms leak into its first;
     # the session's blocks start and end in noise (PAD_S, StationNoise's 1 s chunks)

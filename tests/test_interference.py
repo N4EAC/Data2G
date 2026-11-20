@@ -126,7 +126,7 @@ def test_old_draws_reproduce():
 
 def test_onair_draw_shape():
     """onair: impulses mostly alone, a few loud draws; FSK hoppers the main QRM kind, carriers ~10%;
-    noise mostly narrow and swept; passbands in their shares (wide 0.6, narrow 0.3, flat the rest)."""
+    noise mostly narrow and swept; passbands in their shares (ssb 0.85, narrow 0.05, flat the rest)."""
     rng = np.random.default_rng(9)
     specs = [I.draw(rng, "onair") for _ in range(2000)]
     imps = [s.impulses for s in specs if s.impulses]
@@ -139,16 +139,35 @@ def test_onair_draw_shape():
     noise = [q for s in specs for q in s.qrm if q.kind == "noise"]
     assert np.mean([q.span_hz > q.bw_hz for q in noise]) == pytest.approx(0.7, abs=0.06)
     pbs = [I.draw_passband(rng) for _ in range(4000)]
-    assert pbs.count("wide") / 4000 == pytest.approx(0.6, abs=0.03)
-    assert pbs.count("narrow") / 4000 == pytest.approx(0.3, abs=0.03)
+    assert sum(str(p).startswith("ssb:") for p in pbs) / 4000 == pytest.approx(0.85, abs=0.02)
+    assert pbs.count("narrow") / 4000 == pytest.approx(0.05, abs=0.015)
+    assert pbs.count(None) / 4000 == pytest.approx(0.10, abs=0.015)
+    assert len({p for p in pbs if p}) > 3000  # each station its own filter
 
 
-@pytest.mark.parametrize("name", sorted(I.PASSBANDS))
+def test_ssb_passband_draw():
+    """draw_ssb: -6 dB edges at 150-300 Hz and 2.7-3.1 kHz apart; w48 (325-2725 Hz) above -6 dB, and from
+    450 Hz up within the tilt (+-0.75 dB); -40 dB within 300 Hz of the top edge."""
+    rng = np.random.default_rng(4)
+    for _ in range(500):
+        t = np.array(I.passband_table(I.draw_ssb(rng)), dtype=float)
+        assert np.all(np.diff(t[:, 0]) >= 0)
+        f = np.linspace(100, 3900, 3801)
+        g = np.interp(f, t[:, 0], t[:, 1])
+        lo, hi = f[np.argmax(g >= -6)], f[len(g) - 1 - np.argmax(g[::-1] >= -6)]
+        assert 150 <= lo <= 301 and 2700 <= hi - lo <= 3101
+        assert g[(f >= 325) & (f <= 2725)].min() > -6
+        w48 = g[(f >= 450) & (f <= 2725)]
+        assert w48.min() > -0.76 and w48.max() < 0.76
+        assert np.interp(hi + 300, t[:, 0], t[:, 1]) <= -40 + 1e-9
+
+
+@pytest.mark.parametrize("name", sorted(I.PASSBANDS) + ["ssb:220:3050:100:200:1.2"])
 def test_passband_shape(name):
     """White noise through a passband: its gain per band is the table's (linear in dB between points)."""
     x = np.random.default_rng(2).normal(size=60 * FS)
     y = I.passband(x, name)
-    table = np.array(I.PASSBANDS[name], dtype=float)
+    table = np.array(I.passband_table(name), dtype=float)
     for f in (300, 1000, 2000, 2400, 2700):
         got = 10 * np.log10(band_power(y, f - 20, f + 20) / band_power(x, f - 20, f + 20))
         assert got == pytest.approx(np.interp(f, table[:, 0], table[:, 1]), abs=0.6)

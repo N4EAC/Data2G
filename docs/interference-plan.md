@@ -129,12 +129,19 @@ steady floor and no passband. `interference.DRAWS["onair"]`:
   over 300-2400 Hz.
 - Floor wander 1 dB (the set's `wander_db`).
 
-The receive passband (`interference.PASSBANDS`, `passband()`) is separate
-from the draw sets: every training session and offline sample draws one per
-station (`PASSBAND_SHARES`: wide 60%, narrow 30%, flat 10%; wide -4.7 dB at
-300 Hz, -3 at 2400, -8 at 2700, -15 at 2800; narrow -15 at 2400). phy_session
-applies it to everything the station hears, signal included, so in-band SNR
-does not change. A radio's IF filter precedes its AGC, so it goes before a
+The receive passband (`interference.passband()`) is separate from the draw
+sets: every training session and offline sample draws one per station
+(`PASSBAND_SHARES`). 85% are a current SSB filter of the station's own
+(`draw_ssb`): -6 dB edges at 150-300 Hz and 2.7-3.1 kHz above it, skirts to
+-40 dB over 60-140 Hz (low) and 100-300 Hz (high), a -1.5..+1.5 dB tilt. 5%
+are `narrow`, the older radio on one node (-6 dB at 200 Hz, -15 at 2400), so
+the model copes with one. 10% are flat (an SDR). `wide`, the other node's
+filter (-4.7 dB at 300 Hz, -3 at 2400, -8 at 2700), is kept for studies but
+not drawn. The first draw (wide 60%, narrow 30%) cost w48 a third of its
+codewords at high SNR under `narrow`, a 2.5 dB more pessimistic model on air
+than the nodes' outcomes (#262). phy_session applies it to everything the
+station hears, signal included, so in-band SNR does not change. A radio's IF
+filter precedes its AGC, so it goes before a
 simulated AGC. `loss_study.py` applies it only with `--passband`.
 
 Like for like (p50 unless noted; on air: the two nodes):
@@ -158,7 +165,7 @@ that delivers the same, minus the cell's):
 | | v1 | onair |
 |---|---|---|
 | no passband | 3.0-4.0 dB | 2.2-4.0 dB (MPG/MPP 2.2-2.7, AWGN 2.8-4.0) |
-| `--passband` (against clean with passbands) | 3.4-4.0 dB | 2.1-3.5 dB |
+| `--passband` (against clean with passbands; the first draw, wide 60% / narrow 30%) | 3.4-4.0 dB | 2.1-3.5 dB |
 
 The passband alone costs 0.3-0.8 dB of throughput at the top cells (clean
 AWGN +4, MPG +8), less lower down. With flat 300-2400 Hz noise sources (the
