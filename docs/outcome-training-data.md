@@ -101,17 +101,18 @@ the same `--first` seeds draw other kinds after it.
 | `session_data_spr4_fastlow.csv` | `--fastlow`, as spr3 | fastlow | same | 9f2314e | |
 | `session_data_spr4_floor.csv` | `--floor`, as spr3 | floor | same | 9f2314e | |
 | `session_data_spr5_sev.csv` | `--severe`, as spr3 (`runs/spr5_chain.sh`) | severe | same | 54f4c62 (+ #244: Doppler spill in the CPM tone metric; fsk16r25 locks on 30 Hz) | the spr5 students' severe set (the fix changes nothing else measurable, so spr4's other sets stand) |
-| `session_data_oa.csv` | `--agc --sessions 2900 --first 19000000` (`runs/onair_round.sh`), `DATA2G_SPREAD_CARRY=1` | regular; every set below: receiver AGC (`--agc`) and a receive passband per station; every kind incl. mpa/mpl | the installed CNP (sprs46f), offsets as shipped, Python shifter | 8345234 (onair-integration: #263-#269 + false-lock-not-reported) | every input moved (#255 mutes, #257 gauge, #258 snr_est noise, #260 passband): the onair students' sets |
-| `session_data_oa_slow.csv` | `--slow --agc --sessions 800 --first 19100000` (same) | slow | same | 8345234 |  |
-| `session_data_oa_high.csv` | `--high --agc --sessions 1200 --first 19200000` (same) | high | same | 8345234 |  |
-| `session_data_oa_awgnhigh.csv` | `--high --kinds awgn --agc --sessions 400 --first 19300000` (same) | high AWGN | same | 8345234 |  |
-| `session_data_oa_fastlow.csv` | `--fastlow --agc --sessions 1200 --first 19400000` (same) | fastlow | same | 8345234 |  |
-| `session_data_oa_floor.csv` | `--floor --agc --sessions 3000 --first 19500000` (same) | floor | same | 8345234 |  |
-| `session_data_oa_sev.csv` | `--severe --agc --sessions 2000 --first 19700000` (same) | severe | same | 8345234 |  |
-| `session_data_oa_short.csv` | `--short --agc --sessions 800 --first 19800000` (same) | AWGN 40%, MPG 30%, else Doppler 0.01-0.1 Hz; 0..15 dB drifting; linksim's chat or winlink workload (half each), 300 s | same | 8345234 | on-air rows sit at snr_est 5..15, spread_est < 0.1 with ack replies measured on short bursts (#261); added, not weighted |
-| `session_data_oa_intf.csv` | `--interference --agc --sessions 1000 --first 20000000` (same) | regular, each station's interference from the onair draws (1 dB floor wander) | same | 8345234 | on-air noise shapes (#260), a third of the clean set: interfered data has cost clean low-SNR fading before |
-| `session_data_oa_intf_slow.csv` | `--interference --slow --agc --sessions 300 --first 20100000` (same) | slow, onair | same | 8345234 |  |
-| `session_data_oa_intf_high.csv` | `--interference --high --agc --sessions 400 --first 20200000` (same) | high, onair | same | 8345234 |  |
+| `session_data_oa2.csv` | `--agc --sessions 2900 --first 21000000` (`runs/onair2_round.sh`), `DATA2G_SPREAD_CARRY=1` | regular; every set below: receiver AGC (`--agc`) and a receive passband per station; every kind incl. mpa/mpl | the installed CNP (sprs46f), offsets as shipped, Python shifter | e629a75 (onair-integration: #263-#269 + false-lock-not-reported, passband draw 27a4f88) | every input moved (#255 mutes, #257 gauge, #258 snr_est noise, #260 passband): the onair students' sets |
+| `session_data_oa2_slow.csv` | `--slow --agc --sessions 800 --first 21100000` (same) | slow | same | e629a75 |  |
+| `session_data_oa2_high.csv` | `--high --agc --sessions 1200 --first 21200000` (same) | high | same | e629a75 |  |
+| `session_data_oa2_awgnhigh.csv` | `--high --kinds awgn --agc --sessions 400 --first 21300000` (same) | high AWGN | same | e629a75 |  |
+| `session_data_oa2_fastlow.csv` | `--fastlow --agc --sessions 1200 --first 21400000` (same) | fastlow | same | e629a75 |  |
+| `session_data_oa2_floor.csv` | `--floor --agc --sessions 3000 --first 21500000` (same) | floor | same | e629a75 |  |
+| `session_data_oa2_sev.csv` | `--severe --agc --sessions 2000 --first 21700000` (same) | severe | same | e629a75 |  |
+| `session_data_oa2_short.csv` | `--short --agc --sessions 800 --first 21800000` (same) | AWGN 40%, MPG 30%, else Doppler 0.01-0.1 Hz; 0..15 dB drifting; linksim's chat or winlink workload (half each), 300 s | same | e629a75 | on-air rows sit at snr_est 5..15, spread_est < 0.1 with ack replies measured on short bursts (#261); added, not weighted |
+| `session_data_oa2_intf.csv` | `--interference --agc --sessions 1000 --first 22000000` (same) | regular, each station's interference from the onair draws (1 dB floor wander) | same | e629a75 | on-air noise shapes (#260), a third of the clean set: interfered data has cost clean low-SNR fading before |
+| `session_data_oa2_intf_slow.csv` | `--interference --slow --agc --sessions 300 --first 22100000` (same) | slow, onair | same | e629a75 |  |
+| `session_data_oa2_intf_high.csv` | `--interference --high --agc --sessions 400 --first 22200000` (same) | high, onair | same | e629a75 |  |
+| `session_data_oa.csv`, `session_data_oa_*.csv`, `outcome_data_{general,n10top}_oa.csv` (archived, superseded) | as the oa2 rows, seeds 19000000-20300000 (`runs/onair_round.sh`) | as oa2 | same | 8345234 | superseded by oa2: drew the first passband (wide 60%, narrow 30%); its model read 2.5 dB pessimistic on air |
 
 **Sizing `--short`.** A 100-session pilot (seeds 18000000-18000099, 2.6 min on 4 workers, peak RSS 0.3 GB) gave
 37.5 rows per session, 38% of them in that cell: median 4 frames measured and 1.05 s per burst (on air 4 and 1.05 s;
@@ -167,8 +168,8 @@ sent at the same moment; one row per candidate.
 | `outcome_data_general_spr.csv` | `with_native outcome_data --samples 40000 --first 17600000` (`runs/spr_round.sh`) | none | abdbef3 | the general set on the lag-fit CPM spread_est |
 | `outcome_data_general_spr3.csv` | as `outcome_data_general_spr.csv` (same seeds; `runs/spr3`) | none | 4af9731 | the general set on the fixed estimator and GF decoder |
 | `outcome_data_general_spr4.csv` | as spr3 (same seeds; `runs/spr4`) | none | 9f2314e | the spr5 students' offline set |
-| `outcome_data_general_oa.csv` | `with_native outcome_data --samples 40000 --first 19600000` (`runs/onair_round.sh`) | none | 8345234 | the general set on the integration tree: passband per sample, on-air presets in KINDS |
-| `outcome_data_n10top_oa.csv` | `with_native outcome_data --cands n10-64l-r3/4,n10-256l-r3/4 --samples 8000 --first 20300000` (same) | none | 8345234 | the two top n10 modes, likewise (replaces `outcome_data_n10top_gt.csv`: snr_est and passband moved) |
+| `outcome_data_general_oa2.csv` | `with_native outcome_data --samples 40000 --first 21600000` (`runs/onair2_round.sh`) | none | e629a75 | the general set on the integration tree: passband per sample, on-air presets in KINDS |
+| `outcome_data_n10top_oa2.csv` | `with_native outcome_data --cands n10-64l-r3/4,n10-256l-r3/4 --samples 8000 --first 22300000` (same) | none | e629a75 | the two top n10 modes, likewise (replaces `outcome_data_n10top_gt.csv`: snr_est and passband moved) |
 
 ## Mixes
 
