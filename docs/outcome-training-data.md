@@ -100,9 +100,11 @@ history" (the inputs' flag 0).
 
 **Receive passband (since #260).** Every session and offline sample, of
 every kind, hears through a receive passband drawn per station
-(`interference.PASSBAND_SHARES`: wide 60%, narrow 30%, flat 10%), applied to
-signal, floor and interference alike. The `passband` column records it
-(`wide`, `narrow`, `flat`). Sets made before #260 have none: reproduce them
+(`interference.PASSBAND_SHARES`: a drawn SSB filter 2.7-3.1 kHz wide 85%,
+narrow 5%, flat 10%; `docs/interference-plan.md`), applied to signal, floor
+and interference alike. The `passband` column records it (`ssb:lo:hi:skirt_lo:skirt_hi:tilt`,
+`narrow`, `flat`). Sets made with the first draw (wide 60%, narrow 30%) have
+`wide` in it. Sets made before #260 have none: reproduce them
 with `--no-passband` (`session_data.py`, `outcome_data.py`; the column is then
 empty).
 
