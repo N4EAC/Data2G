@@ -806,7 +806,7 @@ class Engine:
             meas = PHY.measure(r) if r is not None else None
             if ev.get("released"):
                 # let go (Receiver._release, _unconfirmed): nothing was there. On air
-                # (KG9NI, K7EK, 2026-11) 90% of lost bursts, 7-11 an hour: recorded,
+                # (two volunteer nodes, 2026-11) 90% of lost bursts, 7-11 an hour: recorded,
                 # but no Hand REF, energy reading or BCAST * MISSED
                 if self.rec:
                     self.rec.rx(t, ev["audio"], h, r, meas, self.noise.snapshot())
