@@ -715,11 +715,14 @@ BestHeader best_header(std::span<const cd> z0, std::span<const std::string_view>
     for (const auto name : search_bands(bands, accept)) {
         const Mat<double>* S = nullptr;
         std::int64_t col0 = 0;
+        bool quiet = false;
         for (const auto& st : stats)
             if (st.band == name) {
                 S = st.S;
                 col0 = st.col0;
+                quiet = st.quiet;
             }
+        if (quiet) continue;  // acquire would find nothing
         waveform::Acquisition acq_b;
         try {
             acq_b = waveform::acquire(z0, waveform::band(name), {}, ACQUIRE_REACH_HZ, {}, S, col0);
@@ -765,6 +768,12 @@ BestHeader best_header(std::span<const cd> z0, std::span<const std::string_view>
 
 Lock find_burst(std::span<const double> x, std::span<const std::string_view> bands, const Accept* accept,
                 std::span<const BandStat> stats) {
+    // every band quiet: nothing to acquire, so no baseband copy of the whole buffer either
+    const auto searched = search_bands(bands, accept);
+    if (!searched.empty() && std::all_of(searched.begin(), searched.end(), [&](std::string_view name) {
+            return std::any_of(stats.begin(), stats.end(), [&](const BandStat& st) { return st.band == name && st.quiet; });
+        }))
+        throw SyncError("no preamble found");
     const auto z0 = waveform::to_baseband(x);
     const auto b = best_header(z0, bands, false, accept, stats);
     Lock l;

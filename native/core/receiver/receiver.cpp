@@ -147,7 +147,11 @@ Receiver::Receiver(modem::Accept accept, std::vector<std::string_view> cpm_grids
     hold_ = keep_;
     for (const auto* g : grids_) hold_ = std::max(hold_, cpm::hdr_span(*g, 2) + config::FS);
     detectors_.reserve(bands_.size());
-    for (const auto b : bands_) detectors_.push_back({b, waveform::StreamDetector(waveform::band(b))});
+    for (const auto b : bands_) {  // matched filter outputs kept only where find_copy reads them
+        const bool copy = std::find(config::HEADER_COPY_BANDS.begin(), config::HEADER_COPY_BANDS.end(), b) !=
+                          config::HEADER_COPY_BANDS.end();
+        detectors_.push_back({b, waveform::StreamDetector(waveform::band(b), config::ACQUIRE_REACH_HZ, copy)});
+    }
     if (blank) blanker_.emplace();
     reset();
 }
@@ -286,6 +290,10 @@ Receiver::Stats Receiver::stats(int64_t w0) {
         const int64_t lo = off_ + w0;
         // only the starts not yet decided: the rest of the window (most of it) would be all -1
         const int64_t masked = std::clamp<int64_t>(decided(band) - lo, 0, n);
+        if (d.peak(lo + masked, lo + n) < waveform::band(band).preamble_threshold()) {
+            out.v.push_back({band, nullptr, masked, true});  // acquire would find nothing: no matrix built
+            continue;
+        }
         out.mats.push_back(d.stat(lo + masked, lo + n));
         out.v.push_back({band, &out.mats.back(), masked});
     }
