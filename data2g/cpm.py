@@ -1115,7 +1115,10 @@ def coh_metric(Z: np.ndarray, P: np.ndarray, W: int, n0: float) -> np.ndarray:
     d = np.diff(t)
     p = a[1:] * np.conj(a[:-1]) * c[1:] * c[:-1]  # ~ exp(i (nu - 2 pi d delta))
     grid = np.linspace(-0.5, 0.5, 401)
-    delta = grid[np.argmax(np.abs(np.exp(2j * np.pi * np.outer(grid, d)) @ p))]
+    dv, inv = np.unique(d, return_inverse=True)  # the pairs summed per tone step first: the phase depends on d alone
+    q = np.zeros(len(dv), complex)
+    np.add.at(q, inv, p)
+    delta = grid[np.argmax(np.abs(np.exp(2j * np.pi * np.outer(grid, dv)) @ q))]
     nu = np.angle(np.sum(p * np.exp(2j * np.pi * delta * d)))
     Z = Z * np.exp(2j * np.pi * delta * np.arange(m))[None] * np.exp(-1j * nu * r)[:, None]
     a = (P * Z).sum(axis=1)

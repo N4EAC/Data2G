@@ -1149,13 +1149,25 @@ Mat<double> coh_metric(const Mat<cdouble>& Z0, const Mat<double>& P, int W, doub
         p[i] = a[i + 1] * std::conj(a[i]) * c[i + 1] * c[i];
         d[i] = t[i + 1] - t[i];
     }
+    // the pairs summed per tone step d first (cpm.py: np.unique, np.add.at): the grid's phase depends on d alone
+    std::vector<cdouble> qd(2 * m - 1);
+    std::vector<char> seen(2 * m - 1, 0);
+    for (std::size_t i = 0; i < p.size(); ++i) {
+        const auto j = static_cast<std::size_t>(d[i] + static_cast<int>(m) - 1);
+        qd[j] += p[i];
+        seen[j] = 1;
+    }
+    std::vector<int> dv;
+    std::vector<cdouble> q;
+    for (std::size_t j = 0; j < qd.size(); ++j)
+        if (seen[j]) dv.push_back(static_cast<int>(j) - static_cast<int>(m) + 1), q.push_back(qd[j]);
     double delta = 0.0, best = -1.0;
     for (int k = 0; k < 401; ++k) {
         const double gk = k == 400 ? 0.5 : k * (1.0 / 400) + -0.5;  // np.linspace(-0.5, 0.5, 401)
         cdouble s = 0.0;
-        for (std::size_t i = 0; i < p.size(); ++i) {
-            const double th = (2 * PI) * (gk * d[i]);
-            s += cdouble(std::cos(th), std::sin(th)) * p[i];
+        for (std::size_t i = 0; i < q.size(); ++i) {
+            const double th = (2 * PI) * (gk * dv[i]);
+            s += cdouble(std::cos(th), std::sin(th)) * q[i];
         }
         const double v = std::abs(s);
         if (v > best) best = v, delta = gk;
