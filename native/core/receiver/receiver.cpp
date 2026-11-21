@@ -284,6 +284,10 @@ Receiver::Stats Receiver::stats(int64_t w0) {
         const int64_t lo = off_ + w0;
         // only the starts not yet decided: the rest of the window (most of it) would be all -1
         const int64_t masked = std::clamp<int64_t>(decided(band) - lo, 0, n);
+        if (d.peak(lo + masked, lo + n) < waveform::band(band).preamble_threshold()) {
+            out.v.push_back({band, nullptr, masked, true});  // acquire would find nothing: no matrix built
+            continue;
+        }
         out.mats.push_back(d.stat(lo + masked, lo + n));
         out.v.push_back({band, &out.mats.back(), masked});
     }

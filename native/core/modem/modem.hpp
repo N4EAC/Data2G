@@ -118,6 +118,8 @@ struct BandStat {
     std::string_view band;
     const Mat<double>* S;
     std::int64_t col0 = 0;  // S's first column is this start (the earlier ones: already searched)
+    // nothing in it reaches the band's preamble threshold (StreamDetector::peak): skipped, S not built
+    bool quiet = false;
 };
 
 struct BestHeader {

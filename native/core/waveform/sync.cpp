@@ -653,6 +653,18 @@ std::optional<double> StreamDetector::level() const {
     return level_of(med);
 }
 
+double StreamDetector::peak(std::int64_t lo, std::int64_t hi) const {
+    const std::int64_t a = std::max(lo, s0), b = std::min(hi, s0 + static_cast<std::int64_t>(S(0).size()));
+    const auto q = level();
+    if (!(b > a && q)) return -1.0;
+    double top = -INFINITY;
+    for (std::size_t i = 0; i < bins(); ++i) {
+        const double* src = S(i).data() + (a - s0);
+        for (std::int64_t j = 0; j < b - a; ++j) top = std::max(top, src[j]);
+    }
+    return top / *q;
+}
+
 Mat<double> StreamDetector::stat(std::int64_t lo, std::int64_t hi) const {
     Mat<double> out(bins(), static_cast<std::size_t>(std::max<std::int64_t>(0, hi - lo)), -1.0);
     const std::int64_t a = std::max(lo, s0), b = std::min(hi, s0 + static_cast<std::int64_t>(S(0).size()));

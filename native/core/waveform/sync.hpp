@@ -124,6 +124,9 @@ public:
     void trim(std::int64_t start);          // drop starts before stream index `start`
     std::optional<double> level() const;    // the noise level stat() divides by
     Mat<double> stat(std::int64_t lo, std::int64_t hi) const;  // starts [lo, hi), -1 where not computed
+    // max of stat(lo, hi) without building it (read-only): -1 if none was computed. Under the band's preamble
+    // threshold, acquire on that stat finds nothing (max(S) / q is max(S / q): division by q > 0 is monotone)
+    double peak(std::int64_t lo, std::int64_t hi) const;
 
     std::size_t bins() const { return S_.size(); }
     std::span<const double> S(std::size_t bin) const { return std::span(S_[bin]).subspan(s_off_); }  // from s0
