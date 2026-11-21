@@ -145,6 +145,8 @@ The settings file is `data2g.conf`, in:
 | macOS | `~/Library/Preferences/Data2G` |
 | Linux | `~/.config/Data2G` |
 
+If a `data2g.conf` sits in the same folder as the program, Data2G uses that file instead. This is for a client such as RMS Trimode that starts one modem per radio and cannot pass `--config`: make one copy of the Data2G folder per radio, somewhere you can write to (not `Program Files`), and put a `data2g.conf` in each. An empty file will do. Start each copy once by hand and set its sound card, rig and KISS port, which must differ between copies. Then point each of the client's channels at its own copy.
+
 ### The GUI
 
 ![The Data2G main window during a contact](user-guide-img/gui-main.png)
