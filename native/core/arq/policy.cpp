@@ -228,6 +228,7 @@ GearRecommendation GearShifter::recommend(const StationView& st) {
     std::optional<Prev> pv;
     // older history is used as PREV_MAX_S old, not dropped (policy.py)
     if (prev) pv = Prev{prev->m, prev->band, std::min(measured_at - prev->at, PREV_MAX_S)};
+    const double gp = gap(st);
 
     // the noise rule: each candidate predicted as if its SNR were lower by
     // noise_shift_db (its band's noise in the profile against the measured band's)
@@ -251,7 +252,7 @@ GearRecommendation GearShifter::recommend(const StationView& st) {
         auto it = memo.find(key);
         if (it == memo.end()) {
             const auto [sec, sh, i] = key;
-            it = memo.emplace(key, predict_queries(shifted(me, sh), measured_band, gap_s, pv ? &*pv : nullptr, gated,
+            it = memo.emplace(key, predict_queries(shifted(me, sh), measured_band, gp, pv ? &*pv : nullptr, gated,
                                                    {{sec, i}})[0]).first;
         }
         return it->second;
@@ -301,7 +302,7 @@ GearRecommendation GearShifter::recommend(const StationView& st) {
         for (const auto& [sh, ks] : by_shift) {
             std::vector<ModeQuery> qs;
             for (const std::size_t k : ks) qs.push_back({std::get<0>(keys[k]), std::get<2>(keys[k])});
-            const auto got = predict_queries(shifted(me, sh), measured_band, gap_s, pv ? &*pv : nullptr, gated, qs);
+            const auto got = predict_queries(shifted(me, sh), measured_band, gp, pv ? &*pv : nullptr, gated, qs);
             for (std::size_t j = 0; j < ks.size(); ++j) memo.emplace(keys[ks[j]], got[j]);
         }
     }
@@ -387,6 +388,7 @@ StationView view(const Station& st) {
     v.misses = st.misses;
     v.esc_floor = st.esc_floor;
     v.last_rx_data = st.last_rx_data;
+    v.tx_end = st.tx_end;
     return v;
 }
 

@@ -1,6 +1,6 @@
 # Data2G User's Guide
 
-For Data2G 0.5.2.
+For Data2G 0.5.3.
 
 Data2G is a data modem for HF amateur radio. It turns the audio going in and out of your SSB transceiver into a reliable data link, so that other programs can chat, send email, or move files over the air. It is free, open source, and has no speed restrictions.
 
@@ -68,8 +68,8 @@ Downloads are on the [Releases page](https://github.com/arodland/Data2G/releases
 
 Download one of:
 
-- `data2g-0.5.2-windows-x64-setup.exe`: the installer. It installs to `C:\Program Files\Data2G`, adds a Start Menu entry, and can add a desktop shortcut. It needs administrator rights.
-- `data2g-0.5.2-windows-x64-portable.zip`: no installation. Unzip it anywhere and run `data2g-gui.exe`.
+- `data2g-0.5.3-windows-x64-setup.exe`: the installer. It installs to `C:\Program Files\Data2G`, adds a Start Menu entry, and can add a desktop shortcut. It needs administrator rights.
+- `data2g-0.5.3-windows-x64-portable.zip`: no installation. Unzip it anywhere and run `data2g-gui.exe`.
 
 The Start Menu entry opens the GUI. The other programs (`data2g-host.exe`, `data2g-web.exe`) are in the same folder and are run from a Command Prompt or PowerShell window.
 
@@ -77,8 +77,8 @@ The Start Menu entry opens the GUI. The other programs (`data2g-host.exe`, `data
 
 Download the `.dmg` for your Mac:
 
-- `data2g-0.5.2-macos-arm64.dmg` for Apple Silicon (M1 and later).
-- `data2g-0.5.2-macos-x86_64.dmg` for Intel Macs.
+- `data2g-0.5.3-macos-arm64.dmg` for Apple Silicon (M1 and later).
+- `data2g-0.5.3-macos-x86_64.dmg` for Intel Macs.
 
 Open it and drag Data2G to Applications. The first time Data2G opens the sound card, macOS asks for permission to use the microphone. Say yes: that is how Data2G hears your radio.
 
@@ -93,22 +93,22 @@ The command-line programs live inside the app bundle:
 
 Download the AppImage for your machine:
 
-- `data2g-0.5.2-linux-x86_64.AppImage` for Intel and AMD PCs.
-- `data2g-0.5.2-linux-aarch64.AppImage` for 64-bit ARM, including the Raspberry Pi 4 and 5.
-- `data2g-0.5.2-linux-armhf.AppImage` for 32-bit ARM: a Raspberry Pi running a 32-bit OS (section 10).
+- `data2g-0.5.3-linux-x86_64.AppImage` for Intel and AMD PCs.
+- `data2g-0.5.3-linux-aarch64.AppImage` for 64-bit ARM, including the Raspberry Pi 4 and 5.
+- `data2g-0.5.3-linux-armhf.AppImage` for 32-bit ARM: a Raspberry Pi running a 32-bit OS (section 10).
 
 Make it executable and run it:
 
 ```
-chmod +x data2g-0.5.2-linux-x86_64.AppImage
-./data2g-0.5.2-linux-x86_64.AppImage
+chmod +x data2g-0.5.3-linux-x86_64.AppImage
+./data2g-0.5.3-linux-x86_64.AppImage
 ```
 
 With no arguments the AppImage opens the GUI. Put `host` or `web` first to run one of the other front ends:
 
 ```
-./data2g-0.5.2-linux-x86_64.AppImage host --help
-./data2g-0.5.2-linux-x86_64.AppImage web
+./data2g-0.5.3-linux-x86_64.AppImage host --help
+./data2g-0.5.3-linux-x86_64.AppImage web
 ```
 
 There is also a `.tar.gz` for each architecture. Unpack it and run the `data2g` launcher inside, which takes the same `host` and `web` arguments.
@@ -144,6 +144,8 @@ The settings file is `data2g.conf`, in:
 | Windows | `%LOCALAPPDATA%\Data2G` |
 | macOS | `~/Library/Preferences/Data2G` |
 | Linux | `~/.config/Data2G` |
+
+If a `data2g.conf` sits in the same folder as the program, Data2G uses that file instead. This is for a client such as RMS Trimode that starts one modem per radio and cannot pass `--config`: make one copy of the Data2G folder per radio, somewhere you can write to (not `Program Files`), and put a `data2g.conf` in each. An empty file will do. Start each copy once by hand and set its sound card, rig and KISS port, which must differ between copies. Then point each of the client's channels at its own copy.
 
 ### The GUI
 
@@ -463,7 +465,7 @@ The square plot beside the waterfall shows the last burst as the demodulator saw
 
 ### BUSY and PTT indicators
 
-- **BUSY** lights amber while Data2G hears a signal on the frequency, including a Data2G transmission whose start it missed. Data2G holds back new calls and broadcasts while it is lit, so that it doesn't transmit over someone. Connected applications see it too, and many refuse to start a call while the channel is busy.
+- **BUSY** lights amber while Data2G hears a signal on the frequency. Data2G holds back new calls and broadcasts while it is lit, so that it doesn't transmit over someone. Connected applications see it too, and many refuse to start a call while the channel is busy.
 - **PTT** lights red while Data2G is transmitting.
 
 ### Buttons
@@ -675,7 +677,7 @@ Listening is not the problem. On a Pi 4, searching for signals takes about half 
 For a Pi with no screen, run the web UI and do everything else from a browser:
 
 ```
-./data2g-0.5.2-linux-aarch64.AppImage web --web-listen 0.0.0.0
+./data2g-0.5.3-linux-aarch64.AppImage web --web-listen 0.0.0.0
 ```
 
 The first run asks for a password. Then open `http://<the Pi's address>:8400/` from another computer and set up the radio on the Settings tab. Once it is configured you can keep using the web UI, or switch to `host` for the lowest overhead.

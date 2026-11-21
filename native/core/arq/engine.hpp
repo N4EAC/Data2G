@@ -193,6 +193,9 @@ struct BurstPreview {
     const modem::Spec* ofdm = nullptr;     // OFDM: the spec, and its symbols (modem::preview_frame)
     std::vector<std::complex<double>> iq;
     Mat<double> shares;                    // CPM: each data symbol's tone shares (cpm::shares)
+    // the lock was let go with no burst to follow (a receiver reset, a CW ID over a suspect header):
+    // the preview ends here, unread, and no on_burst comes for it
+    bool dropped = false;
 };
 
 // The engine's receive helpers, for a receiver of its own (monitor::Monitor).
@@ -239,8 +242,7 @@ public:
     // -- audio side (the engine thread)
     Out step(std::span<const double> x);
     bool busy() const { return busy_now_; }  // a burst arriving (the receiver stage's, latest)
-    // the host's BUSY ON/OFF; not the receiver's while we transmit (it hears nothing then)
-    bool channel_busy() const { return channel_busy_now_ && !transmitting_; }
+    bool channel_busy() const { return channel_busy_now_; }  // the host's BUSY ON/OFF
     // the session peer's last burst it claimed: snr_est (the host's SN); nullopt before one
     std::optional<double> session_snr() const { return session_snr_; }
     // Samples dropped because the worker fell max_backlog_s behind (any thread).
@@ -366,7 +368,6 @@ protected:
     }
     virtual bool receiver_busy() { return receiver_.busy(); }
     virtual bool receiver_channel_busy() { return receiver_.channel_busy(); }
-    virtual bool receiver_data2g_on_air() { return receiver_.data2g_on_air(); }
     virtual void receiver_reset() { receiver_.reset(); }
     virtual void receiver_expect(const std::vector<std::string_view>& grids, std::int64_t lo, std::int64_t hi, double cfo) {
         receiver_.expect(grids, lo, hi, cfo);
@@ -380,7 +381,6 @@ private:
         std::vector<receiver::Receiver::Item> items;
         bool busy = false;
         bool cw = false;  // a CW ID heard (cwid::CwSense) with no burst locked
-        bool on_air = false;  // Receiver::data2g_on_air (KISS channel access only)
         std::uint64_t gen = 0, seq = 0;
         std::int64_t gap = 0;  // samples dropped just before this block
     };
@@ -498,6 +498,7 @@ private:
     };
     Preview preview_;
     void preview();
+    void preview_dropped();  // before the pending lock is let go silently
 
     // between the stages
     std::atomic<bool> transmitting_{false}, busy_now_{false}, channel_busy_now_{false}, abort_pending_{false};

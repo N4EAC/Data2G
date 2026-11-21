@@ -76,6 +76,31 @@ def test_marked_spans_and_gaps_are_not_noise():
     assert s["noise_blocks"] == 200 - 40 + 150 - 6  # 0-20 s less the burst; 22-37 s (COMMIT_S) less recovery
 
 
+def muted(seed=7):
+    """60 s of noise, muted 15.03-45.07 s (60 dB down, as another program
+    sharing the radio does while it transmits) and zeroed 50.0-50.3 s."""
+    x = np.random.default_rng(seed).normal(0, 0.1, 60 * FS)
+    x[round(15.03 * FS):round(45.07 * FS)] *= 1e-3
+    x[50 * FS:round(50.3 * FS)] = 0.0
+    return x
+
+
+def test_mutes_are_not_noise():
+    """The muted blocks and MUTE_PAD_S either side are left out: the floor,
+    tail and impulse count are the noise's alone. (Kept, the mute set the
+    floor, and the edge blocks' few noise pieces read as impulses over the
+    mute's.)"""
+    p, ref = NoiseProfile(), NoiseProfile()
+    x = muted()
+    feed(p, x)
+    feed(ref, x[:15 * FS])
+    s, r = p.snapshot(), ref.snapshot()
+    # 0-57 s (COMMIT_S) less 14.1-46.0 s (blocks 15.1-45.0 s are under 20 dB, the edges' are not) and 49.0-51.3 s
+    assert s["noise_blocks"] == 570 - 319 - 23
+    np.testing.assert_allclose(s["noise_db"], r["noise_db"], atol=0.3)
+    assert max(s["noise_tail_db"]) < 2 and s["impulses_per_min"] < 1
+
+
 def test_too_little_audio_is_none():
     p = NoiseProfile()
     feed(p, np.zeros(4 * FS))
@@ -91,6 +116,7 @@ def test_native_matches(native, native_side):
     t = np.arange(n) / FS
     x = rng.normal(0, 0.1, n) * (1 + 0.5 * (t > 15)) + ((t % 4) < 1) * 0.2 * np.sin(2 * np.pi * 600 * t)
     x[rng.integers(0, n, 200)] += 3.0  # impulses
+    x[round(8.05 * FS):round(11.0 * FS)] *= 1e-3  # a mute
     outs, ps = [], []
     for cls in (NoiseProfile, native.receiver.NoiseProfile):
         p = cls()

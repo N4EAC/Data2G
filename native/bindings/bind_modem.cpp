@@ -372,15 +372,6 @@ void bind_modem(py::module_& m) {
             const auto c = mat(D);
             return np(t.fold(c.row_ptrs(), c.cols, a, lo, hi));
         });
-    d.def("pilot_presence", [](const In<cd>& D, double level, std::int64_t window) {
-        const auto c = mat(D);
-        const auto p = mo::pilot_presence(c.row_ptrs(), c.cols, level, window);
-        return py::make_tuple(p.peak, p.contrast);
-    }, py::arg("D"), py::arg("level"), py::arg("window"));
-    d.def("pilot_present", [](const In<cd>& D, double level, std::int64_t window) {
-        const auto c = mat(D);
-        return mo::pilot_presence(c.row_ptrs(), c.cols, level, window).present();
-    }, py::arg("D"), py::arg("level"), py::arg("window"));
     d.def("cfo_aliases", &mo::cfo_aliases);
     d.def("copy_header", [](const In<cd>& z, const py::dict& lock) {
         return header_dict(mo::copy_header(view(z), lock_of(lock)));

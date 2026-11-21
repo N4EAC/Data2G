@@ -1,5 +1,6 @@
 #include "app/settings.hpp"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -47,6 +48,14 @@ QString default_config() {
 }
 QString g_config;  // open_config's choice
 
+// One program started several times by a client that passes no flags, each
+// copy in its own folder with its own settings (#274). Empty: no such file.
+QString beside_program() {
+    if (!QCoreApplication::instance()) return {};
+    const QString path = QCoreApplication::applicationDirPath() + QStringLiteral("/data2g.conf");
+    return QFile::exists(path) ? path : QString();
+}
+
 // The old store (QSettings' native one for Data2G/data2g-gui) to `to`: on
 // Linux an ini file of the same format, renamed; elsewhere (the Windows
 // registry, a macOS plist) copied key by key, the old one left in place.
@@ -69,6 +78,7 @@ std::unique_ptr<QSettings> open_config(int argc, char** argv) {
         if (arg == "--config" && i + 1 < argc) path = QString::fromLocal8Bit(argv[++i]);
         else if (arg.starts_with("--config=")) path = QString::fromLocal8Bit(argv[i] + 9);
     }
+    if (path.isEmpty()) path = beside_program();
     if (path.isEmpty()) {
         path = default_config();
         if (!QFile::exists(path)) migrate_old(path);

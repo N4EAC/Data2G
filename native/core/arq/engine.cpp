@@ -333,7 +333,6 @@ Engine::Engine(std::string call, EngineConfig cfg, EngineHooks hooks)
       accept_(receive_accept(cfg_.min_header_score)),
       receiver_(accept_, all_grids()),
       ptt_delay_(static_cast<std::int64_t>(cfg_.ptt_delay_s * config::FS)) {
-    receiver_.sense = true;  // data2g_on_air: BUSY (channel_busy) and the KISS hold (kiss_burst)
     if (!cfg_.record_dir.empty()) rec_.emplace(cfg_.record_dir, call_, cfg_.record_async);
     // CPM bursts decode as they arrive (cpm::Stream): refine, then each data slot's pass. The same results as
     // after the burst; DATA2G_CPM_STREAM=0 (read here) turns it off.
@@ -595,6 +594,7 @@ void Engine::run_posted() {
 // --- the receiver stage ----------------------------------------------------------------
 
 void Engine::apply_reset() {
+    preview_dropped();
     receiver_reset();
     cw_.reset();
     gen_ = want_gen_;
@@ -672,10 +672,10 @@ Engine::Out Engine::step(std::span<const double> x) {
     if (const auto& p = receiver_.pending(); p && !p->is_cpm() &&
         p->score() < receiver::Receiver::SUSPECT_SCORE && p->start() <= cw_.hits_from()) {
         log_write(LOG, INFO, format("RX %s header (score %.2f) under a CW ID: dropped", spec_name(*p).c_str(), p->score()));
+        preview_dropped();
         receiver_.drop();
     }
     b.busy = receiver_busy();
-    b.on_air = cfg_.kiss && receiver_data2g_on_air();
     busy_now_ = b.busy;
     channel_busy_now_ = receiver_channel_busy() || b.cw;
     if (!cfg_.worker) {
@@ -804,7 +804,7 @@ Engine::Done Engine::process(Block& b) {
             }
         }
         if (bursts.empty() && cfg_.kiss && free && (idle() || session_->idle_connected())) {  // KISS between ARQ sessions, or while one is idle
-            if (auto kb = kiss_burst(k, busy || (fresh && b.on_air)); !kb.empty()) {
+            if (auto kb = kiss_burst(k, busy); !kb.empty()) {
                 main = kb.back();
                 bursts = cw_ahead(kb, t);
             }
@@ -873,6 +873,18 @@ Engine::Done Engine::process(Block& b) {
     d.out.ptt = tx_.has_value();
     transmitting_ = d.out.ptt;
     return d;
+}
+
+// The pending burst, previewed, let go with no BurstEvent: its preview handed on once more, marked dropped,
+// so a front end showing it live does not wait for an on_burst that never comes.
+void Engine::preview_dropped() {
+    const auto& p = receiver_.pending();
+    if (!p || preview_.start != p->start()) return;
+    if (preview_on_ && on_preview_) {
+        preview_.out.dropped = true;
+        on_preview_(preview_.out);
+    }
+    preview_ = {};
 }
 
 // The pending burst's symbols that have arrived since the last block, added to preview_ and
@@ -1361,8 +1373,7 @@ void Engine::hear_burst(receiver::BurstEvent& ev, double t) {
 // The queued KISS bursts if they may go now, back to back on one PTT (nothing is
 // heard between them); just the next while a HAND LISTEN waits for its frame's
 // burst to end. After waiting on BUSY, p-persistent slots; on a free channel at
-// once; BUSY (`busy`: a burst arriving, a CW ID, or Receiver::data2g_on_air, a
-// burst we hold no lock on) holds it, but not past busy_limit_s of it unbroken.
+// once; BUSY holds it, but not past busy_limit_s of it unbroken.
 std::vector<TxBurstPtr> Engine::kiss_burst(std::int64_t k, bool busy) {
     auto& link = *cfg_.kiss;
     if (link.queue.empty()) {

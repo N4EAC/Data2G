@@ -543,6 +543,17 @@ void live_preview() {
                 check::is_true(last.shares.cols == final_shares.cols && worst < 1e-9, "the decode's tone shares");
             }
         }
+        // a reset mid-burst (our abort, a TX's end) lets the lock go with no burst event: the
+        // preview says so, or a live view waits for an on_burst that never comes
+        Engine e("W1AW", {});
+        e.set_preview(true);
+        int previews = 0, dropped = 0;
+        e.set_on_preview([&](const BurstPreview& p) { ++(p.dropped ? dropped : previews); });
+        const std::size_t half = (config::FS + x.size() / 2) / BLOCK;
+        for (std::size_t i = 0; i < half; ++i) e.step(std::span<const double>(y).subspan(i * BLOCK, BLOCK));
+        check::is_true(previews > 0, std::string(name) + ": previewed before the reset");
+        e.abort();
+        check::equal(dropped, 1, std::string(name) + ": reset mid-burst, the preview dropped");
     }
 }
 

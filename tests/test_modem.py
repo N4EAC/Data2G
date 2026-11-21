@@ -261,8 +261,8 @@ def test_a_preamble_cfo_off_by_a_pilot_alias_is_put_right(monkeypatch):
 
 def test_stream_products_are_pair_products_of_its_outputs():
     """StreamDetector.products_from, extended chunk by chunk and trimmed as
-    the receiver does, is pair_products of the kept outputs (find_copy and
-    the presence fold read it instead of recomputing)."""
+    the receiver does, is pair_products of the kept outputs (find_copy reads
+    it instead of recomputing)."""
     from data2g.config import FRAME_SAMPLES
     from data2g.waveform import dsp, ofdm, sync
 

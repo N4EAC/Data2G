@@ -861,37 +861,6 @@ const Mat<cd>& FoldTrack::fold(std::span<const cd* const> D_rows, size_t dcols, 
     return R_;
 }
 
-std::pair<int64_t, int64_t> presence_window(size_t dcols, int64_t window) {
-    const int64_t PF = static_cast<int64_t>(COPY_PAIRS) * FRAME_SAMPLES;
-    const int64_t n = static_cast<int64_t>(dcols) + PF;  // the outputs the products were made from
-    const int64_t W = std::min<int64_t>(n, window);
-    return {n - W, W < PF ? 0 : (W - PF) / FRAME_SAMPLES};
-}
-
-Presence fold_presence(const Mat<cd>& fold, double level, int64_t m) {
-    Presence out;
-    std::vector<double> mag(fold.cols, -equalizer::INF);
-    for (size_t f = 0; f < fold.rows; ++f)
-        for (size_t ph = 0; ph < fold.cols; ++ph) mag[ph] = std::max(mag[ph], std::abs(fold[f][ph]));
-    const double top = *std::max_element(mag.begin(), mag.end());
-    out.m = static_cast<int>(m);
-    out.peak = top / (level * std::sqrt(static_cast<double>(m * COPY_PAIRS)));
-    out.contrast = top / (dsp::quantile(mag, 0.5) + 1e-300);
-    return out;
-}
-
-Presence pilot_presence(std::span<const cd* const> D_rows, size_t dcols, double level, int64_t window) {
-    const auto [t0, m] = presence_window(dcols, window);
-    if (m < 1) return {};
-    return fold_presence(pilot_fold(D_rows, static_cast<size_t>(t0), static_cast<size_t>(m)), level, m);
-}
-
-bool Presence::present() const {
-    return m >= PRESENCE_MIN_M && peak >= PRESENCE_PEAK &&
-           contrast >= PRESENCE_CONTRAST[std::min<std::size_t>(static_cast<std::size_t>(m - PRESENCE_MIN_M),
-                                                                PRESENCE_CONTRAST.size() - 1)];
-}
-
 std::vector<double> cfo_aliases(cd d, double centre) {
     const double alias = static_cast<double>(FS) / FRAME_SAMPLES;
     const double frac = std::arg(d) / (2 * PI) * alias;

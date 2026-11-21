@@ -24,8 +24,7 @@ TOL = 1e-9
 # never reaches the native ones through module globals (--native)
 OWN = ("crc6", "header_bits", "_signs", "_valid_words", "_valid_signs", "decode_header", "modulate",
        "modulate_bits", "burst_waveform", "ace_cells", "_bin_phase_step", "_demod_frames", "_read_header",
-       "_copy_llr", "_best_header", "find_burst", "pilot_coherence", "find_copy", "_pilot_fold", "pilot_presence", "pilot_present",
-       "_cfo_aliases", "_copy_header",
+       "_copy_llr", "_best_header", "find_burst", "pilot_coherence", "find_copy", "_pilot_fold", "_cfo_aliases", "_copy_header",
        "receive", "resolve_alias", "data_channel", "noise_var", "soft_bits", "burst_soft", "slot_soft", "snr_db",
        "symbol_times", "demodulate", "decode_received")
 
@@ -285,9 +284,8 @@ def test_find_copy_matches(native, py, reference, name, n_cw):
     close(native.modem.cfo_aliases(d, centre), py._cfo_aliases(d, centre))
 
 
-def test_pilot_presence_matches(native, py):
-    """The fold peak and contrast over the newest window: a burst, a tone,
-    noise, and a window longer than C (all of it)."""
+def test_pair_products_match(native, py):
+    """pair_products, and find_copy from them (as from C): a burst, a tone, noise."""
     from data2g.waveform import ofdm, sync
 
     n = 3 * config.FS
@@ -300,14 +298,10 @@ def test_pilot_presence_matches(native, py):
             level = sync.noise_level(C)
             D = sync.pair_products(C, config.FRAME_SAMPLES, modem.COPY_PAIRS)
             close(native.waveform.pair_products(C, config.FRAME_SAMPLES, modem.COPY_PAIRS), D, CORR_TOL)
-            for w in (config.FS, 3 * config.FS // 2, 10 * config.FS):
-                close(native.modem.pilot_presence(D, level, w), py.pilot_presence(D, level, w), CORR_TOL)
-                assert native.modem.pilot_present(D, level, w) == py.pilot_present(D, level, w)
             lock, peak = native.modem.find_copy(y, band, None, C, level)  # from C, and from its products
             lock_d, peak_d = native.modem.find_copy(y, band, None, None, level, D)
             assert lock == lock_d
             close(peak_d, peak, CORR_TOL)
-    assert native.modem.pilot_presence(D[:, :1000], level, config.FS) == (0.0, 0.0)
 
 
 def test_demodulate_matches(native, py):

@@ -182,19 +182,6 @@ private:
     std::int64_t lo_ = 0, hi_ = 0;
     int n_ = 0;
 };
-// modem.pilot_presence: over the newest `window` of a sync band's matched filter outputs, from their pair products
-// (D rows, `dcols` long; `level` the outputs' noise level), the normalized frame-pilot fold peak and its contrast (over the fold's median
-// over frame phases), folded over m frames (0: too short).
-struct Presence {
-    double peak = 0.0, contrast = 0.0;
-    int m = 0;
-    bool present() const;  // modem.pilot_present
-};
-Presence pilot_presence(std::span<const cd* const> D_rows, std::size_t dcols, double level, std::int64_t window);
-// modem.presence_window: (t0, m), the newest `window` outputs' fold over m whole frames from pair product t0 (m < 1:
-// too few); modem.fold_presence: an m-frame fold's Presence (any rotation of its phases reads the same).
-std::pair<std::int64_t, std::int64_t> presence_window(std::size_t dcols, std::int64_t window);
-Presence fold_presence(const Mat<cd>& fold, double level, std::int64_t m);
 std::vector<double> cfo_aliases(cd d, double centre);
 HeaderRead copy_header(std::span<const cd> z, const Lock& lock);
 

@@ -24,6 +24,7 @@
 #include <QTextDocument>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 #include <QThread>
 
@@ -298,6 +299,32 @@ void test_settings(const QTemporaryDir& dir) {
     check::is_true(!app::load_settings(legacy).rig, "older settings: rigctld port 0 is no rig");
     app::save_settings(legacy, l);
     check::is_true(!legacy.contains("rigctld_port") && !legacy.contains("host"), "...and saving drops the old keys");
+}
+
+// open_config: a data2g.conf beside the program before the config dir's, and
+// --config's before both.
+void test_config_beside_program(const QTemporaryDir& dir) {
+    check::current_step = "config file beside the program";
+    const QString beside = QCoreApplication::applicationDirPath() + QStringLiteral("/data2g.conf");
+    if (QFile::exists(beside)) {
+        check::is_true(false, "no data2g.conf beside the test before it runs");
+        return;
+    }
+    struct Remove {
+        QString path;
+        ~Remove() { QFile::remove(path); }
+    } cleanup{beside};
+    QFile made(beside);
+    check::is_true(made.open(QIODevice::WriteOnly), "the test can write beside itself");
+    made.close();
+    char prog[] = "data2g-gui";
+    char* bare[] = {prog};
+    const QString other = dir.filePath(QStringLiteral("beside-other.conf"));
+    QByteArray other_arg = ("--config=" + other).toLocal8Bit();
+    char* with[] = {prog, other_arg.data()};
+    check::is_true(QFileInfo(app::open_config(1, bare)->fileName()) == QFileInfo(beside), "a data2g.conf beside the program is the one used");
+    check::is_true(QFileInfo(app::settings_store()->fileName()) == QFileInfo(beside), "...by settings_store() too");
+    check::is_true(QFileInfo(app::open_config(2, with)->fileName()) == QFileInfo(other), "--config over it");
 }
 
 // open_config: data2g.conf in the config dir, the old store moved to it once;
@@ -609,6 +636,7 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QTemporaryDir dir;
     test_settings(dir);
+    test_config_beside_program(dir);
     test_config_file(dir);
     test_noise_rule_slider();
     test_decoder_effort();

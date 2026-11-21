@@ -1001,63 +1001,6 @@ class FoldTrack:
         return self.R
 
 
-# Receiver.data2g_on_air's OFDM rule (pilot_present, scripts/presence_study.py,
-# 2026-11-17): the fold's contrast at least PRESENCE_CONTRAST[m - PRESENCE_MIN_M]
-# over m frames, the last entry past the table (noise passes 2e-4 of search
-# hops on each band, from a window cut short after a burst to the whole
-# PRESENCE window: runs/presence_curve.txt, the bands' worst, non-increasing),
-# and its peak at least PRESENCE_PEAK (about noise's median: something on
-# air). Tones, CW and Hands at 0 and +20 dB never passed (the peak alone
-# passed them all: they fold as high, at every phase).
-PRESENCE_PEAK = 8.0
-PRESENCE_CONTRAST = (4.9, 4.9, 4.9, 4.75, 4.35, 4.25, 4.05, 3.9)
-PRESENCE_MIN_M = 2
-
-
-def presence_window(dcols: int, window: int) -> tuple[int, int]:
-    """(t0, m): the newest `window` outputs' pilot fold, over m whole frames
-    from pair product t0 (`dcols` of them; m < 1: too few)."""
-    P = COPY_PAIRS
-    n = dcols + P * FRAME_SAMPLES  # the outputs the products were made from
-    W = min(n, window)
-    return n - W, (W - P * FRAME_SAMPLES) // FRAME_SAMPLES
-
-
-def fold_presence(fold: np.ndarray, level: float, m: int) -> tuple[float, float]:
-    """(peak, contrast) of an m-frame pilot fold (any rotation of its phases
-    reads the same): find_copy's normalized peak, and the peak over the
-    fold's median over frame phases."""
-    mag = np.abs(fold).max(axis=0)
-    return float(mag.max() / (level * np.sqrt(m * COPY_PAIRS))), float(mag.max() / (np.median(mag) + 1e-300))
-
-
-def presence_verdict(peak: float, contrast: float, m: int) -> bool:
-    """pilot_present's rule: PRESENCE_PEAK, and PRESENCE_CONTRAST for m frames."""
-    return (m >= PRESENCE_MIN_M and peak >= PRESENCE_PEAK
-            and contrast >= PRESENCE_CONTRAST[min(m - PRESENCE_MIN_M, len(PRESENCE_CONTRAST) - 1)])
-
-
-def pilot_present(D: np.ndarray, level: float, window: int) -> bool:
-    """pilot_presence's verdict over the newest `window` outputs (fewer when
-    there are fewer: the threshold rises as the window shrinks)."""
-    _, m = presence_window(D.shape[1], window)
-    return m >= PRESENCE_MIN_M and presence_verdict(*pilot_presence(D, level, window), m)
-
-
-def pilot_presence(D: np.ndarray, level: float, window: int) -> tuple[float, float]:
-    """Is a burst of this sync band on the air in the newest `window`
-    matched filter outputs (`D`: their pair_products, as a StreamDetector's
-    products_from; `level` their noise level), its header heard or not?
-    -> (peak, contrast) of the fold over the window (fold_presence). A
-    burst's pilots fold to one phase (a CP's spread); a tone or a key-down
-    folds as high at every phase. Receiver keeps the fold running instead
-    (FoldTrack)."""
-    t0, m = presence_window(D.shape[1], window)
-    if m < 1:
-        return 0.0, 0.0
-    return fold_presence(_pilot_fold(D, t0, m), level, m)
-
-
 def _cfo_aliases(d: complex, centre: float) -> list[float]:
     """CFOs whose turn over one frame is d's phase, within the bin at
     `centre`. A frame-pair product carries the whole CFO modulo 1 / FRAME_S

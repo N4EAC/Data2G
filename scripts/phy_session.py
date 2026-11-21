@@ -38,6 +38,9 @@ from data2g.receiver import NoiseProfile, ReplySlot, receive_any
 sys.path.insert(0, str(Path(__file__).parent))
 import linksim as L  # noqa: E402
 
+# (Doppler Hz, delay ms) by channel name: linksim's, hfchannel's and the ITU severe ones
+PRESETS = {**L.PRESETS, **{k: (p.doppler_hz, p.delay_ms)
+                           for k, p in {**hfchannel.FADING_PRESETS, **hfchannel.ITU_PRESETS}.items()}}
 PAD_S = 0.3  # noise the receiver sees around a burst
 # DATA2G_PEP_REF_DB (studies): SNR against each burst's envelope peak, as the
 # average-power SNR of a burst whose peak-to-average is this many dB (PEP-fair
@@ -94,10 +97,8 @@ class ContinuousChannel:
         self.intf = [INTF.Interference(sp, seed * 2 + i, PRE_S + horizon + 60) for i, sp in enumerate(specs)]
         if doppler is not None:
             dop, dly = doppler, delay_ms
-        elif chan in hfchannel.ITU_PRESETS:
-            dop, dly = hfchannel.ITU_PRESETS[chan].doppler_hz, hfchannel.ITU_PRESETS[chan].delay_ms
         else:
-            dop, dly = L.PRESETS[chan]
+            dop, dly = PRESETS[chan]
         self.doppler, self.delay = dop, int(round(dly * 1e-3 * FS))
         if dop:
             self.rate = max(64 * dop, 8.0)
