@@ -112,7 +112,9 @@ class StreamDetector {
 public:
     static constexpr int CHUNKS = 8;
 
-    explicit StreamDetector(const Band& band, double reach = config::ACQUIRE_REACH_HZ);
+    // keep_outputs false: C is not kept (no find_copy on this band: ~8 MB of rows nobody reads on a live
+    // receiver); C(bin) is then empty, outputs_from / products_from / kept_products unusable
+    explicit StreamDetector(const Band& band, double reach = config::ACQUIRE_REACH_HZ, bool keep_outputs = true);
 
     void reset();
     void restart_at(std::int64_t pos);  // reset(), the stream resuming at index `pos`
@@ -163,6 +165,8 @@ private:
     std::vector<std::vector<cdouble>> C_;
     std::vector<std::vector<cdouble>> D_;  // pair_products of C, from d0 (products_from, kept_products)
     std::size_t s_off_ = 0, c_off_ = 0, d_off_ = 0;
+    bool keep_c_;
+    std::size_t c_n_ = 0;  // outputs from c0 (C(0).size() when kept)
     void extend_products(int F, int P);
 };
 

@@ -147,7 +147,11 @@ Receiver::Receiver(modem::Accept accept, std::vector<std::string_view> cpm_grids
     hold_ = keep_;
     for (const auto* g : grids_) hold_ = std::max(hold_, cpm::hdr_span(*g, 2) + config::FS);
     detectors_.reserve(bands_.size());
-    for (const auto b : bands_) detectors_.push_back({b, waveform::StreamDetector(waveform::band(b))});
+    for (const auto b : bands_) {  // matched filter outputs kept only where find_copy reads them
+        const bool copy = std::find(config::HEADER_COPY_BANDS.begin(), config::HEADER_COPY_BANDS.end(), b) !=
+                          config::HEADER_COPY_BANDS.end();
+        detectors_.push_back({b, waveform::StreamDetector(waveform::band(b), config::ACQUIRE_REACH_HZ, copy)});
+    }
     if (blank) blanker_.emplace();
     reset();
 }
