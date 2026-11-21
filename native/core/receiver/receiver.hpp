@@ -205,6 +205,7 @@ private:
     std::int64_t fresh_ = HOP, last_start_ = -1;
     std::map<std::string_view, std::int64_t> decided_;
     std::map<std::string_view, std::int64_t> decided_mid_;  // per CPM grid, its mid block's (Python's "<grid>/mid")
+    std::map<std::string_view, cpm::CoarseTrack> coarse_;  // per CPM grid, its search rows (find_cpm)
     // CPM fronts whose first header copy fell short (cpm::find's candidates,
     // stream indices): read again with both copies once the second is in
     struct CpmWait {

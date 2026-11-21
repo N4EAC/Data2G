@@ -378,6 +378,8 @@ class Receiver:
         # per band / CPM grid: starts before this stream index have been
         # searched with all the audio their header needs (not searched again)
         self.decided: dict = {}
+        from . import cpm
+        self.coarse = {g.name: cpm.CoarseTrack(g) for g in self.grids}  # each grid's search rows (_find_cpm)
         # CPM fronts whose first header copy fell short (cpm.find's candidates,
         # stream indices): read again with both copies once the second is in
         self.cpm_wait: list = []
@@ -679,8 +681,10 @@ class Receiver:
             if lock is not None:
                 return dict(lock, n_cw=1 + lock["dup"] + lock["n_data"])
         for g in self.grids:
+            self.coarse[g.name].feed(self.buf, self.off)
             lock = cpm.find(g, self.buf, lo=max(0, self.decided.get(g.name, 0) - self.off),
-                            hi=len(self.buf) - search_span((), (g.name,)) + 2 * g.T, wait=True)
+                            hi=len(self.buf) - search_span((), (g.name,)) + 2 * g.T, wait=True,
+                            track=self.coarse[g.name], x0=self.off)
             if lock is None:
                 continue
             if not lock.get("wait"):
@@ -693,7 +697,8 @@ class Receiver:
                 self.cpm_wait.append(c)
         for g in self.grids:  # the front missed: the mid block and both header copies
             lock = cpm.find_mid(g, self.buf, lo=max(0, self.decided.get(g.name + "/mid", 0) - self.off),
-                                hi=len(self.buf) - (len(cpm.mid_block(g)) + cpm.hdr_len(g) - 1) * g.T)
+                                hi=len(self.buf) - (len(cpm.mid_block(g)) + cpm.hdr_len(g) - 1) * g.T,
+                                track=self.coarse[g.name], x0=self.off)
             if lock is not None:
                 return dict(lock, n_cw=1 + lock["dup"] + lock["n_data"])
         return None

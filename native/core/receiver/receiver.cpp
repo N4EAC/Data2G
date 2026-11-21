@@ -167,6 +167,8 @@ void Receiver::reset() {
     last_start_ = -1;
     decided_.clear();
     decided_mid_.clear();
+    coarse_.clear();
+    for (const auto* g : grids_) coarse_.emplace(g->name, cpm::CoarseTrack(*g));
     cpm_wait_.clear();
     expected_.reset();
     for (auto& d : detectors_) {
@@ -362,8 +364,10 @@ std::optional<cpm::Lock> Receiver::find_cpm() {
         if (auto lock = cpm::late_lock(*w.g, buf_, c)) return lock;
     }
     for (const auto* g : grids_) {
+        auto& track = coarse_.at(g->name);
+        track.feed(buf_, off_);
         auto lock = cpm::find(*g, buf_, std::nullopt, 150.0, true, std::max<int64_t>(0, decided(g->name) - off_),
-                              len() - grid_span(*g) + 2 * g->T, true);
+                              len() - grid_span(*g) + 2 * g->T, true, &track, off_);
         if (!lock) continue;
         if (!lock->wait) return lock;
         lock->start += off_;
@@ -377,7 +381,8 @@ std::optional<cpm::Lock> Receiver::find_cpm() {
     }
     for (const auto* g : grids_) {  // the front missed: the mid block and both header copies
         const auto lock = cpm::find_mid(*g, buf_, std::max<int64_t>(0, decided_mid(*g) - off_),
-                                        len() - (static_cast<int64_t>(g->mid_block.size()) + g->hdr_len - 1) * g->T);
+                                        len() - (static_cast<int64_t>(g->mid_block.size()) + g->hdr_len - 1) * g->T,
+                                        &coarse_.at(g->name), off_);
         if (lock) return lock;
     }
     return std::nullopt;

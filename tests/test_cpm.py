@@ -2,6 +2,7 @@
 passes for a front (c8r50's once repeated the front's Costas array)."""
 
 import numpy as np
+import pytest
 
 from data2g import codes, cpm
 
@@ -189,3 +190,29 @@ def test_spread_tracks_doppler_through_symbol_jitter():
     assert cpm.spread(g, s * rng.exponential(1.0, 400) + n0, n0) == cpm.SPREAD_MAX_HZ
     assert cpm.spread(g, awgn, n0) == 0.0
     assert cpm.spread(g, np.ones(10), n0) == cpm.UNMEASURED_SPREAD_HZ  # too short
+
+
+def test_coarse_track_is_a_fresh_transform_of_the_stream(pure):  # (native's: test_native_cpm's test_coarse_track)
+    """A receiver's CoarseTrack, fed 20 ms at a time from a buffer trimmed
+    behind it: its rows are coarse_rows of the stream at each phase's
+    stream-grid starts, as if transformed afresh (to rounding: pocketfft's
+    result depends on the batch a row is transformed in), and detect
+    reading them finds what detect over the same audio on that grid finds."""
+    rng = np.random.default_rng(5)
+    for g in cpm.GRIDS.values():
+        x = rng.normal(0, 1, 4 * 8000)
+        track, off, buf = cpm.CoarseTrack(g), 0, np.zeros(0)
+        for i in range(0, len(x), 160):
+            buf = np.concatenate([buf, x[i:i + 160]])
+            if len(buf) > 8000:  # trimmed to the last second, as a receiver's buffer
+                off, buf = off + len(buf) - 8000, buf[len(buf) - 8000:]
+            track.feed(buf, off)
+        a, b = off + 37, off + len(buf) - 11
+        for s, E in track.rows(a, b):
+            want = cpm.coarse_rows(g, x[a + s:b], track.extra)
+            assert len(E) == len(want) and len(E) > 10 and (a + s) % (g.T // 4) == 0, g.name
+            np.testing.assert_allclose(E, want, rtol=1e-12, atol=0)
+        ph = min(s for s, _ in track.rows(a, b))  # the stream grid's first start at or after a
+        kw = dict(front_only=True, fine=False)  # (the whole pattern is longer than the second held)
+        got, ref = cpm.detect(g, x[a:b], track=track, x0=a, **kw), cpm.detect(g, x[a + ph:b], **kw)
+        assert ref[0] > 0 and got[1:] == (ref[1] + ph, ref[2]) and got[0] == pytest.approx(ref[0], rel=1e-12), g.name
