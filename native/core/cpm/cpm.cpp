@@ -1,6 +1,7 @@
 #include "cpm/cpm.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -49,13 +50,34 @@ std::vector<cdouble> fft_rows(const std::vector<cdouble>& z, std::size_t rows, s
     return out;
 }
 
-// |Z[:, :nb]| ** 2 (hypot, then squared, as numpy's abs and power).
+// `rows` symbols of T real samples from x, each zero-padded to 4T -> |rfft|^2 (numpy's rfft(n=4T),
+// re^2 + im^2): rows x (2T + 1), bins R / 4 apart (detect's coarse stage).
+Mat<double> padded_power(const double* x, std::size_t rows, std::size_t T) {
+    const std::size_t N = 4 * T, nf = 2 * T + 1;
+    Mat<double> P(rows, nf);
+    if (!rows) return P;
+    std::vector<double> in(rows * N, 0.0);
+    for (std::size_t r = 0; r < rows; ++r) std::copy(x + r * T, x + (r + 1) * T, in.begin() + static_cast<std::ptrdiff_t>(r * N));
+    std::vector<cdouble> out(rows * nf);
+    pocketfft::r2c(pocketfft::shape_t{rows, N},
+                   pocketfft::stride_t{static_cast<std::ptrdiff_t>(N * sizeof(double)), static_cast<std::ptrdiff_t>(sizeof(double))},
+                   pocketfft::stride_t{static_cast<std::ptrdiff_t>(nf * sizeof(cdouble)), static_cast<std::ptrdiff_t>(sizeof(cdouble))},
+                   pocketfft::shape_t{1}, true, in.data(), out.data(), 1.0);
+    for (std::size_t r = 0; r < rows; ++r)
+        for (std::size_t k = 0; k < nf; ++k) {
+            const cdouble z = out[r * nf + k];
+            P[r][k] = z.real() * z.real() + z.imag() * z.imag();
+        }
+    return P;
+}
+
+// |Z[:, :nb]| ** 2 as re^2 + im^2 (cpm.py's _sq).
 Mat<double> power(const std::vector<cdouble>& Z, std::size_t rows, std::size_t T, std::size_t nb) {
     Mat<double> E(rows, nb);
     for (std::size_t r = 0; r < rows; ++r)
         for (std::size_t k = 0; k < nb; ++k) {
-            const double a = std::hypot(Z[r * T + k].real(), Z[r * T + k].imag());
-            E[r][k] = a * a;
+            const cdouble z = Z[r * T + k];
+            E[r][k] = z.real() * z.real() + z.imag() * z.imag();
         }
     return E;
 }
@@ -282,8 +304,69 @@ Mat<double> shares(const Mat<double>& E) {
     return out;
 }
 
+// cpm.coarse_rows: x's whole symbols -> n x (4 nb): symbol k's tones from `extra` bins below the grid at CFO
+// fraction q / 4, as shares, at [k][q nb ..]. One rfft per symbol zero-padded to 4T, bins R / 4 apart: a tone at
+// f0 + k R is bin 4 (f0 / R + k) (f0 a whole number of bins), so fraction q / 4 is that bin + q, what mixing by
+// it and a T-point FFT would give.
+Mat<double> coarse_rows(const Grid& g, std::span<const double> x, int extra) {
+    const std::size_t T = static_cast<std::size_t>(g.T), n = x.size() / T, nb = g.m + 2 * extra;
+    Mat<double> out(n, 4 * nb);
+    if (!n) return out;
+    const Mat<double> P = padded_power(x.data(), n, T);
+    const std::int64_t bin0 = 4 * (static_cast<std::int64_t>(std::lround(g.f0 / g.rate)) - extra);
+    Mat<double> E(n, nb);
+    for (int q = 0; q < 4; ++q) {
+        for (std::size_t r = 0; r < n; ++r)
+            for (std::size_t b = 0; b < nb; ++b) E[r][b] = P[r][bin0 + q + 4 * static_cast<std::int64_t>(b)];
+        const Mat<double> S = shares(E);
+        for (std::size_t r = 0; r < n; ++r) std::copy(S[r], S[r] + nb, out[r] + q * nb);
+    }
+    return out;
+}
+
+CoarseTrack::CoarseTrack(const Grid& g, double reach_hz)
+    : extra(static_cast<int>(std::ceil(reach_hz / g.rate))), g_(&g) {}
+
+void CoarseTrack::feed(std::span<const double> buf, std::int64_t off) {
+    const std::int64_t T = g_->T, end = off + static_cast<std::int64_t>(buf.size());
+    const std::size_t w = 4 * (g_->m + 2 * extra);
+    for (int ph = 0; ph < 4; ++ph) {
+        auto& s = s_[ph];
+        auto& E = E_[ph];
+        if (!s || *s < off) {
+            const std::int64_t first = off + ((ph * T / 4 - off) % T + T) % T;
+            if (s) {  // the rows still in buf
+                const auto drop = std::min<std::size_t>(E.size() / w, static_cast<std::size_t>((first - *s) / T));
+                E.erase(E.begin(), E.begin() + static_cast<std::ptrdiff_t>(drop * w));
+            }
+            s = first;
+        }
+        const std::int64_t nxt = *s + static_cast<std::int64_t>(E.size() / w) * T;
+        if (end - nxt < T) continue;
+        const Mat<double> R = coarse_rows(*g_, buf.subspan(static_cast<std::size_t>(nxt - off)), extra);
+        E.insert(E.end(), R.data.begin(), R.data.end());
+    }
+}
+
+std::vector<std::pair<std::int64_t, Mat<double>>> CoarseTrack::rows(std::int64_t a, std::int64_t b) const {
+    const std::int64_t T = g_->T;
+    const std::size_t w = 4 * (g_->m + 2 * extra);
+    std::vector<std::pair<std::int64_t, Mat<double>>> out;
+    for (int ph = 0; ph < 4; ++ph) {
+        if (!s_[ph]) continue;
+        const std::int64_t s = *s_[ph], have = static_cast<std::int64_t>(E_[ph].size() / w);
+        const std::int64_t k0 = std::max<std::int64_t>(0, -floor_div(s - a, T));  // the first row starting at or after a
+        const std::int64_t k1 = std::max(k0, std::min(have, floor_div(b - s, T)));  // rows ending by b
+        Mat<double> M(static_cast<std::size_t>(k1 - k0), w);
+        std::copy(E_[ph].begin() + static_cast<std::ptrdiff_t>(k0 * w), E_[ph].begin() + static_cast<std::ptrdiff_t>(k1 * w),
+                  M.data.begin());
+        out.emplace_back(s + k0 * T - a, std::move(M));
+    }
+    return out;
+}
+
 Detection detect(const Grid& g, std::span<const double> x, double reach_hz, bool fine, bool front_only, int n_sym,
-                 double floor, bool mid) {
+                 double floor, bool mid, const CoarseTrack* track, std::int64_t x0) {
     const Layout L = layout(g, n_sym ? n_sym : stream_symbols(g, 0, false));
     std::span<const int> rows = L.sync_rows, tones_ = L.sync_tones;
     if (front_only) {
@@ -303,20 +386,24 @@ Detection detect(const Grid& g, std::span<const double> x, double reach_hz, bool
     const std::size_t nb = g.m + 2 * extra, ndk = 2 * extra + 1;
     Detection best{-1.0, 0, 0.0};
     const std::int64_t len = static_cast<std::int64_t>(x.size());
-    std::vector<cdouble> zf(x.size());
-    for (double frac : {0.0, 0.25, 0.5, 0.75}) {
-        // mixed once per CFO fraction as numpy does: (w * n) / FS, the
-        // division a complex one (times 1 / FS)
-        const double w = (-2 * PI) * (g.f0 - extra * g.rate + frac * g.rate), inv = 1.0 / FS;
-        for (std::int64_t i = 0; i < len; ++i) {
-            const double arg = (w * static_cast<double>(i)) * inv;
-            zf[i] = {x[i] * std::cos(arg), x[i] * std::sin(arg)};
-        }
+    // per timing phase: its first symbol's sample in x, coarse_rows of its symbols (cpm.py's detect)
+    std::vector<std::pair<std::int64_t, Mat<double>>> C;
+    if (track) {
+        if (track->extra != extra) throw std::invalid_argument("detect: track's reach differs");
+        C = track->rows(x0, x0 + len);
+    } else {
         for (int ph = 0; ph < 4; ++ph) {
-            const std::int64_t off = ph * T / 4, n = (len - off) / T;
+            const std::int64_t off = std::min(len, ph * T / 4);
+            C.emplace_back(off, coarse_rows(g, x.subspan(static_cast<std::size_t>(off)), extra));
+        }
+    }
+    for (int q = 0; q < 4; ++q) {
+        const double frac = 0.25 * q;
+        for (const auto& [off, E4] : C) {
+            const std::int64_t n = static_cast<std::int64_t>(E4.rows);
             if (n < span) continue;
-            std::vector<cdouble> seg(zf.begin() + off, zf.begin() + off + n * T);
-            const Mat<double> E = shares(power(fft_rows(seg, n, T), n, T, nb));
+            Mat<double> E(static_cast<std::size_t>(n), nb);
+            for (std::int64_t r = 0; r < n; ++r) std::copy(E4[r] + q * nb, E4[r] + (q + 1) * nb, E[r]);
             const std::int64_t J = n - span + 1;
             std::vector<double> S(ndk * J, 0.0);  // S[dk, j] = sum over r of E[rows_r + j, tone_r + dk]
             for (std::size_t dk = 0; dk < ndk; ++dk)
@@ -592,7 +679,8 @@ double peak_ratio(const Grid& g, std::span<const double> x, std::int64_t s0, dou
 }
 
 std::optional<Lock> find(const Grid& g, std::span<const double> x, std::optional<double> threshold, double reach_hz,
-                         bool front_only, std::int64_t lo, std::optional<std::int64_t> hi, bool wait) {
+                         bool front_only, std::int64_t lo, std::optional<std::int64_t> hi, bool wait,
+                         const CoarseTrack* track, std::int64_t x0) {
     const double floor = threshold.value_or(g.sync_threshold);
     const std::int64_t len = static_cast<std::int64_t>(x.size()), T = g.T;
     const Layout L0 = layout(g, stream_symbols(g, 0, false));
@@ -600,11 +688,12 @@ std::optional<Lock> find(const Grid& g, std::span<const double> x, std::optional
     if (lo || hi) {
         const std::int64_t span = ((front_only ? L0.sync_rows[L0.front - 1] : L0.sync_rows.back()) + 2) * T;
         const std::int64_t a = std::min(len, std::max<std::int64_t>(0, lo - T)), b = hi ? std::min(len, *hi + span + T) : len;
-        d = detect(g, x.subspan(a, std::max<std::int64_t>(0, b - a)), reach_hz, true, front_only, 0, floor);
+        d = detect(g, x.subspan(a, std::max<std::int64_t>(0, b - a)), reach_hz, true, front_only, 0, floor, false, track,
+                   x0 + a);
         d.start += a;
         if (!(lo <= d.start && d.start < hi.value_or(len))) return std::nullopt;
     } else {
-        d = detect(g, x, reach_hz, true, front_only, 0, floor);
+        d = detect(g, x, reach_hz, true, front_only, 0, floor, false, track, x0);
     }
     if (d.score < floor) return std::nullopt;
     if (d.start + hdr_span(g, 1) > len) return std::nullopt;  // its header copy is still arriving
@@ -626,12 +715,13 @@ std::optional<Lock> find(const Grid& g, std::span<const double> x, std::optional
 }
 
 std::optional<Lock> find_mid(const Grid& g, std::span<const double> x, std::int64_t lo,
-                             std::optional<std::int64_t> hi) {
+                             std::optional<std::int64_t> hi, const CoarseTrack* track, std::int64_t x0) {
     const std::int64_t T = g.T, nb = static_cast<std::int64_t>(g.mid_block.size()),
                        len = static_cast<std::int64_t>(x.size());
     const std::int64_t a = std::min(len, std::max<std::int64_t>(0, lo - T)),
                        b = hi ? std::min(len, *hi + (nb + 1) * T) : len;
-    Detection d = detect(g, x.subspan(a, std::max<std::int64_t>(0, b - a)), 150.0, true, false, 0, g.mid_threshold, true);
+    Detection d = detect(g, x.subspan(a, std::max<std::int64_t>(0, b - a)), 150.0, true, false, 0, g.mid_threshold, true,
+                         track, x0 + a);
     d.start += a;
     if (d.score < g.mid_threshold || !(lo <= d.start && d.start < hi.value_or(len))) return std::nullopt;
     if (d.start + (nb + g.hdr_len) * T > len) return std::nullopt;  // its second header copy is still arriving
@@ -973,9 +1063,8 @@ bool env_on(const char* name) {
     return !v || std::strcmp(v, "1") == 0;
 }
 
-double sq_abs(cdouble z) {  // numpy's abs(z) ** 2
-    const double a = std::hypot(z.real(), z.imag());
-    return a * a;
+double sq_abs(cdouble z) {  // cpm.py's _sq: re^2 + im^2
+    return z.real() * z.real() + z.imag() * z.imag();
 }
 
 Mat<double> power_of(const Mat<cdouble>& Z) {
@@ -1060,13 +1149,25 @@ Mat<double> coh_metric(const Mat<cdouble>& Z0, const Mat<double>& P, int W, doub
         p[i] = a[i + 1] * std::conj(a[i]) * c[i + 1] * c[i];
         d[i] = t[i + 1] - t[i];
     }
+    // the pairs summed per tone step d first (cpm.py: np.unique, np.add.at): the grid's phase depends on d alone
+    std::vector<cdouble> qd(2 * m - 1);
+    std::vector<char> seen(2 * m - 1, 0);
+    for (std::size_t i = 0; i < p.size(); ++i) {
+        const auto j = static_cast<std::size_t>(d[i] + static_cast<int>(m) - 1);
+        qd[j] += p[i];
+        seen[j] = 1;
+    }
+    std::vector<int> dv;
+    std::vector<cdouble> q;
+    for (std::size_t j = 0; j < qd.size(); ++j)
+        if (seen[j]) dv.push_back(static_cast<int>(j) - static_cast<int>(m) + 1), q.push_back(qd[j]);
     double delta = 0.0, best = -1.0;
     for (int k = 0; k < 401; ++k) {
         const double gk = k == 400 ? 0.5 : k * (1.0 / 400) + -0.5;  // np.linspace(-0.5, 0.5, 401)
         cdouble s = 0.0;
-        for (std::size_t i = 0; i < p.size(); ++i) {
-            const double th = (2 * PI) * (gk * d[i]);
-            s += cdouble(std::cos(th), std::sin(th)) * p[i];
+        for (std::size_t i = 0; i < q.size(); ++i) {
+            const double th = (2 * PI) * (gk * dv[i]);
+            s += cdouble(std::cos(th), std::sin(th)) * q[i];
         }
         const double v = std::abs(s);
         if (v > best) best = v, delta = gk;

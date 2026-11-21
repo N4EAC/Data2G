@@ -429,6 +429,11 @@ def modulate(spec: CpmSpec, coded: list, dup: bool, cap: int = 0) -> np.ndarray:
 
 # --- receive -------------------------------------------------------------------------
 
+def _sq(Z: np.ndarray) -> np.ndarray:
+    """|Z|^2 as re^2 + im^2 (within an ulp of np.abs(Z) ** 2, without its hypot)."""
+    return Z.real ** 2 + Z.imag ** 2
+
+
 def _energies(g: Grid, x: np.ndarray, start: int, n_sym: int, cfo: float, extra: int = 0) -> np.ndarray:
     """(n_sym, m + 2 extra) tone energies of symbols from `start`, CFO removed."""
     T = g.T
@@ -440,7 +445,7 @@ def _energies(g: Grid, x: np.ndarray, start: int, n_sym: int, cfo: float, extra:
     t = (start + np.arange(len(seg))) / FS
     z = seg * np.exp(-2j * np.pi * (g.f0 - extra * g.rate + cfo) * t)  # lowest bin at DC
     Z = np.fft.fft(z.reshape(n_sym, T), axis=1)
-    return np.abs(Z[:, :g.m + 2 * extra]) ** 2
+    return _sq(Z[:, :g.m + 2 * extra])
 
 
 def _shares(E: np.ndarray) -> np.ndarray:
@@ -450,8 +455,66 @@ def _shares(E: np.ndarray) -> np.ndarray:
     return E / (E.sum(axis=1, keepdims=True) + 1e-30)
 
 
+def coarse_rows(g: Grid, x: np.ndarray, extra: int) -> np.ndarray:
+    """detect's coarse energies of x's whole symbols: (n, 4, m + 2 extra),
+    [k, q] symbol k's tones from extra bins below the grid at CFO fraction
+    q / 4, as shares. One rfft per symbol zero-padded to 4T, bins R / 4
+    apart: a tone at f0 + k R is bin 4 (f0 / R + k) (f0 a whole number of
+    bins), so fraction q / 4 is that bin + q, what mixing by it and a
+    T-point FFT would give (|Z|^2 drops the mix's phase)."""
+    T = g.T
+    n = len(x) // T
+    if n == 0:
+        return np.zeros((0, 4, g.m + 2 * extra))
+    F = np.fft.rfft(x[:n * T].reshape(n, T), n=4 * T, axis=1)
+    P = F.real ** 2 + F.imag ** 2
+    bins = 4 * (round(g.f0 / g.rate) - extra + np.arange(g.m + 2 * extra))
+    return np.stack([_shares(P[:, bins + q]) for q in range(4)], axis=1)
+
+
+class CoarseTrack:
+    """A streaming receiver's coarse_rows of grid g as audio arrives, on the
+    stream's T/4 timing grid: each hop's searches (find, find_mid) read the
+    rows instead of transforming their windows again (each window holds
+    2-4 hops of audio already transformed). Detection as detect's on x,
+    its placements on the stream's grid instead of the window's."""
+
+    def __init__(self, g: Grid, reach_hz: float = 150.0):
+        self.g, self.extra = g, int(np.ceil(reach_hz / g.rate))
+        self.s: list[int | None] = [None] * 4  # per phase: the stream sample of its first row
+        self.E = [np.zeros((0, 4, g.m + 2 * self.extra)) for _ in range(4)]
+
+    def feed(self, buf: np.ndarray, off: int):
+        """`buf` holds stream samples off.. (a receiver's buffer): rows for its
+        new whole symbols; rows of samples it no longer holds dropped."""
+        T, end = self.g.T, off + len(buf)
+        for ph in range(4):
+            s, E = self.s[ph], self.E[ph]
+            if s is None or s < off:
+                first = off + (ph * T // 4 - off) % T
+                E = E[(first - s) // T:] if s is not None else E  # the rows still in buf
+                s = first
+            nxt = s + len(E) * T
+            if end - nxt >= T:
+                E = np.concatenate([E, coarse_rows(self.g, buf[nxt - off:], self.extra)])
+            self.s[ph], self.E[ph] = s, E
+
+    def rows(self, a: int, b: int) -> list:
+        """detect's per-phase (first symbol's sample from a, rows) of the
+        whole symbols in stream samples [a, b)."""
+        T, out = self.g.T, []
+        for ph in range(4):
+            s, E = self.s[ph], self.E[ph]
+            if s is None:
+                continue
+            k0 = max(0, -((s - a) // T))  # the first row starting at or after a
+            k1 = min(len(E), (b - s) // T)  # rows ending by b
+            out.append((s + k0 * T - a, E[k0:max(k0, k1)]))
+        return out
+
+
 def detect(g: Grid, x: np.ndarray, reach_hz: float = 150.0, fine=True, front_only: bool = False, n_sym: int = 0,
-           floor: float = -1.0, mid: bool = False):
+           floor: float = -1.0, mid: bool = False, track: "CoarseTrack | None" = None, x0: int = 0):
     """-> (score, burst start sample, cfo Hz): the sync pattern's best
     placement. Coarse: symbol energies at T/4 hops and quarter-bin CFO
     steps, as shares, summed over the sync symbols of the shortest burst
@@ -459,7 +522,9 @@ def detect(g: Grid, x: np.ndarray, reach_hz: float = 150.0, fine=True, front_onl
     and whole-bin shift. Score: the mean share on the pattern (0..1).
     `front_only`: the first block alone (an early lock); `mid`: the mid
     block alone, its first sample for the burst's start (find_mid);
-    `floor`: no fine stage under this score (the search's CPU on noise)."""
+    `floor`: no fine stage under this score (the search's CPU on noise).
+    `track`: its rows for the coarse stage instead (x: stream samples from
+    `x0`, rows on the stream's timing grid)."""
     lay = layout(g.name, n_sym or stream_symbols(g.name, 0, False))
     rows, tones_ = lay.sync_rows, lay.sync_tones
     if front_only:
@@ -471,18 +536,18 @@ def detect(g: Grid, x: np.ndarray, reach_hz: float = 150.0, fine=True, front_onl
     T = g.T
     extra = int(np.ceil(reach_hz / g.rate))
     best = (-1.0, 0, 0.0)
-    for frac in (0.0, 0.25, 0.5, 0.75):
-        # mixed once per CFO fraction, sliced per timing phase (as
-        # _energies mixes: the ramp is by absolute sample, so a slice of it
-        # is what _energies(x, off, ...) would build; 4x fewer exps)
-        zf = x * np.exp(-2j * np.pi * (g.f0 - extra * g.rate + frac * g.rate) * np.arange(len(x)) / FS)
-        for ph in range(4):
-            off = ph * T // 4
-            n = (len(x) - off) // T
+    # per timing phase: (its first symbol's sample in x, coarse_rows of its symbols)
+    if track is None:
+        C = [(ph * T // 4, coarse_rows(g, x[ph * T // 4:], extra)) for ph in range(4)]
+    else:
+        assert track.extra == extra
+        C = track.rows(x0, x0 + len(x))
+    for q, frac in enumerate((0.0, 0.25, 0.5, 0.75)):
+        for off, E4 in C:
+            n = len(E4)
             if n < span:
                 continue
-            Z = np.fft.fft(zf[off:off + n * T].reshape(n, T), axis=1)
-            E = _shares(np.abs(Z[:, :g.m + 2 * extra]) ** 2)
+            E = E4[:, q]
             # every start and whole-bin shift at once: S[dk, j] = sum over the
             # pattern's rows r of E[r + j, tone_r + extra + dk] (a loop over
             # dk and r took ~1/3 of a listening host's CPU on its tiny arrays)
@@ -641,7 +706,7 @@ def refine(g: Grid, x: np.ndarray, s0: int, cfo: float, spec: CpmSpec, n_data: i
     T, N = g.T, n * g.T
 
     def ll(z):  # the likelihood of n symbols of mixed samples, as _energies(...) * w would score them
-        G = np.abs(np.fft.fft(z.reshape(n, T), axis=1)[:, :g.m]) ** 2 * w
+        G = _sq(np.fft.fft(z.reshape(n, T), axis=1)[:, :g.m]) * w
         return G[kr, known[kr]].sum() + np.logaddexp.reduce(G[ur], axis=1).sum()
     best, bv = (s0, cfo), None
     for st, sf in ((max(1, g.T // 16), g.rate / 16), (max(1, g.T // 64), g.rate / 64)):
@@ -754,7 +819,7 @@ def _peak_ratio(g: Grid, x: np.ndarray, s0: int, cfo: float, mid: bool = False) 
 
 
 def find(g: Grid, x: np.ndarray, threshold: float | None = None, reach_hz: float = 150.0, front_only: bool = True,
-         lo: int = 0, hi: int | None = None, wait: bool = False):
+         lo: int = 0, hi: int | None = None, wait: bool = False, track: CoarseTrack | None = None, x0: int = 0):
     """-> early lock {spec, n_data, dup, start, end, score, header score} of
     a burst of grid g in x, or None: the sync pattern (front block alone by
     default) scoring over `threshold` (default SYNC_THRESHOLD; given: no
@@ -765,19 +830,21 @@ def find(g: Grid, x: np.ndarray, threshold: float | None = None, reach_hz: float
     reach} for late_lock instead of None.
     `end`: one past its last sample, in x's samples (it may run past x).
     `lo`, `hi`: only starts in [lo, hi) are searched (a streaming receiver
-    searches each start once: detect's cost is the audio it is given)."""
+    searches each start once: detect's cost is the audio it is given).
+    `track`, `x0`: detect's (x the stream from sample x0)."""
     floor = SYNC_THRESHOLD[g.name] if threshold is None else threshold
     if lo or hi is not None:
         lay0 = layout(g.name, stream_symbols(g.name, 0, False))
         span = ((lay0.sync_rows[lay0.front - 1] if front_only else lay0.sync_rows[-1]) + 2) * g.T
         a = max(0, lo - g.T)
         b = len(x) if hi is None else min(len(x), hi + span + g.T)
-        score, s0, cfo = detect(g, x[a:b], reach_hz=reach_hz, front_only=front_only, floor=floor)
+        score, s0, cfo = detect(g, x[a:b], reach_hz=reach_hz, front_only=front_only, floor=floor, track=track,
+                                x0=x0 + a)
         s0 += a
         if not lo <= s0 < (len(x) if hi is None else hi):
             return None
     else:
-        score, s0, cfo = detect(g, x, reach_hz=reach_hz, front_only=front_only, floor=floor)
+        score, s0, cfo = detect(g, x, reach_hz=reach_hz, front_only=front_only, floor=floor, track=track, x0=x0)
     if score < (SYNC_THRESHOLD[g.name] if threshold is None else threshold):
         return None
     if s0 + hdr_span(g.name, 1) > len(x):
@@ -808,16 +875,17 @@ def late_lock(g: Grid, x: np.ndarray, cand: dict):
     return _lock(g, cand["start"], cand["cfo"], cand["score"], h, HDR_COPIES)
 
 
-def find_mid(g: Grid, x: np.ndarray, lo: int = 0, hi: int | None = None):
+def find_mid(g: Grid, x: np.ndarray, lo: int = 0, hi: int | None = None, track: CoarseTrack | None = None,
+             x0: int = 0):
     """-> find's lock of a burst whose front was missed, from its mid block
     (the sync block before header copy 2) and both header copies, or None.
     Block 1's start in [lo, hi); each word puts it at its own row (a short
     burst's after its data), so each is read at the start it implies, and
-    a start before x is no reading."""
+    a start before x is no reading. `track`, `x0`: detect's."""
     T, nb = g.T, len(mid_block(g))
     a = max(0, lo - T)
     b = len(x) if hi is None else min(len(x), hi + (nb + 1) * T)
-    score, p, cfo = detect(g, x[a:b], mid=True, floor=MID_THRESHOLD[g.name])
+    score, p, cfo = detect(g, x[a:b], mid=True, floor=MID_THRESHOLD[g.name], track=track, x0=x0 + a)
     p += a
     if score < MID_THRESHOLD[g.name] or not lo <= p < (len(x) if hi is None else hi):
         return None
@@ -1047,15 +1115,18 @@ def coh_metric(Z: np.ndarray, P: np.ndarray, W: int, n0: float) -> np.ndarray:
     d = np.diff(t)
     p = a[1:] * np.conj(a[:-1]) * c[1:] * c[:-1]  # ~ exp(i (nu - 2 pi d delta))
     grid = np.linspace(-0.5, 0.5, 401)
-    delta = grid[np.argmax(np.abs(np.exp(2j * np.pi * np.outer(grid, d)) @ p))]
+    dv, inv = np.unique(d, return_inverse=True)  # the pairs summed per tone step first: the phase depends on d alone
+    q = np.zeros(len(dv), complex)
+    np.add.at(q, inv, p)
+    delta = grid[np.argmax(np.abs(np.exp(2j * np.pi * np.outer(grid, dv)) @ q))]
     nu = np.angle(np.sum(p * np.exp(2j * np.pi * delta * d)))
     Z = Z * np.exp(2j * np.pi * delta * np.arange(m))[None] * np.exp(-1j * nu * r)[:, None]
     a = (P * Z).sum(axis=1)
     k = np.ones(2 * W + 1)
     k[W] = 0.0
     h = np.convolve(a, k, "same") / np.maximum(np.convolve(np.ones(n), k, "same"), 1)
-    v = max(float(np.mean((P * np.abs(Z - h[:, None]) ** 2).sum(axis=1))), n0 * (1 + 1e-3))
-    return np.abs(Z) ** 2 / n0 - np.abs(Z - h[:, None]) ** 2 / v
+    v = max(float(np.mean((P * _sq(Z - h[:, None])).sum(axis=1))), n0 * (1 + 1e-3))
+    return _sq(Z) / n0 - _sq(Z - h[:, None]) / v
 
 
 def _n0(E: np.ndarray) -> float:
@@ -1080,7 +1151,7 @@ def coh_read_header(g: Grid, x: np.ndarray, s0: int, cfo: float, copies: int = H
     words, rows = valid_words(g.name), header_rows(g.name, copies)
     n = max(r[-1] for r in rows) + 1
     Z = bins(g, x, s0, n, cfo)
-    n0 = _n0(np.abs(Z) ** 2)
+    n0 = _n0(_sq(Z))
     f, mb, H = preamble_pattern(g), mid_block(g), hdr_len(g)
     F = len(f)
     scores, front = [], 0.0
@@ -1137,7 +1208,7 @@ def dd_metric(r: dict, post: dict, slot: int) -> np.ndarray:
     rows = slot_rows(g, n_data, dup)
     a, b = max(0, rows[slot][0] - COH_W), min(lay.n, rows[slot][-1] + 1 + COH_W)
     Z = r["Z"][a:b]
-    E = np.abs(Z) ** 2
+    E = _sq(Z)
     G = tone_metric(g, E)
     P = np.exp(G - G.max(axis=1, keepdims=True))
     P /= P.sum(axis=1, keepdims=True)
