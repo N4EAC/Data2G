@@ -334,21 +334,32 @@ def connect(cls, forge=None, t_turn_b=1.0):
 
 
 def turnarounds(cls):
+    """(caller's and callee's peer_turn, an idle session's, how much later the
+    caller's reply deadline falls for a callee advertising 2.5 s than 1.0 s)."""
     from data2g.arq import session as S
-    a, b = connect(cls, t_turn_b=2.5)
-    assert (a.state, b.state) == (S.CONNECTED, S.CONNECTED)
-    return a.turnaround(), b.turnaround(), cls("W1AW", CpmConnect()).turnaround()
+
+    def deadline(t_turn_b):
+        a, b = connect(cls, t_turn_b=t_turn_b)
+        assert (a.state, b.state) == (S.CONNECTED, S.CONNECTED)
+        burst = a.poll(20.0)
+        a.on_tx_end(burst, 21.0)
+        return a, b, a.next_event()
+
+    a, b, slow = deadline(2.5)
+    *_, fast = deadline(1.0)
+    return a.peer_turn(), b.peer_turn(), cls("W1AW", CpmConnect()).peer_turn(), round(slow - fast, 9)
 
 
-def test_turnaround_is_the_peers_t_turn():
-    """Each side's reply deadline (engine DD budget) is the other's t_turn,
-    learnt from its CONNECT or CONNECT_ACK; before a session, its own."""
+def test_reply_timers_allow_the_peers_t_turn():
+    """t_turn is a station's own turnaround, advertised in its CONNECT or
+    CONNECT_ACK: the other side's reply timers allow it (before a session,
+    their own)."""
     from data2g.arq import session as S
-    assert turnarounds(S.Session) == (2.5, 1.0, 1.0)
+    assert turnarounds(S.Session) == (2.5, 1.0, 1.0, 1.5)
 
 
-def test_cpp_turnaround(native, pure):
-    assert turnarounds(native.arq.Session) == (2.5, 1.0, 1.0)
+def test_cpp_reply_timers(native, pure):
+    assert turnarounds(native.arq.Session) == (2.5, 1.0, 1.0, 1.5)
 
 
 def test_primed_connect_and_connect_ack():

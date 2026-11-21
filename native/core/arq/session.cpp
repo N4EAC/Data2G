@@ -209,10 +209,10 @@ void Session::on_tx_end(const TxBurstPtr& burst, double now) {
         // a reply whose header I miss is still on air: don't poll over it
         if (state == SessionState::CONNECTED && station && burst)
             if (auto hold = policy->reply_hold(*station, *burst)) wait = std::max(wait, *hold);
-        deadline = now + t_turn + wait;
+        deadline = now + peer_turn() + wait;
     } else if (!m) {
         quiet_from = now;
-        wake_wait = t_turn + tune.reply_start_s + tune.wake_guard_s + rng->uniform(0, tune.wake_jitter_s * std::pow(2.0, wakes));
+        wake_wait = peer_turn() + tune.reply_start_s + tune.wake_guard_s + rng->uniform(0, tune.wake_jitter_s * std::pow(2.0, wakes));
     }
 }
 
@@ -222,7 +222,7 @@ void Session::on_header(const std::string& submode, int n_cw, double now) {
         // a peer's ID burst (one codeword in the connect mode) runs straight
         // into its reply, whose header must still be found (engine ID_INTERVAL_S)
         const bool is_id = n_cw == 1 && submode == policy->connect_mode(cap, 0);
-        deadline = std::max(*deadline, end + t_turn + (is_id ? tune.reply_start_s : 0.0));
+        deadline = std::max(*deadline, end + peer_turn() + (is_id ? tune.reply_start_s : 0.0));
     }
     if (!master()) quiet_from = std::max(quiet_from, end);
 }
@@ -369,9 +369,8 @@ void Session::close(const std::string& why, TxBurstPtr final_burst, double now) 
     deadline.reset();
 }
 
-// Seconds from the end of a burst I hear to my reply's start before my peer gives up
-// waiting: its t_turn in a session, else mine (session.py).
-double Session::turnaround() const {
+// The peer's turnaround my reply timers allow: its advertised t_turn in a session, else mine (session.py).
+double Session::peer_turn() const {
     if ((state == SessionState::CONNECTED || state == SessionState::DISCONNECTING) && peer_t_turn) return *peer_t_turn;
     return t_turn;
 }

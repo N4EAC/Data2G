@@ -103,15 +103,16 @@ def test_id_frames_during_and_after_a_session(tmp_path):
 
 
 def test_dd_budget_is_what_the_turnaround_leaves(monkeypatch, pure):
-    """In a session DD stops at my reply's latest start: the peer's t_turn
-    past the burst's end, less PTT, TX latency and time since the block came
-    in; DD_BUDGET_S caps it, and alone applies outside a session. (Python's;
+    """In a session DD stops at my reply's latest start: my own t_turn (the
+    one I advertise; the peer's, 3.0 here, is for my reply timers) past the
+    burst's end, less PTT, TX latency and time since the block came in;
+    DD_BUDGET_S caps it, and alone applies outside a session. (Python's;
     native's is test_engine.cpp's turnaround_budget.)"""
     from data2g.arq import engine as EN
     monkeypatch.setattr(PHY, "DD_BUDGET_S", 5.0)
     e = EN.Engine("W1AW", ptt_delay_s=0.1)
     assert e._dd_budget(10.0, 10.3) == 5.0  # idle
-    e.session.state, e.session.peer_t_turn, e.tx_latency_s = S.CONNECTED, 2.0, 0.2
+    e.session.state, e.session.t_turn, e.session.peer_t_turn, e.tx_latency_s = S.CONNECTED, 2.0, 3.0, 0.2
     monkeypatch.setattr("time.monotonic", lambda: e._arrived + 0.05)
     assert e._dd_budget(10.0, 10.3) == pytest.approx(2.0 - 0.3 - 0.2 - 0.1 - 0.05)
     assert e._dd_budget(10.0, 12.0) == 0.0

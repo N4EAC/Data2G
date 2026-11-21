@@ -39,7 +39,7 @@ CPM_DD_ITERS = 4
 # a live receiver's DD stops starting refines this long after the burst's
 # decode began (a 12 s 256l burst with every slot failing took 54 s of DD).
 # In a session the engine also stops it at the turnaround deadline: my reply
-# keyed within the peer's t_turn of its burst's end (engine._dd_budget), so
+# keyed within my t_turn of the peer's burst's end (engine._dd_budget), so
 # DD gets what the plain decode leaves, which may be nothing. inf: no limit
 # at all (paired studies, tools/with_native.py --dd-budget inf)
 DD_BUDGET_S = 1.0

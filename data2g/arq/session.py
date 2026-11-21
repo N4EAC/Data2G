@@ -96,7 +96,7 @@ class Session:
     policy: L.Policy  # connect_mode and airtime too
     t_turn: float = 1.0
     rng: random.Random = field(default_factory=random.Random)
-    peer_t_turn: float | None = None  # from its CONNECT or CONNECT_ACK: how long it waits for my reply
+    peer_t_turn: float | None = None  # from its CONNECT or CONNECT_ACK: how long it takes to reply
     state: str = IDLE
     peer: str = ""
     cap: int = 2
@@ -284,10 +284,10 @@ class Session:
                     and (hold := self.policy.reply_hold(self.station, burst)) is not None):
                 # a reply whose header I miss is still on air: don't poll over it
                 wait = max(wait, hold)
-            self._deadline = now + self.t_turn + wait
+            self._deadline = now + self.peer_turn() + wait
         elif not self.master:
             self._quiet_from = now
-            self._wake_wait = (self.t_turn + REPLY_START_S + WAKE_GUARD_S
+            self._wake_wait = (self.peer_turn() + REPLY_START_S + WAKE_GUARD_S
                                + self.rng.uniform(0, WAKE_JITTER_S * 2 ** self._wakes))
 
     def expecting(self) -> list[str]:
@@ -308,7 +308,7 @@ class Session:
             # a peer's ID burst (one codeword in the connect mode) runs straight
             # into its reply, whose header must still be found (engine.ID_INTERVAL_S)
             is_id = n_cw == 1 and submode == self.policy.connect_mode(self.cap)
-            self._deadline = max(self._deadline, end + self.t_turn + (REPLY_START_S if is_id else 0.0))
+            self._deadline = max(self._deadline, end + self.peer_turn() + (REPLY_START_S if is_id else 0.0))
         if not self.master:
             self._quiet_from = max(self._quiet_from, end)
 
@@ -429,9 +429,11 @@ class Session:
         self._deadline = None
         return None
 
-    def turnaround(self) -> float:
-        """Seconds from the end of a burst I hear to my reply's start before my
-        peer gives up waiting: its t_turn in a session, else mine."""
+    def peer_turn(self) -> float:
+        """The peer's turnaround, from the end of my burst to its reply keyed,
+        that my reply timers allow: the t_turn it advertised, in a session;
+        before one, mine (its CONNECT_ACK's isn't known yet). My own t_turn
+        is what I advertise and my decode keeps to (engine._dd_budget)."""
         if self.state in (CONNECTED, DISCONNECTING) and self.peer_t_turn is not None:
             return self.peer_t_turn
         return self.t_turn

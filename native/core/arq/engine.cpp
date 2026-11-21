@@ -997,7 +997,7 @@ void Engine::carrier_hold(double t) {
     const auto exp = s.policy->expected_reply();
     if (!s.deadline || t < *s.deadline || !tx_end_ || !exp) return;
     const double start = *tx_end_ + EXPECT_REPLY_S;
-    const double until = start + exp->second + s.t_turn;  // the reply's end, as on_header waits for one heard
+    const double until = start + exp->second + s.peer_turn();  // the reply's end, as on_header waits for one heard
     if (until <= t) return;
     const auto [lo, hi] = band_span_hz(mode_at(exp->first).band);
     const auto z = noise_.span_z(noise_.span_spectra(std::max(start, t - CARRIER_TAIL_S), t), lo, hi);
@@ -1237,7 +1237,8 @@ void Engine::nod_collect(std::span<const double> x, double t) {
 }
 
 // DD's seconds for a burst that ended at `end` (stream time; `t`: the block's end): dd_budget_s, and in a
-// session no further than my reply's latest start, the peer's t_turn past `end` less my PTT and TX latency
+// session no further than my reply's latest start, my t_turn past `end` (advertised: the peer's timers allow
+// it) less my PTT and TX latency
 // and the time already spent since the block came in (receive, soft bits). It may be nothing. No limit
 // (nullopt or inf: paired studies) leaves DD unlimited (engine.py _dd_budget).
 std::optional<double> Engine::dd_budget(double end, double t) const {
@@ -1245,7 +1246,7 @@ std::optional<double> Engine::dd_budget(double end, double t) const {
     if (!cap || std::isinf(*cap) || session_->state == SessionState::IDLE || session_->state == SessionState::CLOSED)
         return cap;
     const double spent = std::chrono::duration<double>(std::chrono::steady_clock::now() - arrived_).count();
-    const double left = (end - t) + session_->turnaround() - tx_latency_ - static_cast<double>(ptt_delay_) / config::FS;
+    const double left = (end - t) + session_->t_turn - tx_latency_ - static_cast<double>(ptt_delay_) / config::FS;
     return std::max(0.0, std::min(*cap, left - spent));
 }
 

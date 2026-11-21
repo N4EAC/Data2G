@@ -95,7 +95,7 @@ public:
     std::string call;
     std::shared_ptr<Policy> policy;
     double t_turn;
-    std::optional<double> peer_t_turn;  // from its CONNECT or CONNECT_ACK: how long it waits for my reply
+    std::optional<double> peer_t_turn;  // from its CONNECT or CONNECT_ACK: how long it takes to reply
     std::shared_ptr<Rng> rng;
     SessionState state = SessionState::IDLE;
     std::string peer;
@@ -117,8 +117,8 @@ public:
     std::string tx_mode;  // the mode of my last burst sent (expecting)
     // The modes my peer's next burst likely comes in while one is due (session.py's expecting, §3a).
     std::vector<std::string> expecting() const;
-    // Seconds from the end of a burst I hear to my reply's start: the peer's t_turn in a session, else mine.
-    double turnaround() const;
+    // The peer's turnaround my reply timers allow: its advertised t_turn in a session, else mine (session.py).
+    double peer_turn() const;
     std::optional<double> due, deadline, build_at;
     std::optional<double> coalesce_until;  // write(): an idle poll or wake held for more data
     std::optional<std::string> answer_mode;

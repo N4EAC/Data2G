@@ -787,14 +787,15 @@ class Engine:
     def _dd_budget(self, end: float, t: float) -> float | None:
         """DD's seconds for a burst that ended at `end` (stream time; `t`: the
         block's end): DD_BUDGET_S, and in a session no further than my reply's
-        latest start, the peer's t_turn past `end` less my PTT and TX latency
-        and the time already spent since the block came in (receive, soft
-        bits). It may be nothing. An infinite DD_BUDGET_S (paired studies)
-        leaves DD unlimited."""
+        latest start, my t_turn past `end` (what I advertise: the peer's
+        reply timers allow it) less my PTT and TX latency and the time
+        already spent since the block came in (receive, soft bits). It may be
+        nothing. An infinite DD_BUDGET_S (paired studies) leaves DD
+        unlimited."""
         cap = PHY.DD_BUDGET_S
         if cap is None or math.isinf(cap) or self.session.state in (S.IDLE, S.CLOSED):
             return cap
-        left = (end - t) + self.session.turnaround() - self.tx_latency_s - self.ptt_delay / FS
+        left = (end - t) + self.session.t_turn - self.tx_latency_s - self.ptt_delay / FS
         return max(0.0, min(cap, left - (time.monotonic() - self._arrived)))
 
     def _hear(self, x: np.ndarray, t: float):
@@ -913,7 +914,7 @@ class Engine:
         if s._deadline is None or t < s._deadline or self._tx_end is None or exp is None:
             return
         start = self._tx_end + EXPECT_REPLY_S
-        until = start + exp[1] + s.t_turn  # the reply's end, as on_header waits for one heard
+        until = start + exp[1] + s.peer_turn()  # the reply's end, as on_header waits for one heard
         if until <= t:
             return
         from . import predictor as P
