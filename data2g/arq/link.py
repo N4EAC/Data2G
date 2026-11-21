@@ -495,6 +495,8 @@ class Station:
     peer_reply_lost: bool = False  # the peer's last burst said its previous reply was lost
     peer_abandon: bool = False  # the peer's last burst carried T_ABANDON: it holds re-sliced data
     peer_reply_recommend: int | None = None  # ... for my control-only bursts
+    now: float | None = None  # the caller's clock, set by session.Session (None: the shifter's fixed gap_s)
+    tx_end: float | None = None  # build(): when the burst being built should end, for the shifter (_tx_end)
     tx: TxSide = field(default_factory=TxSide)
     stats: Counter = field(default_factory=Counter)  # for the log: cw_new, cw_comp, cw_resend, rx_ok, rx_lost, timeouts
     rx: RxSide = field(default_factory=RxSide)
@@ -608,6 +610,8 @@ class Station:
         submode, max_cw = self.policy.choose(self, escalation)
         if not self._data_allowed(fresh, submode):
             max_cw = 0  # control only
+        missing = self.tx.missing() if fresh else []
+        self.tx_end = self._tx_end(submode, max_cw, missing, fresh)
         rec, hint, reply = self.policy.recommend(self)  # what the peer should send me next (§8)
         ext, reply_same = self._control_tlvs(bn, reply)
         core = F.Core(ftype=F.ARQ if fresh else F.PROBE, burst_seq=bn % F.BURST_MOD, acted_on=self._acted_on,
@@ -616,7 +620,6 @@ class Station:
 
         # control codewords: CPM carries control in a short codeword, one per burst
         cpb = self.policy.ctl_payload_bytes(submode)
-        missing = self.tx.missing() if fresh else []
         has_new = fresh and self.new_available() > 0
         k, has_new, bitmap, n_ctl, dup = self._fit(ext, core.cum, missing, has_new, max_cw, submode, fresh)
         # what this burst's ACK conveys, exactly (the snapshot must match it)
@@ -711,6 +714,23 @@ class Station:
         if log.isEnabledFor(logging.INFO):
             self._log_tx(bn, burst, fresh, core, ext, dup, resend, rvs, new, escalation, hint, reply, inline)
         return burst
+
+    def _tx_end(self, submode: str, max_cw: int, missing: list[int], fresh: bool) -> float | None:
+        """When the burst being built should end (None: no clock, or a
+        policy without airtime). The shifter's gap input is the time from
+        the peer burst it measured to the start of the one it predicts
+        (scripts/session_data.py); that one follows this burst. Estimated
+        before _fit: one control codeword (a control that spills into
+        a second, ~0.5 s in a 4-byte ack mode, is missed), then resends and
+        new codewords as queued, up to max_cw."""
+        if self.now is None:
+            return None
+        n = 1
+        if max_cw:
+            new = -(-self.new_available() // self.policy.payload_bytes(submode)) if fresh else 0
+            n += min(max_cw - 1, len(missing) + new)
+        s = self.policy.airtime(submode, n)
+        return None if s is None else self.now + s
 
     def _data_tlvs(self, resend: list[int], rvs: list[int], new: list[Codeword]) -> dict:
         """T_RV, T_NEW and T_COMP for these data slots."""
