@@ -124,7 +124,7 @@ const char* HELP =
     "  --dd-budget S         seconds a burst's decode may spend re-estimating the channel from its own\n"
     "                        decoded codewords (DD), counted from its soft bits; the pass in progress is\n"
     "                        abandoned when it runs out. In a session DD also stops when the reply is\n"
-    "                        due (the peer's t_turn after its burst), so a slow machine gets less of it\n"
+    "                        due (this station's t_turn after the burst), so a slow machine gets less of it\n"
     "                        by itself. 0: none (default 1)\n"
     "  --decoder-effort N    the LDPC decoder's iteration cap (data2g-gui offers 15-40). More decodes a little\n"
     "                        further into a fade (about 0.1 dB from 20 to 25) and spends longer on a burst\n"
