@@ -11,6 +11,7 @@
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <system_error>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -30,7 +31,7 @@ namespace {
 
 // After "usage: PROG ", PROG padded to data2g-host's width so the columns line up.
 const char* USAGE =
-    "[-h] [--config FILE] [--mycall MYCALL] [--listen ADDRESS] [--command-port COMMAND_PORT]\n"
+    "[-h] [TCPIP HOST PORT] [--config FILE] [--mycall MYCALL] [--listen ADDRESS] [--command-port COMMAND_PORT]\n"
     "                   [--kiss-port KISS_PORT] [--kiss-busy-limit S] [--kiss-bw {2400,500}] [--broadcast-mode MODE]\n"
     "                   [--list-audio-devices] [--input-device INPUT_DEVICE] [--output-device OUTPUT_DEVICE]\n"
     "                   [--sample-rate SAMPLE_RATE] [--output-volume OUTPUT_VOLUME] [--ptt-on-delay-ms PTT_ON_DELAY_MS]\n"
@@ -58,7 +59,9 @@ const char* HELP =
     "options:\n"
     "  -h, --help            show this help message and exit\n"
     "  --config FILE         settings saved by data2g-gui/data2g-web, under these flags\n"
-    "                        (default: the config dir's Data2G/data2g.conf)\n"
+    "                        (default: data2g.conf beside the program if there is\n"
+    "                        one, else the config dir's Data2G/data2g.conf)\n"
+    "  TCPIP HOST PORT       how RMS Trimode starts VARA: --listen HOST --command-port PORT\n"
     "  --mycall MYCALL\n"
     "  --listen ADDRESS      the VARA and KISS ports' address (default 127.0.0.1)\n"
     "  --command-port COMMAND_PORT  data is on the next port (default 8300)\n"
@@ -107,7 +110,7 @@ const char* HELP =
     "                        card or radio flag here (--input-device, --output-device, --audio-io, --rig-model,\n"
     "                        --rig-device, --ptt-method, --ptt-device) turns a saved TCI off\n"
     "  --tci-host HOST[:PORT]  the TCI server (default localhost:50001)\n"
-    "  --threads N           threads for decode and sync, the calling one included (default: min(4, cores / 2))\n"
+    "  --threads N           threads for decode and sync, the calling one included (default: cores up to 4, 4 up to 8 cores, half above)\n"
     "  --realtime, --no-realtime\n"
     "                        real-time scheduling for the transmit and sound card threads (Linux: directly\n"
     "                        if the user's limits allow it, else through RealtimeKit), so a loaded machine\n"
@@ -123,7 +126,9 @@ const char* HELP =
     "                        (default: on)\n"
     "  --dd-budget S         seconds a burst's decode may spend re-estimating the channel from its own\n"
     "                        decoded codewords (DD), counted from its soft bits; the pass in progress is\n"
-    "                        abandoned when it runs out. 0: none. Lower it on a slow machine (default 1)\n"
+    "                        abandoned when it runs out. In a session DD also stops when the reply is\n"
+    "                        due (this station's t_turn after the burst), so a slow machine gets less of it\n"
+    "                        by itself. 0: none (default 1)\n"
     "  --decoder-effort N    the LDPC decoder's iteration cap (data2g-gui offers 15-40). More decodes a little\n"
     "                        further into a fade (about 0.1 dB from 20 to 25) and spends longer on a burst\n"
     "                        that fails. Lower it on a slow machine (default 25)\n"
@@ -172,6 +177,22 @@ T number(const std::string& opt, const std::string& v, const char* prog) {
     } catch (const std::exception&) {
     }
     usage_error("argument " + opt + ": invalid " + (std::is_same_v<T, int> ? "int" : "float") + " value: '" + v + "'", prog);
+}
+
+// A program path with a space in it, given unquoted, arrives split over the
+// first arguments: RMS Trimode starts VARA that way. Windows finds the
+// program by trying each longer prefix; this finds where it stopped.
+// Elsewhere argv[0] is the program, and argv is not looked up as a file.
+int first_argument([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
+#ifdef _WIN32
+    std::string path = argc ? argv[0] : "";
+    for (int i = 1; i <= argc; ++i) {
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(path, ec) || std::filesystem::is_regular_file(path + ".exe", ec)) return i;
+        if (i < argc) path += " " + std::string(argv[i]);
+    }
+#endif
+    return 1;
 }
 
 }  // namespace
@@ -270,7 +291,7 @@ Args parse(int argc, char** argv, Args a, const char* prog, const char* extra_he
     // a sound card or radio named here means not TCI: they turn a saved TCI off (TCI ignores them)
     static const std::vector<std::string> not_tci = {"--input-device", "--output-device", "--audio-io", "--rig-model",
                                                      "--rig-device", "--ptt-method", "--ptt-device"};
-    for (int i = 1; i < argc; ++i) {
+    for (int i = first_argument(argc, argv); i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-h" || arg == "--help") {
             std::printf("usage: %-11s %s%s%s", prog, USAGE, HELP, extra_help);
@@ -290,6 +311,12 @@ Args parse(int argc, char** argv, Args a, const char* prog, const char* extra_he
             const std::string value = inline_value ? *inline_value : std::string(argv[++i]);
             v->second(arg, value);
             if (tracked.count(arg)) given[arg] = value;
+            continue;
+        } else if (arg == "TCPIP" && i + 2 < argc) {
+            a.listen = argv[i + 1];
+            const std::string port = argv[i + 2];
+            a.command_port = i_(arg, port);
+            i += 2;
             continue;
         } else {
             usage_error("unrecognized arguments: " + std::string(argv[i]), prog);

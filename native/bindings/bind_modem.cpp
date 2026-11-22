@@ -149,6 +149,7 @@ py::dict est_dict(const modem::DataEstimate& e) {
             static_cast<py::ssize_t>(e.n0_k.size() / e.h.cols), 1, static_cast<py::ssize_t>(e.h.cols)});
     else
         d["n0_k"] = np(e.n0_k);
+    d["n0_snr"] = e.n0_snr;
     d["p_sig"] = e.p_sig;
     d["spread_hz"] = e.spread_hz;
     d["filter_spread_hz"] = e.filter_spread_hz;
@@ -168,6 +169,7 @@ modem::DataEstimate est_of(const py::dict& d) {
     if (d.contains("n0_k")) e.n0_k = vec(d["n0_k"].cast<In<double>>());
     e.nc = static_cast<int>(e.h.cols);  // n0_at reads n0_k per carrier or per frame by these
     e.n_f = static_cast<int>(e.h.rows / config::DATA_SYMS_PER_FRAME);
+    e.n0_snr = get<double>(d, "n0_snr", e.n0);
     e.p_sig = get<double>(d, "p_sig", 0.0);
     e.clip_ratio = d["clip_ratio"].cast<double>();
     return e;
@@ -356,20 +358,35 @@ void bind_modem(py::module_& m) {
         return py::cast(c);
     }, py::arg("x"), py::arg("lock"), py::arg("n_max") = 8, py::arg("latest") = false, py::arg("pattern") = false);
     d.def("find_copy", [](const In<double>& x, const std::string& band, const py::object& accept,
-                          const std::optional<In<cd>>& C, std::optional<double> level) {
+                          const std::optional<In<cd>>& C, std::optional<double> level,
+                          const std::optional<In<cd>>& D, const std::optional<In<cd>>& fold) {
         const auto a = accept_of(accept);
-        std::optional<Mat<cd>> c;
+        std::optional<Mat<cd>> c, dm, fm;
         if (C) c = mat(*C);
+        if (D) dm = mat(*D);
+        if (fold) fm = mat(*fold);
         double peak = std::numeric_limits<double>::quiet_NaN();
         std::optional<mo::Lock> l;
         {
             py::gil_scoped_release nogil;
-            l = mo::find_copy(view(x), band_view(band), a ? &*a : nullptr, c ? &*c : nullptr, level, &peak);
+            if (dm) {  // the pair products (modem.find_copy's D)
+                l = mo::find_copy(view(x), band_view(band), a ? &*a : nullptr, dm->row_ptrs(), dm->cols, level, &peak,
+                                  fm ? &*fm : nullptr);
+            } else {
+                l = mo::find_copy(view(x), band_view(band), a ? &*a : nullptr, c ? &*c : nullptr, level, &peak);
+            }
         }
         return py::make_tuple(l ? py::object(lock_dict(*l)) : py::object(py::none()),
                               std::isnan(peak) ? py::object(py::none()) : py::object(py::float_(peak)));
     }, py::arg("x"), py::arg("band"), py::arg("accept") = py::none(), py::arg("C") = py::none(),
-       py::arg("level") = py::none());
+       py::arg("level") = py::none(), py::arg("D") = py::none(), py::arg("fold") = py::none());
+    py::class_<mo::FoldTrack>(d, "FoldTrack")
+        .def(py::init<>())
+        .def("reset", &mo::FoldTrack::reset)
+        .def("fold", [](mo::FoldTrack& t, const In<cd>& D, std::int64_t a, std::int64_t lo, std::int64_t hi) {
+            const auto c = mat(D);
+            return np(t.fold(c.row_ptrs(), c.cols, a, lo, hi));
+        });
     d.def("cfo_aliases", &mo::cfo_aliases);
     d.def("copy_header", [](const In<cd>& z, const py::dict& lock) {
         return header_dict(mo::copy_header(view(z), lock_of(lock)));

@@ -104,8 +104,14 @@ def test_cw_id_during_and_after_a_session(tmp_path, mode):
     n_a, n_b = len(_cw_tx(tmp_path / "a")), len(_cw_tx(tmp_path / "b"))
     a.session.disconnect()
     assert link(a, b, 12, 60, lambda: a.session.state == S.CLOSED and b.session.state == S.CLOSED, seed=4)
+    n_a = len(_cw_tx(tmp_path / "a"))  # (a CW ID may have gone ahead of A's DISC)
     # B's after its DISC_ACK, A's ID_GUARD_S after B's
     assert link(a, b, 12, 30, lambda: len(_cw_tx(tmp_path / "a")) > n_a and len(_cw_tx(tmp_path / "b")) > n_b, seed=5)
+    # ...and not over B's: "add" sends its ID frame, then CW, which CwSense takes ~1 s to
+    # hear, and A once keyed in that gap
+    spans = {k: [(e["t"], e["t"] + e["seconds"]) for e in map(json.loads, open(tmp_path / k / "events.jsonl"))
+                 if e["kind"] == "tx"] for k in "ab"}
+    assert not [(x, y) for x in spans["a"] for y in spans["b"] if min(x[1], y[1]) - max(x[0], y[0]) > 0.1]  # (event t: a block late)
 
 
 def test_cw_id_after_a_cq_frame():

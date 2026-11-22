@@ -45,6 +45,7 @@ inline constexpr std::size_t ENERGY_HIST = 4;  // the energy inputs' window: the
 inline constexpr std::size_t CPM_FLOOR_HIST = 3;
 inline constexpr double CPM_FLOOR_SNR_DB = -4.0;
 inline constexpr double CPM_FLOOR_SPREAD_HZ = 1.0;
+inline constexpr double FLOOR_CPM_SPREAD_HZ = 3.0;  // policy.py: a CPM burst in the floor's spread condition
 inline constexpr double UNMEASURED_SPREAD_HZ = config::DEFAULT_SPREAD_HZ;  // what the equalizer reports unmeasured (policy.py)
 // per mode, its 10% codeword failure SNR on awgn, mpg, mpp, mpd; throws for an unknown mode
 const std::array<double, 4>& mode_thresholds(std::string_view submode);
@@ -53,6 +54,9 @@ inline constexpr int CTL_BYTES = 12;
 inline constexpr std::string_view ALT_POLL = config::PROFILE == "fm" ? "n10-ack-4f" : "n4-ack-8f";  // escalation 2's mode
 inline constexpr int ROBUST_ESCALATION = 4;  // from here on ROBUST_CONNECT
 inline constexpr std::string_view ROBUST_CONNECT = config::PROFILE == "fm" ? "n10-qpsk-r1/5" : "fsk16r25-r1/2";
+// policy.py: in a session on fast fading; FM has no CPM modes, so its robust mode stays ROBUST_CONNECT
+inline constexpr std::string_view ROBUST_FAST = config::PROFILE == "fm" ? ROBUST_CONNECT : "fsk8r50-r1/3";
+inline constexpr double ROBUST_FAST_SPREAD_HZ = 6.0;
 
 std::string_view fallback(int cap);
 std::string_view connect_mode(int cap, int tries = 0);
@@ -73,6 +77,7 @@ struct StationView {
     int misses = 0;
     int esc_floor = 0;
     bool last_rx_data = true;  // the peer's last burst carried data (expected_reply)
+    std::optional<double> tx_end;  // when my burst being built should end (Station::tx_end; nullopt: gap_s)
 };
 
 struct GearRecommendation {  // link.hpp has Recommendation (the Policy's)
@@ -94,7 +99,7 @@ public:
     using Map = std::map<std::string, double, std::less<>>;
 
     std::optional<double> noise_rule = NOISE_RULE;  // nullopt: off (DATA2G_NOISE_RULE=off)
-    double gap_s = 2.5;
+    double gap_s = 2.5;  // the gap input without a clock (StationView::tx_end nullopt: KISS, tests)
     bool use_cpm = true;
     double min_success = 0.0;
     std::optional<Measured> measured;  // the peer's last burst
@@ -113,6 +118,7 @@ public:
     std::vector<LogEntry> log;
     std::vector<double> spreads;  // the peer's last bursts' spread_est (tables::OUTCOME_GATE_HIST)
     std::vector<double> n0_spreads;  // the peer's last bursts' n0_spread_db (FM's regime input)
+    std::vector<double> floor_spreads;  // as spreads, a CPM burst's FLOOR_CPM_SPREAD_HZ (cpm_floor; CPM_FLOOR_HIST)
     // the peer's last measured (not defaulted) spread_est: a defaulted reading
     // takes it instead (policy.py SPREAD_CARRY)
     std::optional<double> last_spread;
@@ -126,6 +132,10 @@ public:
     // usable: nullopt (KISS: no control) = any codeword decoded.
     void outcome(std::string_view submode, int decoded, int sent, std::optional<bool> usable = std::nullopt);
     GearRecommendation recommend(const StationView& st);
+    // the outcome model's gap input (policy.py GearShifter.gap)
+    double gap(const StationView& st) const {
+        return st.tx_end ? *st.tx_end + REPLY_HOLD_MARGIN_S - measured_at : gap_s;
+    }
     // the gate's model applies (policy.py GearShifter.gate)
     // 0 the installed model, 1 the gate's, 2 the fast region's
     int gate() const;

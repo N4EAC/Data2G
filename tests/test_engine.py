@@ -107,6 +107,26 @@ def test_id_frames_during_and_after_a_session(tmp_path):
     assert pairs and all(abs(q["t"] - (p["t"] + p["seconds"])) < 1e-9 for p, q in pairs)
 
 
+def test_dd_budget_is_what_the_turnaround_leaves(monkeypatch, pure):
+    """In a session DD stops at my reply's latest start: my own t_turn (the
+    one I advertise; the peer's, 3.0 here, is for my reply timers) past the
+    burst's end, less PTT, TX latency and time since the block came in;
+    DD_BUDGET_S caps it, and alone applies outside a session. (Python's;
+    native's is test_engine.cpp's turnaround_budget.)"""
+    from data2g.arq import engine as EN
+    monkeypatch.setattr(PHY, "DD_BUDGET_S", 5.0)
+    e = EN.Engine("W1AW", ptt_delay_s=0.1)
+    assert e._dd_budget(10.0, 10.3) == 5.0  # idle
+    e.session.state, e.session.t_turn, e.session.peer_t_turn, e.tx_latency_s = S.CONNECTED, 2.0, 3.0, 0.2
+    monkeypatch.setattr("time.monotonic", lambda: e._arrived + 0.05)
+    assert e._dd_budget(10.0, 10.3) == pytest.approx(2.0 - 0.3 - 0.2 - 0.1 - 0.05)
+    assert e._dd_budget(10.0, 12.0) == 0.0
+    monkeypatch.setattr(PHY, "DD_BUDGET_S", 0.5)
+    assert e._dd_budget(10.0, 10.3) == 0.5
+    monkeypatch.setattr(PHY, "DD_BUDGET_S", float("inf"))
+    assert e._dd_budget(10.0, 12.0) == float("inf")  # paired studies: no wall-clock limit
+
+
 def test_tx_samples_is_the_burst_on_air_with_its_ptt_delay():
     """tx_samples and ptt_delay (speedtest.py's airtime count; the C++ Engine
     exposes them instead of copying tx's audio out): idle 0; once a burst
@@ -169,6 +189,45 @@ def test_malformed_cq_and_id_frames_are_dropped():
                       (F.T_CQ, b"\x01")):
         assert heard(ext, body) == [], (ext, body)
     assert heard(F.T_ID, F.pack_call("VARA KISS") + b"\x12\x34") == ["ID VARA KISS 4660"]
+
+
+@pytest.mark.parametrize("data2g", [False, True])
+def test_disconnect_while_dialing_frees_the_modem_after_one_try(data2g):
+    """#215: DISCONNECT with the CONNECT on air answers OK at once, keys no
+    second CONNECT, and DISCONNECTED follows within the try's reply window
+    (BPQ32 sends ABORT 30 s after its DISCONNECT)."""
+    from data2g.host import Host
+
+    a = Host(Engine("NOCALL", seed=4))
+    if data2g:
+        a.command("DATA2G ON")
+    a.command("CONNECT W1AW K2XYZ")  # nobody answers
+    rng = np.random.default_rng(0)
+    keyed, was, n = 0, False, 0
+
+    def step():
+        nonlocal keyed, was, n
+        a.engine.step(rng.normal(0, 0.01, BLOCK))
+        on = bool(a.engine.tx)
+        keyed += on and not was
+        was, n = on, n + 1
+        a.after_step(on)
+
+    while not was and n < 100:
+        step()
+    assert was  # the CONNECT is on air
+    a.out_cmd.clear()
+    a.command("DISCONNECT")
+    assert a.out_cmd == ["OK"]
+    start = n
+    while not any(c.startswith("DISCONNECTED") for c in a.out_cmd) and n - start < 600:
+        step()
+    events = [c for c in a.out_cmd if not c.startswith("PTT ")]
+    assert events == ["OK", "DISCONNECTED CLIENT unconfirmed" if data2g else "DISCONNECTED"], a.out_cmd
+    assert keyed == 1 and (n - start) * BLOCK / FS < 15
+    for _ in range(300):  # 30 s more: nothing else keys
+        step()
+    assert keyed == 1 and a.engine.session.state == S.CLOSED
 
 
 def test_vara_commands_drive_a_session(tmp_path):
@@ -658,6 +717,21 @@ def test_kiss_waits_out_busy_but_not_a_stuck_one():
     e.receiver = _Busy(until=1e9)
     e.kiss.enqueue(b"frame")
     assert 5.0 <= _first_tx(e, 8) <= 5.2
+
+
+def test_queued_kiss_bursts_go_on_one_ptt():
+    """Nothing is heard between queued KISS bursts, so they go back to back
+    on one key-up; every frame's ack once the last has gone."""
+    from data2g.kisslink import KissLink
+
+    e = Engine("W1AW", seed=1, kiss=KissLink())
+    n = e.kiss.open("APRS")  # another port: a burst of its own
+    e.kiss.enqueue(b"one", 0, ack=b"\x00\x01")
+    e.kiss.enqueue(b"two", n, ack=b"\x00\x02")
+    keyed = [e.step(np.zeros(BLOCK))[1] for _ in range(int(60 * FS / BLOCK))]
+    first = keyed.index(True)
+    assert all(keyed[first:first + keyed[first:].index(False)]) and not any(keyed[first + keyed[first:].index(False):])
+    assert not e.kiss.queue and e.kiss.take_acks() == [(0, b"\x00\x01"), (n, b"\x00\x02")]
 
 
 def test_kiss_stations_queued_under_one_burst_do_not_all_collide():

@@ -41,6 +41,28 @@ FADING_PRESETS = {
     # 6.4-7.0 dB against the measured 4.8-6.3, so it is if anything
     # slightly pessimistic.
     "mps": FadingPreset("mps", 0.15, 2.0),  # slow + selective (measured)
+    # Also measured, Nov 2026: genie channel estimates (known transmitted
+    # audio) of 1,508 decoded OFDM bursts between two volunteer nodes,
+    # Doppler from the 255 of 1.5 s or longer. The Doppler estimator
+    # reads low (0.07/0.16/0.35 Hz on these channels at 0.2/0.3/0.5 Hz
+    # true), so the on-air 0.04/0.11/0.31 Hz (p10/50/90) is about
+    # 0.15-0.4 Hz true, median 0.25. Two-path delay 0/1.7/3.2 ms (reads
+    # ~1.7 for 2 ms, ~3.8 for 4); 13-17% of long bursts sat at 3 ms or
+    # more under 1 Hz, where no other preset is. Between mps and mpp in
+    # Doppler; survivorship-biased (faster fading decodes less often).
+    "mpa": FadingPreset("mpa", 0.25, 2.0),  # on air, typical
+    "mpl": FadingPreset("mpl", 0.3, 3.5),  # on air, long delay
+}
+
+# ITU-R F.1487 Annex 3 severe profiles (two equal paths, Gaussian Doppler,
+# spread = 2 sigma). Kept apart from FADING_PRESETS so the sweeps and
+# training mixes that iterate it don't pick them up; for now only
+# phy_session.ContinuousChannel resolves them (loss_study cells).
+ITU_PRESETS = {
+    "nvis-d": FadingPreset("nvis-d", 1.0, 7.0),  # mid-latitude disturbed NVIS
+    "lowlat-d": FadingPreset("lowlat-d", 10.0, 6.0),  # low latitude disturbed
+    "hilat-m": FadingPreset("hilat-m", 10.0, 3.0),  # high latitude moderate
+    "hilat-d": FadingPreset("hilat-d", 30.0, 7.0),  # high latitude disturbed
 }
 
 

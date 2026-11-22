@@ -28,6 +28,7 @@ from pathlib import Path
 
 import numpy as np
 
+from data2g import agc as AGC
 from data2g import hfchannel, modem
 from data2g import interference as INTF
 from data2g.arq import phy as PHY
@@ -37,6 +38,9 @@ from data2g.receiver import NoiseProfile, ReplySlot, receive_any
 sys.path.insert(0, str(Path(__file__).parent))
 import linksim as L  # noqa: E402
 
+# (Doppler Hz, delay ms) by channel name: linksim's, hfchannel's and the ITU severe ones
+PRESETS = {**L.PRESETS, **{k: (p.doppler_hz, p.delay_ms)
+                           for k, p in {**hfchannel.FADING_PRESETS, **hfchannel.ITU_PRESETS}.items()}}
 PAD_S = 0.3  # noise the receiver sees around a burst
 # DATA2G_PEP_REF_DB (studies): SNR against each burst's envelope peak, as the
 # average-power SNR of a burst whose peak-to-average is this many dB (PEP-fair
@@ -61,15 +65,18 @@ class ContinuousChannel:
 
     def __init__(self, chan: str, snr_db: float, seed: int, horizon: float, doppler=None, delay_ms=None,
                  interference=None, recorded=None, wander_db: float = 0.0, wander_tau: float = WANDER_TAU_S,
-                 wander_shared: bool = False):
+                 wander_shared: bool = False, agc=None):
         """`chan`: a preset name, unless `doppler` (Hz) and `delay_ms` are given.
         `interference`: (station 0's, station 1's) interference.Spec; None: clean.
         `recorded`: a RecordedNoise in place of the Gaussian floor.
         `wander_db`: each station's floor wanders by this (standard deviation, dB;
         `wander_tau`, s) about the cell's level; its interference doesn't.
         `wander_shared`: one wander for both stations, as a slow fade of the
-        signal itself (propagation) moves the SNR both ways at once."""
+        signal itself (propagation) moves the SNR both ways at once.
+        `agc`: (station 0's, station 1's) receiver AGC (data2g.agc.Spec or
+        None), applied to each burst it hears with its noise; None: none."""
         self.recorded = recorded
+        self.agc = agc or (None, None)
         self.wander = None
         if wander_db:
             # Ornstein-Uhlenbeck in dB at 1 Hz, from -PRE_S
@@ -88,7 +95,10 @@ class ContinuousChannel:
         specs = interference or (INTF.Spec(), INTF.Spec())
         # each timeline from -PRE_S: the stations listened before the session
         self.intf = [INTF.Interference(sp, seed * 2 + i, PRE_S + horizon + 60) for i, sp in enumerate(specs)]
-        dop, dly = (doppler, delay_ms) if doppler is not None else L.PRESETS[chan]
+        if doppler is not None:
+            dop, dly = doppler, delay_ms
+        else:
+            dop, dly = PRESETS[chan]
         self.doppler, self.delay = dop, int(round(dly * 1e-3 * FS))
         if dop:
             self.rate = max(64 * dop, 8.0)
@@ -147,6 +157,8 @@ class ContinuousChannel:
             y = noisy if self.wander is None else y + (noisy - y) * self.floor_gain(rx, t0 - PAD_S, len(y))
         if rx is not None and not self.intf[rx].spec.clean:
             y += self.interference(rx, t0 - PAD_S, len(y), self.sigma(s_power))
+        if rx is not None:
+            y = AGC.apply(self.agc[rx], y, self.sigma(s_power) ** 2)
         return y
 
 
@@ -368,7 +380,10 @@ class RealPhy:
         lo, hi = P.band_span_hz(PHY.MODES[burst.submode].band)
         # the floor from the burst's own pads: this sim sets each burst's noise
         # against its peak (as a full-scale transmitter in fixed noise would see)
-        snr = prof.span_snr_db(blocks(y[pad:len(y) - pad]), lo, hi, blocks(y[:pad]) + blocks(y[len(y) - pad:]))
+        floor = blocks(y[:pad]) + blocks(y[len(y) - pad:])
+        if self.ch.agc[self.last_rx or 0] is not None:
+            floor = blocks(y[:pad])  # the end pad is in the AGC's release; the engine's floor is the idle gaps'
+        snr = prof.span_snr_db(blocks(y[pad:len(y) - pad]), lo, hi, floor)
         e = None if snr is None else snr + PHY.peak_db(burst.submode, burst.cap)
         if e is not None and floor_db is not None:  # a reading floored, never one made up
             from data2g.arq.engine import ENERGY_FLOOR_DB

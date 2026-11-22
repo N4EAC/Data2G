@@ -84,7 +84,7 @@ DATA2G_SIMD_CLONES void cscale(const cdouble* __restrict a, cdouble w, cdouble* 
 // (megabytes) are given back after each task instead of held.
 struct Scratch {
     std::vector<cdouble> prod, c, row;
-    std::vector<double> p, pn, re, im;
+    std::vector<double> p, pn, re, im, srow;
 };
 constexpr std::size_t SCRATCH_KEEP = 1 << 16;  // elements per buffer worth holding
 
@@ -301,7 +301,7 @@ double noise_level(const Mat<cdouble>& C) {
 }
 
 RawStat raw_stat(std::span<const cdouble> z, const Band& band, double reach, int repeats,
-                 std::optional<std::size_t> levels_from, bool keep_outs) {
+                 std::optional<std::size_t> levels_from, bool keep_outs, const RawSink* sink) {
     if (repeats <= 0) repeats = band.spec->preamble_repeats;
     const std::vector<cdouble> t = unit_template(band);
     RawStat r;
@@ -315,14 +315,14 @@ RawStat raw_stat(std::span<const cdouble> z, const Band& band, double reach, int
     const auto& refs = nm == "w48" || nm == "f55" || nm == "f108" ? NOISE_REF_HZ_W48 : NOISE_REF_HZ;
     all.insert(all.end(), refs.begin(), refs.end());
     const std::size_t nf = r.freqs.size(), nc = z.size() - t.size() + 1;
-    r.S = Mat<double>(nf, n_out);
+    if (!sink) r.S = Mat<double>(nf, n_out);
     r.q.resize(all.size());
-    if (keep_outs) r.outs = Mat<cdouble>(nf, nc);
+    if (keep_outs && !sink) r.outs = Mat<cdouble>(nf, nc);
     const double expo_mean = -std::log(1 - NOISE_QUANTILE);  // quantile -> mean of an exponential
     // Per bin, in the pass that makes the row (still in cache): its noise level, and for the
     // searched bins the statistic. A searched bin's row is written straight into outs.
     corr_rows(
-        z, t, all, [&](std::size_t i) { return keep_outs && i < nf ? r.outs[i] : nullptr; },
+        z, t, all, [&](std::size_t i) { return keep_outs && !sink && i < nf ? r.outs[i] : nullptr; },
         [&](std::size_t i, const cdouble* c) {
             Scratch& s = scratch();
             s.p.resize(nc);
@@ -346,7 +346,13 @@ RawStat raw_stat(std::span<const cdouble> z, const Band& band, double reach, int
             // std::complex's NaN fallback
             s.re.assign(n_out, 0.0);
             s.im.assign(n_out, 0.0);
-            repeat_stat(c, repeats, n_out, r.S[i], s.re.data(), s.im.data());
+            if (!sink) {
+                repeat_stat(c, repeats, n_out, r.S[i], s.re.data(), s.im.data());
+                return;
+            }
+            s.srow.resize(n_out);
+            repeat_stat(c, repeats, n_out, s.srow.data(), s.re.data(), s.im.data());
+            (*sink)(i, c, s.srow.data());
         });
     return r;
 }
@@ -425,7 +431,8 @@ std::vector<std::size_t> crossings(std::span<const double> D, double threshold, 
 }
 
 Acquisition acquire(std::span<const cdouble> z, const Band& band, std::optional<double> threshold_in, double reach,
-                    std::optional<std::pair<std::int64_t, std::int64_t>> search, const Mat<double>* S_in) {
+                    std::optional<std::pair<std::int64_t, std::int64_t>> search, const Mat<double>* S_in,
+                    std::int64_t col0) {
     const double threshold = threshold_in ? *threshold_in : band.preamble_threshold();
     const std::size_t n_pre = static_cast<std::size_t>(band.preamble_samples());
     if (z.size() < n_pre + 2 * M) throw SyncError("signal too short");
@@ -439,6 +446,7 @@ Acquisition acquire(std::span<const cdouble> z, const Band& band, std::optional<
     } else {
         std::tie(S_own, freqs) = detection_stat(z, band, reach);
     }
+    if (col0 && (search || !S_in)) throw std::invalid_argument("acquire: col0 needs a caller's S and no search");
     if (search) {
         if (Sp != &S_own) {
             S_own = *Sp;
@@ -457,18 +465,18 @@ Acquisition acquire(std::span<const cdouble> z, const Band& band, std::optional<
     std::vector<double> D(S.cols, -INFINITY);
     for (std::size_t i = 0; i < S.rows; ++i)
         for (std::size_t j = 0; j < S.cols; ++j) D[j] = std::max(D[j], S[i][j]);
-    const double best = D.empty() ? -INFINITY : *std::max_element(D.begin(), D.end());
+    const double best = D.empty() ? (col0 ? -1.0 : -INFINITY) : *std::max_element(D.begin(), D.end());
     if (best < threshold) {
         char msg[96];
         std::snprintf(msg, sizeof msg, "no preamble found (peak %.1f < %g)", best, threshold);
         throw SyncError(msg);
     }
     const std::vector<std::size_t> peaks = crossings(D, threshold, n_pre, 1 + TIME_ALTERNATIVES);
-    std::size_t n = peaks[0];
+    std::size_t n = peaks[0];  // S's column; z's start n + col0
     const std::size_t i = argmax_col(S, n);
     Acquisition acq;
     acq.metric = S[i][n];
-    std::tie(acq.preamble_start, acq.freq_offset) = refine(z, band, static_cast<std::int64_t>(n), freqs[i]);
+    std::tie(acq.preamble_start, acq.freq_offset) = refine(z, band, static_cast<std::int64_t>(n) + col0, freqs[i]);
 
     // runner-ups: other CFO bins at this start more than a grid step either
     // side of the winner's, then the later crossings
@@ -481,18 +489,40 @@ Acquisition acquire(std::span<const cdouble> z, const Band& band, std::optional<
     for (int a = 0; a < ALTERNATIVES; ++a) {
         const std::size_t j = argmax(col.data(), col.size());
         if (col[j] < threshold) break;
-        acq.alternatives.push_back(refine(z, band, static_cast<std::int64_t>(n), freqs[j]));
+        acq.alternatives.push_back(refine(z, band, static_cast<std::int64_t>(n) + col0, freqs[j]));
         blank(j);
     }
     for (std::size_t p = 1; p < peaks.size(); ++p) {
         n = peaks[p];
-        acq.alternatives.push_back(refine(z, band, static_cast<std::int64_t>(n), freqs[argmax_col(S, n)]));
+        acq.alternatives.push_back(refine(z, band, static_cast<std::int64_t>(n) + col0, freqs[argmax_col(S, n)]));
     }
     return acq;
 }
 
-StreamDetector::StreamDetector(const Band& b, double r)
-    : band(b), reach(r), span(PREAMBLE_CP + static_cast<std::int64_t>(b.spec->preamble_repeats) * M) {
+Mat<cdouble> pair_products(std::span<const cdouble* const> rows, std::size_t cols, int F, int P) {
+    const std::size_t FR = static_cast<std::size_t>(F), PF = static_cast<std::size_t>(P) * FR;
+    const std::size_t n = cols > PF ? cols - PF : 0;
+    Mat<cdouble> D(rows.size(), n);
+    for (std::size_t f = 0; f < rows.size(); ++f) {
+        const cdouble* c = rows[f];
+        // c[FR + u] * conj(c[u]) with the products spelled out: std::complex's operator* carries
+        // numpy-unlike NaN handling that stops the loop vectorizing (same values for finite input)
+        for (std::size_t t = 0; t < n; ++t) {
+            double sr = 0.0, si = 0.0;
+            for (std::size_t j = 0; j < static_cast<std::size_t>(P); ++j) {
+                const std::size_t u = j * FR + t;
+                const double ar = c[FR + u].real(), ai = c[FR + u].imag(), br = c[u].real(), bi = c[u].imag();
+                sr += ar * br + ai * bi;
+                si += ai * br - ar * bi;
+            }
+            D[f][t] = {sr, si};
+        }
+    }
+    return D;
+}
+
+StreamDetector::StreamDetector(const Band& b, double r, bool keep_outputs)
+    : band(b), reach(r), span(PREAMBLE_CP + static_cast<std::int64_t>(b.spec->preamble_repeats) * M), keep_c_(keep_outputs) {
     reset();
 }
 
@@ -501,8 +531,10 @@ void StreamDetector::reset() {
     tail.clear();
     S_.assign(n, {});
     C_.assign(n, {});
-    s_off_ = c_off_ = 0;
-    s0 = c0 = fed = 0;
+    D_.assign(n, {});
+    s_off_ = c_off_ = d_off_ = 0;
+    c_n_ = 0;
+    s0 = c0 = d0 = fed = 0;
     levels.clear();
 }
 
@@ -512,6 +544,7 @@ void StreamDetector::restart_at(std::int64_t pos) {
 }
 
 StreamDetector::Outputs StreamDetector::outputs_from(std::int64_t start) const {
+    if (!keep_c_) throw std::logic_error("StreamDetector: outputs not kept");
     Outputs o{std::max(c0, start), {}, 0};
     const std::size_t k = clamp_to(o.start - c0, C(0).size());
     o.cols = C(0).size() - k;
@@ -520,12 +553,47 @@ StreamDetector::Outputs StreamDetector::outputs_from(std::int64_t start) const {
     return o;
 }
 
+void StreamDetector::extend_products(int F, int P) {
+    if (!keep_c_) throw std::logic_error("StreamDetector: outputs not kept");
+    if (d0 + static_cast<std::int64_t>(D_[0].size() - d_off_) < c0) {  // not extended across a trim: start at C's
+        for (auto& row : D_) row.clear();
+        d_off_ = 0;
+        d0 = c0;
+    }
+    const auto have = static_cast<std::size_t>(d0 + static_cast<std::int64_t>(D_[0].size() - d_off_) - c0);
+    const std::size_t nc = C(0).size();
+    if (nc > have + static_cast<std::size_t>(P) * static_cast<std::size_t>(F)) {
+        std::vector<const cdouble*> rows;
+        for (std::size_t i = 0; i < bins(); ++i) rows.push_back(C(i).data() + have);
+        const Mat<cdouble> D = pair_products(rows, nc - have, F, P);
+        for (std::size_t i = 0; i < bins(); ++i) D_[i].insert(D_[i].end(), D[i], D[i] + D.cols);
+    }
+}
+
+StreamDetector::Outputs StreamDetector::products_from(std::int64_t start, int F, int P) {
+    extend_products(F, P);
+    Outputs o{std::max(c0, start), {}, 0};
+    const std::size_t nd = D_[0].size() - d_off_, k = clamp_to(o.start - d0, nd);
+    o.cols = nd - k;
+    for (std::size_t i = 0; i < bins(); ++i) o.rows.push_back(D_[i].data() + d_off_ + k);
+    return o;
+}
+
+StreamDetector::Outputs StreamDetector::kept_products(int F, int P) {
+    extend_products(F, P);
+    Outputs o{d0, {}, D_[0].size() - d_off_};
+    for (std::size_t i = 0; i < bins(); ++i) o.rows.push_back(D_[i].data() + d_off_);
+    return o;
+}
+
 void StreamDetector::skip_to(std::int64_t pos) {
     tail.clear();
     for (auto& row : S_) row.clear();
     for (auto& row : C_) row.clear();
-    s_off_ = c_off_ = 0;
-    s0 = c0 = fed = pos;
+    for (auto& row : D_) row.clear();
+    s_off_ = c_off_ = d_off_ = 0;
+    c_n_ = 0;
+    s0 = c0 = d0 = fed = pos;
 }
 
 void StreamDetector::feed(std::span<const cdouble> z_new) {
@@ -541,18 +609,21 @@ void StreamDetector::feed(std::span<const cdouble> z_new) {
     }
     // the level from the new outputs, at least 2000 (0.25 s) of the latest
     const auto levels_from = static_cast<std::size_t>(std::max<std::int64_t>(0, len - M + 1 - std::max<std::int64_t>(added, 2000)));
-    RawStat r = raw_stat(z, band, reach, 0, levels_from, true);
     const std::int64_t zs = fed - len;  // stream index of z[0], so of c[0]
-    if (C(0).empty()) c0 = zs;
-    const std::int64_t have = c0 + static_cast<std::int64_t>(C(0).size());  // outputs overlap the last chunk's
-    const std::size_t skip = clamp_to(have - zs, r.outs.cols);
-    for (std::size_t i = 0; i < bins(); ++i) {
-        C_[i].insert(C_[i].end(), r.outs[i] + skip, r.outs[i] + r.outs.cols);
-        S_[i].insert(S_[i].end(), r.S[i], r.S[i] + r.S.cols);
-    }
+    if (!c_n_) c0 = zs;
+    const std::int64_t have = c0 + static_cast<std::int64_t>(c_n_);  // outputs overlap the last chunk's
+    const auto n_c = static_cast<std::size_t>(len - M + 1), n_s = static_cast<std::size_t>(len - span + 1);
+    const std::size_t skip = clamp_to(have - zs, n_c);
+    // each bin's rows appended as raw_stat makes them (still in cache; no zeroed matrices copied after)
+    const RawSink sink = [&](std::size_t i, const cdouble* c, const double* s) {
+        if (keep_c_) C_[i].insert(C_[i].end(), c + skip, c + n_c);
+        S_[i].insert(S_[i].end(), s, s + n_s);
+    };
+    RawStat r = raw_stat(z, band, reach, 0, levels_from, true, &sink);
+    c_n_ += n_c - skip;
     levels.push_back(std::move(r.q));
     if (levels.size() > static_cast<std::size_t>(CHUNKS)) levels.erase(levels.begin());
-    tail.assign(z.begin() + static_cast<std::ptrdiff_t>(r.S.cols), z.end());
+    tail.assign(z.begin() + static_cast<std::ptrdiff_t>(n_s), z.end());
 }
 
 namespace {
@@ -569,9 +640,13 @@ void StreamDetector::trim(std::int64_t start) {
     const std::size_t k = clamp_to(start - s0, S(0).size());
     drop_front(S_, s_off_, k);
     s0 += static_cast<std::int64_t>(k);
-    const std::size_t kc = clamp_to(start - c0, C(0).size());
-    drop_front(C_, c_off_, kc);
+    const std::size_t kc = clamp_to(start - c0, c_n_);
+    if (keep_c_) drop_front(C_, c_off_, kc);
+    c_n_ -= kc;
     c0 += static_cast<std::int64_t>(kc);
+    const std::size_t kd = clamp_to(start - KEEP_BEHIND - d0, D_[0].size() - d_off_);
+    drop_front(D_, d_off_, kd);
+    d0 += static_cast<std::int64_t>(kd);
 }
 
 std::optional<double> StreamDetector::level() const {
@@ -584,6 +659,18 @@ std::optional<double> StreamDetector::level() const {
         med[b] = v.size() % 2 ? v[h] : (v[h - 1] + v[h]) / 2;
     }
     return level_of(med);
+}
+
+double StreamDetector::peak(std::int64_t lo, std::int64_t hi) const {
+    const std::int64_t a = std::max(lo, s0), b = std::min(hi, s0 + static_cast<std::int64_t>(S(0).size()));
+    const auto q = level();
+    if (!(b > a && q)) return -1.0;
+    double top = -INFINITY;
+    for (std::size_t i = 0; i < bins(); ++i) {
+        const double* src = S(i).data() + (a - s0);
+        for (std::int64_t j = 0; j < b - a; ++j) top = std::max(top, src[j]);
+    }
+    return top / *q;
 }
 
 Mat<double> StreamDetector::stat(std::int64_t lo, std::int64_t hi) const {

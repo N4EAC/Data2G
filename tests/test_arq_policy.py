@@ -340,3 +340,71 @@ def test_expected_reply_follows_what_the_peer_sent_last():
     mode, secs = g.expected_reply()
     assert mode == G.decode(reply) and secs == G.burst_seconds(G.MODES[mode], G.ctl_slots(G.MODES[mode]))
     assert secs < G.burst_seconds(G.MODES[G.decode(data)], G.slots_for(G.MODES[G.decode(data)], G.SIZE_S[hint]))
+
+
+def test_robust_mode_follows_measured_spread():
+    """In a session, robust polls and the robust floor go in ROBUST_FAST once
+    the peer measured fast fading (fsk16r25 fails on 30 Hz Doppler, #244); a
+    robust poll is answered in whichever robust mode it came in."""
+    g = G.GearShifter()
+    st = station(0)
+    assert g.choose(st, 4) == (G.ROBUST_CONNECT, 1)  # nothing measured
+    g.observe(measured(10, 12.0), "fsk32r62-r1/2", 0.0)
+    assert g.choose(st, 4) == (G.ROBUST_FAST, 1)
+    st.tx, st.esc_floor = SimpleNamespace(pending=lambda: False, base=0), G.ROBUST_ESCALATION
+    assert g.choose(st, 0) == (G.ROBUST_FAST, 1)  # the robust floor too
+    g.observe(measured(10, 1.0), G.ROBUST_CONNECT, 1.0)
+    assert g.choose(st, 1) == (G.ROBUST_CONNECT, 1)  # answered in the peer's robust mode
+    assert g.choose(st, 4) == (G.ROBUST_CONNECT, 1)
+    g.observe(measured(10, 12.0), G.ROBUST_FAST, 2.0)
+    assert g.choose(st, 1) == (G.ROBUST_FAST, 1)
+    from data2g.arq.modes import burst_seconds
+
+    hold = g.reply_hold(SimpleNamespace(cap=0, misses=0, esc_floor=0), SimpleNamespace(submode=G.ROBUST_FAST))
+    assert hold >= max(burst_seconds(G.MODES[m], 1) for m in G.ROBUST_MODES)
+
+
+def test_live_gap_is_the_training_rows_gap():
+    """The shifter's gap input live (GearShifter.gap) against the one its
+    training rows get (scripts/session_data.py: t0 - snap["t"], from the
+    measured peer burst to the start of the burst predicted), in a 120 s
+    session on the real modem, MPP 0 dB. Live it is an estimate: my burst's
+    end plus a reply's start. It is never late; a reply is within ~0.1 s
+    (a control spilling into a second codeword: ~0.5 s); a poll after a
+    timeout or a held reply starts later than estimated."""
+    import random
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+    import linksim as L
+    import outcome_data as O
+    import phy_session as PS
+    import session_data as SD
+
+    pairs = []
+
+    class Shifter(SD.Explorer):
+        def recommend(self, station):
+            out = super().recommend(station)
+            if self.measured is not None:
+                self.snap["live"] = self.gap(G.view(station))
+            return out
+
+    class Phy(SD.DataPhy):
+        def send(self, burst, t0):
+            snap, n = self.pols[1 - burst.slots[0].mask_id[1]].snap, len(self.out)
+            res = super().send(burst, t0)
+            if len(self.out) > n:  # a training row
+                pairs.append(self.out[-1]["gap"] - snap["live"])
+            return res
+
+    seed, snr, horizon = 1, 0.0, 120.0
+    doppler, delay = L.PRESETS["mpp"]
+    pols = [Shifter(random.Random(seed * 2 + i)) for i in range(2)]
+    ch = PS.ContinuousChannel(O.family(doppler), snr, seed, horizon + 60, doppler=doppler, delay_ms=delay)
+    L.run(pols[0], pols[1], None, L.WORKLOADS["bulk"](random.Random(seed + 7)), seed=seed, horizon=horizon,
+          phy=Phy(ch, dict(seed=seed), pols, snr, 0.0, []), cap=2)
+    d = np.array(pairs)
+    assert len(d) >= 15
+    assert d.min() >= -0.1 and np.median(np.abs(d)) <= 0.1 and np.mean(np.abs(d) <= 0.6) >= 0.8, np.round(d, 2)

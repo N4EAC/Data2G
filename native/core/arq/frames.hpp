@@ -44,7 +44,12 @@ inline constexpr int T_PAD = 0, T_NEW = 1, T_ABANDON = 2, T_RV = 3, T_BITMAP = 4
                      // empty: the sender hears nods (docs/arq.md §3b), in control padding until the peer
                      // acted on it; nods go only to a peer that sent it. Dropped at the next version bump.
                      T_NODS = 19,
-                     T_PING = 20;  // FM only (arq/ping): a ping or its reply, the TX path and level check
+                     // empty: the sender keeps T_REPLY (docs/arq.md §8a), in control padding or in T_REPLY's
+                     // place until the peer acted on it. Both having said it is not enough to leave T_REPLY
+                     // out as unchanged, or to read a control without it so: §8a's three steps say when a
+                     // station may do either. Dropped at the next version bump.
+                     T_KEEP = 20,
+                     T_PING = 21;  // FM only (arq/ping): a ping or its reply, the TX path and level check
 // An extension type's short name ("ext N" for one not listed): monitor/'s
 // dumps. A new T_* gets its name here too. (Native only.)
 std::string ext_name(int t);

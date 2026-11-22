@@ -317,3 +317,23 @@ def test_coherent(native, reference, case):
             np.testing.assert_allclose(M, ref(reference, "dd_metric")(r, p, slot), rtol=1e-9, atol=1e-9)
             np.testing.assert_allclose(native.cpm.dd_soft(spec.name, dup, n_cw, M, slot), ref(reference, "dd_soft")(r, M, slot),
                                        rtol=1e-12, atol=1e-12)
+
+
+def test_coarse_track(native, reference):
+    """C++ CoarseTrack fed as a receiver feeds it (20 ms, buffer trimmed to
+    a second): detect and find reading it as Python's do reading cpm.py's."""
+    rng = np.random.default_rng(6)
+    for g in GRIDS:
+        x = rng.normal(0, 1, 4 * FS)
+        tn, tp, off, buf = native.cpm.CoarseTrack(g.name), ref(reference, "CoarseTrack")(g), 0, np.zeros(0)
+        for i in range(0, len(x), FS // 50):
+            buf = np.concatenate([buf, x[i:i + FS // 50]])
+            if len(buf) > FS:
+                off, buf = off + len(buf) - FS, buf[len(buf) - FS:]
+            tn.feed(buf, off)
+            tp.feed(buf, off)
+        assert tn.extra == tp.extra
+        for kw in (dict(front_only=True, fine=False), dict(mid=True)):
+            a, b = native.cpm.detect(g.name, buf[37:], track=tn, x0=off + 37, **kw), \
+                ref(reference, "detect")(g, buf[37:], track=tp, x0=off + 37, **kw)
+            assert a[1:] == b[1:] and a[0] == pytest.approx(b[0], rel=RTOL), (g.name, kw)

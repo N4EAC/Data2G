@@ -9,6 +9,8 @@ it Python uses numpy's, which round sum-product a little differently
 the decode converged.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -264,3 +266,15 @@ def test_decode_buffer_raw(native, py, spec):
         got, want = n.decode_buffer_raw(spec.name, buf, 1, k), py.decode_buffer_raw(spec, buf, 1, k)
         assert got[0].shape == want[0].shape and got[1].shape == want[1].shape
         assert py.check(spec, got[0][0], got[1][0], 0x99) == py.check(spec, want[0][0], want[1][0], 0x99) == pay
+
+
+def test_gf_check_precision(native, py):
+    """#242: a fsk16r25-r1/3 data slot (hilat, -2 dB) that decodes only when the
+    GF(M) check update's transforms are double; float32 cancellation turned
+    small probabilities negative and the decoder missed the codeword."""
+    spec = cpm.SPECS["fsk16r25-r1/3"]
+    d = np.load(Path(__file__).parent / "data" / "gf242_fsk16r25_r13.npz")
+    soft = d["soft"].astype(np.float64)
+    for bits, ok, _ in (native.codes.decode_posterior(spec.name, soft), py.decode_posterior(spec, soft)):
+        assert ok
+        np.testing.assert_array_equal(bits, d["bits"])

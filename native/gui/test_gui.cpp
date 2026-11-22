@@ -24,6 +24,7 @@
 #include <QTextDocument>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 #include <QThread>
 
@@ -300,6 +301,32 @@ void test_settings(const QTemporaryDir& dir) {
     check::is_true(!legacy.contains("rigctld_port") && !legacy.contains("host"), "...and saving drops the old keys");
 }
 
+// open_config: a data2g.conf beside the program before the config dir's, and
+// --config's before both.
+void test_config_beside_program(const QTemporaryDir& dir) {
+    check::current_step = "config file beside the program";
+    const QString beside = QCoreApplication::applicationDirPath() + QStringLiteral("/data2g.conf");
+    if (QFile::exists(beside)) {
+        check::is_true(false, "no data2g.conf beside the test before it runs");
+        return;
+    }
+    struct Remove {
+        QString path;
+        ~Remove() { QFile::remove(path); }
+    } cleanup{beside};
+    QFile made(beside);
+    check::is_true(made.open(QIODevice::WriteOnly), "the test can write beside itself");
+    made.close();
+    char prog[] = "data2g-gui";
+    char* bare[] = {prog};
+    const QString other = dir.filePath(QStringLiteral("beside-other.conf"));
+    QByteArray other_arg = ("--config=" + other).toLocal8Bit();
+    char* with[] = {prog, other_arg.data()};
+    check::is_true(QFileInfo(app::open_config(1, bare)->fileName()) == QFileInfo(beside), "a data2g.conf beside the program is the one used");
+    check::is_true(QFileInfo(app::settings_store()->fileName()) == QFileInfo(beside), "...by settings_store() too");
+    check::is_true(QFileInfo(app::open_config(2, with)->fileName()) == QFileInfo(other), "--config over it");
+}
+
 // open_config: data2g.conf in the config dir, the old store moved to it once;
 // --config's file instead, with nothing moved.
 void test_config_file(const QTemporaryDir& dir) {
@@ -347,10 +374,22 @@ void test_window(const QTemporaryDir& dir) {
     a.command_port = free_port_triple();
     a.kiss_port = a.command_port + 2;  // KISS always runs: a port of its own
     QSettings store(dir.filePath(QStringLiteral("window.ini")), QSettings::IniFormat);
+    // Heights: the offscreen screen is narrower than the window can be.
+    const auto saved_height = [&store] {
+        QWidget probe;
+        probe.restoreGeometry(store.value(QStringLiteral("gui/geometry")).toByteArray());
+        return probe.height();
+    };
+    {
+        QWidget last;  // where the window was left by the run before
+        last.resize(760, 600);
+        store.setValue(QStringLiteral("gui/geometry"), last.saveGeometry());
+    }
     check::current_step = "window: start the station";
     gui::MainWindow w(a, store);
     w.show();
     check::is_true(w.station().running(), "station running");
+    check::equal(w.height(), 600, "the window opens at the size it was left at");
     {
         // macOS: any other role and Qt moves the entry to the application menu, emptying File
         QStringList seen;
@@ -529,6 +568,9 @@ void test_window(const QTemporaryDir& dir) {
     check::is_true(wait_for([&] { return again.state() != QAbstractSocket::ConnectedState; }, 5000),
                    "a port change restarts: the client dropped");
     check::is_true(w.station().running() && w.station().args() == live, "running on the new port");
+    check::current_step = "window: resize";
+    w.resize(w.width(), 620);
+    check::is_true(wait_for([&] { return saved_height() == 620; }, 3000), "a resize is saved without closing the window");
     check::current_step = "window: close";
 }
 
@@ -594,6 +636,7 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QTemporaryDir dir;
     test_settings(dir);
+    test_config_beside_program(dir);
     test_config_file(dir);
     test_noise_rule_slider();
     test_decoder_effort();

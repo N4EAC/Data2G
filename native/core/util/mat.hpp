@@ -20,6 +20,11 @@ struct Mat {
     const T* operator[](std::size_t r) const { return data.data() + r * cols; }
     std::span<T> row(std::size_t r) { return {(*this)[r], cols}; }
     std::span<const T> row(std::size_t r) const { return {(*this)[r], cols}; }
+    std::vector<const T*> row_ptrs() const {  // each row's start (APIs taking row pointers)
+        std::vector<const T*> out(rows);
+        for (std::size_t r = 0; r < rows; ++r) out[r] = (*this)[r];
+        return out;
+    }
 };
 
 }  // namespace data2g
