@@ -39,4 +39,17 @@ KC2G, 432.950 MHz simplex, minimum power, a few metres apart: full quieting thro
 ## Conclusions so far
 
 - P1's ~15 dB IC-9700 -> TH-D75 ceiling was mostly the TH-D75's receive path: the same IC-9700 TX reaches 22-24 dB on the FT-8800R.
-- The 22-24 dB is the IC-9700's data-mode TX (its compression; the ping's distortion check flags its limiter). Next check: IC-9700 USB MOD level down (10-20%) and see whether S/N rises and dist falls.
+- The 22-24 dB: USB MOD 40% drove the IC-9700's limiter; at 10% the limiter clears but a ~25 dB ceiling remains (see below).
+
+## IC-9700 TX level (pings IC-9700 -> FT-8800R, narrow)
+
+| USB MOD | PipeWire sink | received rms | snr | dist | verdict |
+|---|---|---|---|---|---|
+| 40% | 40% | -17.0 dBFS | 22.7 | 2.4 | limiter |
+| 10% | 15% | -46.5 | 14.0 | 0.0 | level OK |
+| 10% | 40% | -34.5 | 23.2-24.0 | 0.0 | level OK |
+| 10% | 100% | -21.5 | 25.2 | 0.0 | level OK |
+
+- USB MOD 40% overdrives the IC-9700's limiter (dist 2.4); 10% clears it.
+- Below ~40% sink a fixed noise floor sets S/N; above it a ~25 dB ceiling that rises with the signal (not compression: dist 0). Source not separated (IC-9700 TX audio path or FT-8800R RX); a third receiver of the IC-9700 would settle it.
+- Session IC-9700 -> FT-8800R at USB MOD 10%, sink 100%: 45.7 s, 5256 bps, intact (3991 bps at 40%/40%). New IC-9700 setting for P2: USB MOD 10%, sink 100%.
