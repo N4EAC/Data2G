@@ -11,11 +11,13 @@ namespace {
 constexpr unsigned POLY[] = {0, 0, 0, 0b1011, 0b10011, 0b100101};  // gfldpc.POLY by p
 
 // Unnormalized Walsh-Hadamard transform in place (Sylvester order: scipy.linalg.hadamard's).
-void wht(float* a, int q) {
+// Double: the inverse transform of a product cancels, and float32 turns small
+// probabilities negative (clamped away), so valid codewords were missed (#242).
+void wht(double* a, int q) {
     for (int h = 1; h < q; h *= 2)
         for (int i = 0; i < q; i += 2 * h)
             for (int j = i; j < i + h; ++j) {
-                const float x = a[j], y = a[j + h];
+                const double x = a[j], y = a[j + h];
                 a[j] = x + y;
                 a[j + h] = x - y;
             }
@@ -203,8 +205,9 @@ Decoded Decoder::decode(const Mat<float>& ll, int iters, bool posterior) const {
     const std::size_t E = static_cast<std::size_t>(c.m * D);
     int dv = 0;
     for (int v = 0; v < n; ++v) dv = std::max(dv, col_ptr_[v + 1] - col_ptr_[v]);
-    std::vector<float> ch(static_cast<std::size_t>(n * q)), c2v(E * q), v2c(E * q), W(static_cast<std::size_t>(D * q)),
+    std::vector<float> ch(static_cast<std::size_t>(n * q)), c2v(E * q), v2c(E * q),
         fwd(static_cast<std::size_t>((std::max(D, dv) + 1) * q)), tmp(static_cast<std::size_t>(q));
+    std::vector<double> W(static_cast<std::size_t>(D * q)), cf(static_cast<std::size_t>(D * q)), ct(static_cast<std::size_t>(q));
     for (std::size_t b = 0; b < ll.rows; ++b) {
         std::uint8_t* hard = out.hard[b];
         for (int v = 0; v < n; ++v) {  // exp(ll - its max)
@@ -246,9 +249,9 @@ Decoded Decoder::decode(const Mat<float>& ll, int iters, bool posterior) const {
             for (int r = 0; r < c.m; ++r) {
                 for (int d = 0; d < D; ++d) {
                     const int e = r * D + d;
-                    float* w = &W[d * q];
+                    double* w = &W[d * q];
                     if (c.var[e] < 0) {  // padding: a known zero, whose transform is all ones
-                        std::fill(w, w + q, 1.0f);
+                        std::fill(w, w + q, 1.0);
                         continue;
                     }
                     const int hi = inv[c.h[e]];
@@ -257,24 +260,25 @@ Decoded Decoder::decode(const Mat<float>& ll, int iters, bool posterior) const {
                     wht(w, q);
                 }
                 // products of the others' transforms: forward, then backward
-                std::copy(W.begin(), W.begin() + q, fwd.begin());
+                std::copy(W.begin(), W.begin() + q, cf.begin());
                 for (int d = 1; d < D; ++d)
-                    for (int a = 0; a < q; ++a) fwd[d * q + a] = fwd[(d - 1) * q + a] * W[d * q + a];
-                std::fill(tmp.begin(), tmp.end(), 1.0f);  // the backward product past d
+                    for (int a = 0; a < q; ++a) cf[d * q + a] = cf[(d - 1) * q + a] * W[d * q + a];
+                std::fill(ct.begin(), ct.end(), 1.0);  // the backward product past d
                 for (int d = D - 1; d >= 0; --d) {
                     const int e = r * D + d;
                     if (c.var[e] >= 0) {
-                        float R[32];
-                        for (int a = 0; a < q; ++a) R[a] = (d ? fwd[(d - 1) * q + a] : 1.0f) * tmp[a];
+                        double R[32];
+                        for (int a = 0; a < q; ++a) R[a] = (d ? cf[(d - 1) * q + a] : 1.0) * ct[a];
                         wht(R, q);
                         const int hv = c.h[e];
                         float* m = &c2v[e * q];
-                        float mx = 0.0f;
-                        for (int a = 0; a < q; ++a) mx = std::max(mx, m[a] = std::max(R[mul[hv * q + a]], 0.0f));
-                        const float k = mx > 0.0f ? 1.0f / mx : 1.0f;
-                        for (int a = 0; a < q; ++a) m[a] = std::max(m[a] * k, FLOOR);
+                        double mx = 0.0;
+                        for (int a = 0; a < q; ++a) mx = std::max(mx, R[mul[hv * q + a]]);
+                        const double k = mx > 0.0 ? 1.0 / mx : 1.0;
+                        for (int a = 0; a < q; ++a)
+                            m[a] = std::max(static_cast<float>(std::max(R[mul[hv * q + a]], 0.0) * k), FLOOR);
                     }
-                    for (int a = 0; a < q; ++a) tmp[a] *= W[d * q + a];
+                    for (int a = 0; a < q; ++a) ct[a] *= W[d * q + a];
                 }
             }
         }

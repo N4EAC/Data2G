@@ -462,6 +462,17 @@ std::pair<std::vector<Bytes>, int> unpack_frames(const std::vector<Bytes>& paylo
     return {out, lost + static_cast<int>(damaged)};
 }
 
+std::vector<arq::TxBurstPtr> KissLink::next_bursts() {
+    std::vector<arq::TxBurstPtr> out;
+    std::vector<std::pair<int, std::int64_t>> acks_all;
+    while (auto b = next_burst()) {
+        out.push_back(std::move(b));
+        acks_all.insert(acks_all.end(), inflight_acks_.begin(), inflight_acks_.end());
+    }
+    if (!out.empty()) inflight_acks_ = std::move(acks_all);  // inflight_ is already the last
+    return out;
+}
+
 arq::TxBurstPtr KissLink::next_burst() {
     while (!queue.empty()) {
         const int n = queue[0].port;

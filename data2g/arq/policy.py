@@ -85,6 +85,12 @@ REPLY_HOLD_MARGIN_S = 0.5  # the reply's start past my burst's end (0.4-0.6 s me
 # -10/-8 20% at 500 Hz; snr:-6/-8 no better than off.
 CPM_FLOOR_DEFAULT = ("snr", -4.0, 1.0)
 CPM_FLOOR_HIST = 3
+# What a CPM burst counts as in the floor's spread condition (floor_spreads).
+# CPM's spread_est read 3.0 on every channel until 2026-11-18 (cpm.spread),
+# so on CPM the condition always held, AWGN and MPG included: the floor's
+# measured gains (AWGN -10/-8 +76-82% above) depend on that. Kept as it was;
+# the model's inputs get the measured value.
+FLOOR_CPM_SPREAD_HZ = 3.0
 LADDER_AFTER = 2
 LADDER_STEP_DB = 3.0
 LINK_HIST = 8  # the link history's window: peer bursts I expected (predictor.N_LINK)
@@ -104,6 +110,16 @@ CONNECT = {0: "n10-qpsk-r1/3", 1: "qpsk-r1/5", 2: "qpsk-r1/5"}  # >= 28 B payloa
 ALT_POLL = "n4-ack-8f"
 ROBUST_ESCALATION = 4  # from here on ROBUST_CONNECT (link caps escalation at 4)
 ROBUST_CONNECT = "fsk16r25-r1/2"  # session-frame retries: 500 Hz, within every cap; CONNECT goes compact (20 B)
+# In a session, the robust mode on fast fading (robust_mode()): the peer's last
+# measured spread_est at least ROBUST_FAST_SPREAD_HZ. On 30 Hz / 7 ms fading
+# fsk16r25 decodes nothing even at a genie lock (25 Hz tones), and its lock
+# gets worse with SNR (#244), so polls in it stalled sessions longer the
+# stronger the signal; fsk8r50-r1/3 (400 Hz, within every cap too) locked and
+# decoded 100% there from -5 to +20 dB. Connect retries keep ROBUST_CONNECT:
+# before a session nothing is measured.
+ROBUST_FAST = "fsk8r50-r1/3"
+ROBUST_FAST_SPREAD_HZ = 6.0
+ROBUST_MODES = (ROBUST_CONNECT, ROBUST_FAST)
 
 # --- study toggles (Python only; native has the defaults) --------------------
 # Set any and tests/native_subs/gear.py's GEAR_STUDY_ENV keeps the shifter in Python.
@@ -205,6 +221,7 @@ class StationView(NamedTuple):
     esc_floor: int = 0
     timeouts: int = 0  # stats["timeouts"] (link_features: Python only)
     last_rx_data: bool = True  # the peer's last burst carried data (expected_reply)
+    tx_end: float | None = None  # when my burst being built should end (link.Station._tx_end; None: gap_s)
 
 
 def view(station) -> StationView:
@@ -217,7 +234,7 @@ def view(station) -> StationView:
         return StationView(station.cap, station.tx.pending(), station.peer_recommend, station.peer_reply_recommend,
                            station.peer_size_hint, station.peer_wants_dup, bool(station.chat or station.peer_chat),
                            station.peer_queued, len(station.rx.buf), station.misses, station.esc_floor,
-                           station.stats.get("timeouts", 0), station.last_rx_data)
+                           station.stats.get("timeouts", 0), station.last_rx_data, station.tx_end)
     except AttributeError:
         pass
 
@@ -230,12 +247,13 @@ def view(station) -> StationView:
                        peer_size_hint=g("peer_size_hint", 1), peer_wants_dup=g("peer_wants_dup", False),
                        chat=bool(g("chat", False) or g("peer_chat", False)), peer_queued=g("peer_queued", 0),
                        held=len(rx.buf) if rx is not None else 0, misses=g("misses", 0), esc_floor=g("esc_floor", 0),
-                       timeouts=g("stats", {}).get("timeouts", 0), last_rx_data=g("last_rx_data", True))
+                       timeouts=g("stats", {}).get("timeouts", 0), last_rx_data=g("last_rx_data", True),
+                       tx_end=g("tx_end", None))
 
 
 @dataclass
 class GearShifter(L.Policy):
-    gap_s: float = 2.5
+    gap_s: float = 2.5  # the gap input without a clock (StationView.tx_end None: KISS, tests)
     use_cpm: bool = True  # recommend CPM modes (only once the outcome model has learned them)
     # data modes need P(usable) x P(codeword) at least this: the KISS TNC
     # sets it (no resends there; a lost codeword is a lost AX.25 frame and a
@@ -257,6 +275,7 @@ class GearShifter(L.Policy):
     link_now: list | None = None  # link_features() at the last recommendation
     energies: list = field(default_factory=list)  # the peer's last ENERGY_HIST bursts' energy SNR, dB
     spreads: list = field(default_factory=list)  # the peer's last bursts' spread_est (predictor.GATE)
+    floor_spreads: list = field(default_factory=list)  # as spreads, a CPM burst's FLOOR_CPM_SPREAD_HZ (cpm_floor)
     last_spread: float | None = None  # the peer's last measured (not defaulted) spread_est (SPREAD_CARRY)
     snrs: list = field(default_factory=list)  # the peer's last CPM_FLOOR_HIST bursts' snr_est (CPM_FLOOR)
     snrs_long: list = field(default_factory=list)  # the same, the last GATE_HIST (the gate's steadiness)
@@ -289,6 +308,12 @@ class GearShifter(L.Policy):
         loss-study sessions there never connected in qpsk-r1/5)."""
         return CONNECT[cap] if tries == 0 else ROBUST_CONNECT
 
+    def robust_mode(self) -> str:
+        """In a session, the robust control mode: ROBUST_FAST if the peer's
+        last measured spread_est says fast fading, else ROBUST_CONNECT."""
+        fast = self.last_spread is not None and self.last_spread >= ROBUST_FAST_SPREAD_HZ
+        return ROBUST_FAST if fast else ROBUST_CONNECT
+
     def airtime(self, m, n_cw, dup=False):
         """`dup`: a CPM burst's control twice (the second copy is a short
         control codeword, not a data one: an x10 burst is 30.4 s, not 32.6)."""
@@ -314,8 +339,10 @@ class GearShifter(L.Policy):
         # as well, not only polls (MPP -8: the peer heard 4 of my 11
         # n4-ack-8f acks and 13 of 17 robust polls; its data waited on them)
         robust_floor = st.esc_floor >= ROBUST_ESCALATION and not st.pending
-        if escalation >= ROBUST_ESCALATION or (escalation and self.heard == ROBUST_CONNECT) or robust_floor:
-            return ROBUST_CONNECT, 1
+        if escalation and self.heard in ROBUST_MODES:  # the peer's robust poll: answered in its mode
+            return self.heard, 1
+        if escalation >= ROBUST_ESCALATION or robust_floor:
+            return self.robust_mode(), 1
         if escalation == 2:
             return ALT_POLL, 2
         if escalation:
@@ -350,8 +377,8 @@ class GearShifter(L.Policy):
         modes = [self.log[-1][2] if self.log else FALLBACK[st.cap]]
         if st.misses:
             modes += [FALLBACK[st.cap], ALT_POLL]
-        if burst.submode == ROBUST_CONNECT or st.esc_floor >= ROBUST_ESCALATION:
-            modes.append(ROBUST_CONNECT)
+        if burst.submode in ROBUST_MODES or st.esc_floor >= ROBUST_ESCALATION:
+            modes += ROBUST_MODES
         return max(burst_seconds(MODES[m], ctl_slots(MODES[m])) for m in modes) + REPLY_HOLD_MARGIN_S
 
     # -- as a receiver: the peer's next burst, from my measurements of its last -------
@@ -368,6 +395,8 @@ class GearShifter(L.Policy):
         self.measured, self.measured_band, self.measured_at = measured, MODES[submode].band, now
         self.heard = submode
         self.spreads = (self.spreads + [float(measured.get("spread_est", 0.0))])[-P.GATE_HIST:]
+        fs = FLOOR_CPM_SPREAD_HZ if is_cpm(MODES[submode]) else self.spreads[-1]
+        self.floor_spreads = (self.floor_spreads + [fs])[-CPM_FLOOR_HIST:]
         self.snrs = (self.snrs + [float(measured["snr_est"])])[-CPM_FLOOR_HIST:]
         self.snrs_long = (self.snrs_long + [float(measured["snr_est"])])[-P.GATE_HIST:]
 
@@ -376,7 +405,7 @@ class GearShifter(L.Policy):
         if CPM_FLOOR is None:
             return False
         kind, x, spread = CPM_FLOOR
-        if spread and (not self.spreads or float(np.median(self.spreads[-CPM_FLOOR_HIST:])) < spread):
+        if spread and (not self.floor_spreads or float(np.median(self.floor_spreads)) < spread):
             return False
         if kind == "snr":
             return bool(self.snrs) and float(np.median(self.snrs)) < x
@@ -482,6 +511,15 @@ class GearShifter(L.Policy):
         n = len(self.turns)
         return [self.turns.count("lost") / n, self.turns.count("miss") / n, n / LINK_HIST, 1.0]
 
+    def gap(self, st: StationView) -> float:
+        """The outcome model's gap input: from the peer burst measured
+        (observe's now) to the start of the one predicted, as
+        scripts/session_data.py's rows have it (t0 - snap["t"]). That burst
+        is the peer's reply to mine: past my burst's end by
+        REPLY_HOLD_MARGIN_S (sims 0.45 s, on air 0.4-0.6 s). A timeout's
+        poll or a held reply starts later than this."""
+        return self.gap_s if st.tx_end is None else st.tx_end + REPLY_HOLD_MARGIN_S - self.measured_at
+
     def recommend(self, station) -> tuple[int, int, int]:
         """-> (data mode, size hint, reply mode) for the peer's next burst:
         the mode it should use if it sends data, and if it sends none."""
@@ -496,6 +534,7 @@ class GearShifter(L.Policy):
         prev = None
         if self.prev is not None:
             prev = (self.prev[0], self.prev[1], min(self.measured_at - self.prev[2], PREV_MAX_S))
+        gap = self.gap(st)
 
         # the outcome model (P from real decodes, scripts/train_outcome.py)
         # replaced the MI predictor's output corrections: at -4 dB AWGN on
@@ -520,7 +559,7 @@ class GearShifter(L.Policy):
         def predicted(s, n_cw):
             key = (round(burst_seconds(s, n_cw), 2), shift.get(s.band, 0.0))
             if key not in omemo:
-                omemo[key] = P.predict_outcome(P.shifted(m, key[1]), self.measured_band, self.gap_s, key[0], cands, prev,
+                omemo[key] = P.predict_outcome(P.shifted(m, key[1]), self.measured_band, gap, key[0], cands, prev,
                                                gated, cond)
             return omemo[key][s.name]
 

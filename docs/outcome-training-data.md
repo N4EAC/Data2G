@@ -22,6 +22,12 @@ Rows: one per burst a receiver had a measurement for (`session_data.py`
 docstring). "Steering" is the model whose recommendations the sessions
 followed; exploration is `session_data.EXPLORE` (0.2) unless noted.
 
+"Every channel kind" is `outcome_data.KINDS` at the set's commit. From #259
+it adds the on-air presets `mpa` (0.25 Hz, 2 ms) and `mpl` (0.3 Hz, 3.5 ms)
+at 0.1 each beside awgn 0.15, mpg 0.2, mpp 0.2, mpd 0.15 and random 0.3
+(normalised: 1/12 of sessions each). Sets made before it have neither, and
+the same `--first` seeds draw other kinds after it.
+
 | file | generator (sessions, `--first`) | kind | steering | code | why |
 |---|---|---|---|---|---|
 | `session_data_v11.csv` | `session_data --sessions 2900 --first 700000` (`runs/v11_round.sh`) | regular: -8..22 dB drifting, every channel kind, 300 s, cap 500 Hz 1/4 | v10, no logit offsets, `DATA2G_BIAS_FIX=1` | f8d8e0c | v12's own sessions |
@@ -73,8 +79,53 @@ followed; exploration is `session_data.EXPLORE` (0.2) unless noted.
 | `session_data_cohm_awgnhigh.csv` | `--high --kinds awgn --sessions 400 --first 15300000` (same) | high AWGN | same | 6b4ac87 | |
 | `session_data_cohm_fastlow.csv` | `--fastlow --sessions 1200 --first 15400000` (same) | fastlow | same | 6b4ac87 | |
 | `session_data_cohm_floor.csv` | `--floor --sessions 3000 --first 15500000` (same) | floor | same | 6b4ac87 | the floor on the coherent receiver |
+| `session_data_sev.csv` | `with_native session_data --severe --sessions 2000 --first 16000000` (`runs/sev_round.sh`), `DATA2G_SPREAD_CARRY=1` | ITU-R F.1487 severe profiles (`hfchannel.ITU_PRESETS`) half the time, else Doppler 2-30 Hz and delay 0-8 ms; SNR and drift as regular, 300 s | the installed CNP (cohc4), offsets as shipped, Python shifter | ade53f7 (master ad37335 + ITU presets) | OFDM fails past ~3 Hz (one pilot row per 144 ms) while CPM decodes; no other set shows it (sevle12, not shipped) |
+| `session_data_spr.csv` | `--sessions 2900 --first 17000000` (`runs/spr_round.sh`), `DATA2G_SPREAD_CARRY=1` | regular | the installed CNP (cohc4), offsets as shipped, Python shifter | abdbef3 (lag-fit CPM spread_est, `cpm.spread`; cohc4 never saw it, so its CPM-measured steering is off-distribution) | superseded by spr3: AWGN read 12 Hz on CPM (fixed 13a509f), GF decode in float32 (#243) |
+| `session_data_spr_slow.csv` | `--slow --sessions 800 --first 17100000` (same) | slow | same | abdbef3 | |
+| `session_data_spr_high.csv` | `--high --sessions 1200 --first 17200000` (same) | high | same | abdbef3 | |
+| `session_data_spr_awgnhigh.csv` | `--high --kinds awgn --sessions 400 --first 17300000` (same) | high AWGN | same | abdbef3 | |
+| `session_data_spr_fastlow.csv` | `--fastlow --sessions 1200 --first 17400000` (same) | fastlow | same | abdbef3 | |
+| `session_data_spr_floor.csv` | `--floor --sessions 3000 --first 17500000` (same) | floor | same | abdbef3 | |
+| `session_data_spr_sev.csv` | `--severe --sessions 2000 --first 17700000` (same) | severe | same | abdbef3 | |
+| `session_data_spr3.csv` | as `session_data_spr.csv` (same seeds), `O=runs/spr3 runs/spr_round.sh` | regular | cohc4, offsets as shipped, Python shifter | 4af9731 (13a509f: no fading reads 0.0; + #243: native GF check update in double) | supersedes the spr sets: those read AWGN as 12 Hz on CPM and decoded GF in float32 |
+| `session_data_spr3_slow.csv` | `--slow`, as spr (same) | slow | same | 4af9731 | |
+| `session_data_spr3_high.csv` | `--high`, as spr (same) | high | same | 4af9731 | |
+| `session_data_spr3_awgnhigh.csv` | `--high --kinds awgn`, as spr (same) | high AWGN | same | 4af9731 | |
+| `session_data_spr3_fastlow.csv` | `--fastlow`, as spr (same) | fastlow | same | 4af9731 | |
+| `session_data_spr3_floor.csv` | `--floor`, as spr (same) | floor | same | 4af9731 | |
+| `session_data_spr3_sev.csv` | `--severe`, as spr (same) | severe | same | 4af9731 | |
+| `session_data_spr4.csv` | as spr3 (same seeds), `O=runs/spr4 runs/spr_round.sh` | regular | cohc4, offsets as shipped, Python shifter | 9f2314e (+ robust control mode by measured spread: polls on fast fading in fsk8r50-r1/3, so the peer's spread is measured on c8r50) | the spr5 students' non-severe sets |
+| `session_data_spr4_slow.csv` | `--slow`, as spr3 | slow | same | 9f2314e | |
+| `session_data_spr4_high.csv` | `--high`, as spr3 | high | same | 9f2314e | |
+| `session_data_spr4_awgnhigh.csv` | `--high --kinds awgn`, as spr3 | high AWGN | same | 9f2314e | |
+| `session_data_spr4_fastlow.csv` | `--fastlow`, as spr3 | fastlow | same | 9f2314e | |
+| `session_data_spr4_floor.csv` | `--floor`, as spr3 | floor | same | 9f2314e | |
+| `session_data_spr5_sev.csv` | `--severe`, as spr3 (`runs/spr5_chain.sh`) | severe | same | 54f4c62 (+ #244: Doppler spill in the CPM tone metric; fsk16r25 locks on 30 Hz) | the spr5 students' severe set (the fix changes nothing else measurable, so spr4's other sets stand) |
+| `session_data_<round>_short.csv` (available, not generated yet) | `--short --sessions 800`, the round's next free `--first` | AWGN 40%, MPG 30%, else Doppler 0.01-0.1 Hz; 0..15 dB drifting; linksim's chat or winlink workload (half each), 300 s | the round's | (#261) | on-air rows sit at snr_est 5..15, spread_est < 0.1 with ack replies measured on short bursts (22% of real rows; 4.1% of the spr4/spr5 session rows, mostly measured on 70-80 frame bulk bursts) |
+
+**Sizing `--short`.** A 100-session pilot (seeds 18000000-18000099, 2.6 min on 4 workers, peak RSS 0.3 GB) gave
+37.5 rows per session, 38% of them in that cell: median 4 frames measured and 1.05 s per burst (on air 4 and 1.05 s;
+the bulk sets 24 frames, 4.84 s), 47% ack replies (on air 58%). 800 sessions (as `--slow`) add ~30,000 rows to the
+spr4/spr5 sessions' 647,668 and lift the cell from 4.1% to ~5.6% of session rows: added to the pile, not weighted
+toward the recordings.
+
 Older sets carry no link-history or energy columns: their rows read as "no
 history" (the inputs' flag 0).
+
+### Available, not yet in a set
+
+- `--agc` (issue #257): each station's receiver AGC drawn from
+  `data2g.agc.draw()` (none 1/4 of the time, else threshold 0-6 dB over the
+  floor, depth 10-30 dB, attack 5-50 ms, release 0.1-3 s), applied to every
+  burst it hears with its noise (`phy_session.ContinuousChannel(agc=)`). The
+  range runs from none to a bit more than two volunteer nodes showed on air:
+  the gain under a burst fell about as far as its `snr_est` within 0.1 s and
+  came back over 1-3 s. Rows get an `agc` column (the receiving station's,
+  empty for none). Off by default: without the flag nothing changes.
+- The energy reading (`NoiseProfile.span_snr_db`) scales its floor by the
+  out-of-band level's fall under the burst (#257). Without AGC it changes the
+  sims' readings by little (see the PR); sets made before it carry the
+  ungauged reading.
 
 ## Offline sets
 
@@ -91,6 +142,9 @@ sent at the same moment; one row per candidate.
 | `outcome_data_general_cor.csv` | `with_native outcome_data --samples 40000 --first 13600000` (`runs/cor_round.sh`) | none | 12d1235 | the general set on the #126 CPM receiver, new seeds |
 | `outcome_data_general_pri.csv` | `with_native outcome_data --samples 40000 --first 14600000` (`runs/pri_round.sh`) | none | 96bcf2c | the general set on the #135 tree (no session, so nothing primed; the cor set's seeds no longer reproduce: snr_est and some labels moved since 12d1235) |
 | `outcome_data_general_cohm.csv` | `with_native outcome_data --samples 40000 --first 15600000` (`runs/cohm/cohm_round.sh`) | none | 6b4ac87 | the general set on the coherent CPM receiver |
+| `outcome_data_general_spr.csv` | `with_native outcome_data --samples 40000 --first 17600000` (`runs/spr_round.sh`) | none | abdbef3 | the general set on the lag-fit CPM spread_est |
+| `outcome_data_general_spr3.csv` | as `outcome_data_general_spr.csv` (same seeds; `runs/spr3`) | none | 4af9731 | the general set on the fixed estimator and GF decoder |
+| `outcome_data_general_spr4.csv` | as spr3 (same seeds; `runs/spr4`) | none | 9f2314e | the spr5 students' offline set |
 
 ## Mixes
 

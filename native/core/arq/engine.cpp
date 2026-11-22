@@ -594,6 +594,7 @@ void Engine::run_posted() {
 // --- the receiver stage ----------------------------------------------------------------
 
 void Engine::apply_reset() {
+    preview_dropped();
     receiver_reset();
     cw_.reset();
     gen_ = want_gen_;
@@ -641,6 +642,7 @@ Engine::Out Engine::step(std::span<const double> x) {
     }
     if (gen_ != want_gen_) apply_reset();
     Block b;
+    b.arrived = std::chrono::steady_clock::now();
     if (gap_) {
         log_write(LOG, WARNING, format("decode worker fell %.0f s behind: %.1f s of audio dropped, receiver reset",
                                        cfg_.max_backlog_s, static_cast<double>(gap_) / config::FS));
@@ -671,6 +673,7 @@ Engine::Out Engine::step(std::span<const double> x) {
     if (const auto& p = receiver_.pending(); p && !p->is_cpm() &&
         p->score() < receiver::Receiver::SUSPECT_SCORE && p->start() <= cw_.hits_from()) {
         log_write(LOG, INFO, format("RX %s header (score %.2f) under a CW ID: dropped", spec_name(*p).c_str(), p->score()));
+        preview_dropped();
         receiver_.drop();
     }
     b.busy = receiver_busy();
@@ -759,6 +762,7 @@ Engine::Done Engine::process(Block& b) {
     }
     const auto k = static_cast<std::int64_t>(b.x.size());
     const double t = now() + static_cast<double>(k) / config::FS;  // the block's end: when anything in it is known
+    arrived_ = b.arrived;
     Done d;
     d.out.audio.assign(static_cast<std::size_t>(k), 0.0);
     if (rec_) rec_->audio(tx_ ? d.out.audio : b.x);
@@ -775,6 +779,9 @@ Engine::Done Engine::process(Block& b) {
         cw_heard_ = cw;
         id_check(t);
         const bool busy = (fresh && b.busy) || cw;
+        // the peer's trailing ID runs past ID_GUARD_S: its CW after its ID frame (cw_id
+        // "add"), which CwSense needs ~1 s to hear, so a gap opened there (engine.py)
+        if (busy && id_pending_) id_pending_t_ = std::max(id_pending_t_, t + ID_GUARD_S);
         std::vector<TxBurstPtr> bursts;
         TxBurstPtr main;
         const bool held = t < hold_ && session_->state != SessionState::CLOSED;  // a closed session's DISC_ACK goes
@@ -799,9 +806,9 @@ Engine::Done Engine::process(Block& b) {
             }
         }
         if (bursts.empty() && cfg_.kiss && free && (idle() || session_->idle_connected())) {  // KISS between ARQ sessions, or while one is idle
-            if (auto kb = kiss_burst(k, busy)) {
-                bursts = cw_ahead({kb}, t);
-                main = kb;
+            if (auto kb = kiss_burst(k, busy); !kb.empty()) {
+                main = kb.back();
+                bursts = cw_ahead(kb, t);
             }
             tx_kiss_ = !bursts.empty();
         } else kiss_busy_ = 0;
@@ -868,6 +875,18 @@ Engine::Done Engine::process(Block& b) {
     d.out.ptt = tx_.has_value();
     transmitting_ = d.out.ptt;
     return d;
+}
+
+// The pending burst, previewed, let go with no BurstEvent: its preview handed on once more, marked dropped,
+// so a front end showing it live does not wait for an on_burst that never comes.
+void Engine::preview_dropped() {
+    const auto& p = receiver_.pending();
+    if (!p || preview_.start != p->start()) return;
+    if (preview_on_ && on_preview_) {
+        preview_.out.dropped = true;
+        on_preview_(preview_.out);
+    }
+    preview_ = {};
 }
 
 // The pending burst's symbols that have arrived since the last block, added to preview_ and
@@ -990,7 +1009,7 @@ void Engine::carrier_hold(double t) {
     const auto exp = s.policy->expected_reply();
     if (!s.deadline || t < *s.deadline || !tx_end_ || !exp) return;
     const double start = *tx_end_ + EXPECT_REPLY_S;
-    const double until = start + exp->second + s.t_turn;  // the reply's end, as on_header waits for one heard
+    const double until = start + exp->second + s.peer_turn();  // the reply's end, as on_header waits for one heard
     if (until <= t) return;
     const auto [lo, hi] = band_span_hz(mode_at(exp->first).band);
     const auto z = noise_.span_z(noise_.span_spectra(std::max(start, t - CARRIER_TAIL_S), t), lo, hi);
@@ -1229,6 +1248,23 @@ void Engine::nod_collect(std::span<const double> x, double t) {
     session_->on_rx(rx, t);
 }
 
+double Engine::since_block() const {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - arrived_).count();
+}
+
+// DD's seconds for a burst that ended at `end` (stream time; `t`: the block's end): dd_budget_s, and in a
+// session no further than my reply's latest start, my t_turn past `end` (advertised: the peer's timers allow
+// it) less my PTT and TX latency and the time already spent since the block came in (receive, soft bits). It
+// may be nothing. No limit (nullopt or inf: paired studies) leaves DD unlimited (engine.py _dd_budget).
+std::optional<double> Engine::dd_budget(double end, double t) const {
+    const auto cap = cfg_.dd_budget_s;
+    if (!cap || std::isinf(*cap) || session_->state == SessionState::IDLE || session_->state == SessionState::CLOSED)
+        return cap;
+    const double spent = since_block();
+    const double left = (end - t) + session_->t_turn - tx_latency_ - static_cast<double>(ptt_delay_) / config::FS;
+    return std::max(0.0, std::min(*cap, left - spent));
+}
+
 void Engine::hear_burst(receiver::BurstEvent& ev, double t) {
     // on_read: the burst's decoder handed over last, on every return (after Tally and Timing below are done with it)
     struct Handoff {
@@ -1312,7 +1348,7 @@ void Engine::hear_burst(receiver::BurstEvent& ev, double t) {
             cfg_.kiss->missed(spec_name(ev.header), ev.header.n_cw(), span ? span_snr(*span) : std::nullopt);
         return;
     }
-    const auto rxp = std::make_shared<ModemRx>(*r, &store_, cfg_.dd_budget_s, soft, cfg_.dd);
+    const auto rxp = std::make_shared<ModemRx>(*r, &store_, dd_budget(span ? span->end : t, t), soft, cfg_.dd);
     ModemRx& rx = *rxp;
     if (on_read_) handoff.rx = rxp;
     timing.rx = &rx;
@@ -1353,34 +1389,39 @@ void Engine::hear_burst(receiver::BurstEvent& ev, double t) {
     session_->on_rx(rx, t);
 }
 
-// The next KISS burst if it may go now: after waiting on BUSY, p-persistent
-// slots; on a free channel at once; BUSY holds it, but not past
-// busy_limit_s of it unbroken.
-TxBurstPtr Engine::kiss_burst(std::int64_t k, bool busy) {
+// The queued KISS bursts if they may go now, back to back on one PTT (nothing is
+// heard between them); just the next while a HAND LISTEN waits for its frame's
+// burst to end. After waiting on BUSY, p-persistent slots; on a free channel at
+// once; BUSY holds it, but not past busy_limit_s of it unbroken.
+std::vector<TxBurstPtr> Engine::kiss_burst(std::int64_t k, bool busy) {
     auto& link = *cfg_.kiss;
     if (link.queue.empty()) {
         kiss_busy_ = 0;
         kiss_deferred_ = false;
-        return nullptr;
+        return {};
     }
     if (busy) {
         kiss_busy_ += k;
         kiss_deferred_ = true;
-        if (static_cast<double>(kiss_busy_) < link.busy_limit_s * config::FS) return nullptr;
+        if (static_cast<double>(kiss_busy_) < link.busy_limit_s * config::FS) return {};
         log_write(LOG, WARNING, format("KISS: BUSY for %.0f s, sending anyway", static_cast<double>(kiss_busy_) / config::FS));
     } else {
         kiss_busy_ = 0;
         if (kiss_deferred_) {
-            if (n_ < kiss_slot_) return nullptr;
+            if (n_ < kiss_slot_) return {};
             if (rng_->uniform(0.0, 1.0) >= (link.persist + 1) / 256.0) {
                 kiss_slot_ = n_ + static_cast<std::int64_t>(link.slot_s * config::FS);
-                return nullptr;
+                return {};
             }
         }
     }
     kiss_busy_ = 0;
     kiss_deferred_ = false;
-    return link.next_burst();
+    if (hand_listen_ && !hand_listen_->open) {
+        if (auto b = link.next_burst()) return {b};
+        return {};
+    }
+    return link.next_bursts();
 }
 
 // A CQ frame (notified: CQFRAME call cap) or an ID frame (ID call key)? Then

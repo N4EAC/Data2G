@@ -301,10 +301,16 @@ CpmRun run_cpm(const std::string& mode, int n_data, double sigma, bool stream, s
 // The streaming Receiver on Gaussian noise, 20 ms feeds: CPU per feed (the listening load per audio feed).
 bool cwsense_on = BENCH_CWID;  // --no-cwsense: #134's tree without its detector (#135's listening load alone)
 
+std::string listen_bands;  // --bands w,w48: only these OFDM sync bands' modes (the CPM grids as ever)
+
 void listen(double seconds, bool cpm_only, int expect) {
     std::vector<std::string_view> grids;
     for (const auto& g : tables::CPM_GRIDS) grids.push_back(g.name);
-    receiver::Receiver rx(cpm_only ? modem::Accept{} : modem::Accept::of(), grids);
+    std::vector<std::string_view> names;
+    for (const auto& m : config::SUBMODES)
+        if (("," + listen_bands + ",").find("," + std::string(m.sync_band) + ",") != std::string::npos)
+            names.push_back(m.name);
+    receiver::Receiver rx(cpm_only ? modem::Accept{} : listen_bands.empty() ? modem::Accept::of() : modem::Accept::of(names), grids);
 #if BENCH_CWID
     cwid::CwSense cw;
 #endif
@@ -347,7 +353,7 @@ void listen(double seconds, bool cpm_only, int expect) {
     const auto q = [&](double p) { return 1e6 * ts[static_cast<std::size_t>(p * (ts.size() - 1))]; };
     std::printf("listen %s%s%s%d: %.0f us per 20 ms feed (%.2f%% of a core), p50 %.0f p99 %.0f p99.9 %.0f max %.0f us over "
                 "%zu feeds, %d windows\n",
-                cpm_only ? "cpm only" : "all bands", cwsense_on ? " +cwsense" : "", expect ? " +expect " : "", expect,
+                cpm_only ? "cpm only" : listen_bands.empty() ? "all bands" : listen_bands.c_str(), cwsense_on ? " +cwsense" : "", expect ? " +expect " : "", expect,
                 1e6 * sum / ts.size(), 100 * sum / (ts.size() * 0.02), q(0.5), q(0.99), q(0.999), 1e6 * ts.back(),
                 ts.size(), windows);
 }
@@ -459,6 +465,7 @@ int main(int argc, char** argv) {
         else if (a == "--reps" && more) reps = std::max(1, std::atoi(argv[++i]));
         else if (a == "--listen" && more) listen_s = std::atof(argv[++i]);
         else if (a == "--cpm-only") cpm_only = true;
+        else if (a == "--bands" && more) listen_bands = argv[++i];
         else if (a == "--expect" && more) expect = std::atoi(argv[++i]);
         else if (a == "--primed") primed_on = true;
         else if (a == "--cwid") cw = true;

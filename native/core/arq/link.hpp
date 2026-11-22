@@ -42,6 +42,25 @@ bool prime_default();
 bool repeat_default();
 // link.NOD: DATA2G_NOD=0 turns nods off (docs/arq.md §3b; read once).
 bool nod_default();
+// link.KEEP: DATA2G_KEEP=0 sends T_REPLY in every control and never keeps it (T_KEEP, docs/arq.md §8a; read once).
+bool keep_default();
+inline constexpr int REPLY_UNKNOWN = -1, REPLY_NONE = -2;  // link._UNKNOWN, None: what the peer holds of T_REPLY
+// Something my controls say until the peer has it (link.Told): my bns that said it, and whether the peer
+// has acted on one of them.
+struct Told {
+    std::set<std::int64_t> bns;
+    bool done = false;
+    explicit operator bool() const { return done; }
+    void mark(std::int64_t bn) {
+        if (!done) bns.insert(bn);  // no more once the peer has it: they stop growing
+    }
+    // The peer acted on my burst bn. -> whether that was one of them.
+    bool acted(std::int64_t bn) {
+        const bool hit = bns.count(bn) > 0;
+        done = done || hit;
+        return hit;
+    }
+};
 inline constexpr const char* NOD_MODE = "fsk16r25-r1/3";  // the mode a nod's control is packed and named in
 
 // Python's logging, by logger name ("data2g.link", "data2g.session") and
@@ -223,6 +242,8 @@ public:
     bool peer_reply_lost = false;  // the peer's last burst said its previous reply was lost
     bool peer_abandon = false;  // the peer's last burst carried T_ABANDON: it holds re-sliced data
     std::optional<int> peer_reply_recommend;
+    std::optional<double> now;     // the caller's clock, set by Session (nullopt: the shifter's fixed gap_s)
+    std::optional<double> tx_end;  // build(): when the burst being built should end, for the shifter (est_tx_end)
     TxSide tx;
     std::map<std::string, std::int64_t> stats;
     RxSide rx;
@@ -268,20 +289,51 @@ public:
     std::optional<std::int64_t> peer_next_;
     bool repeated_ = false;
     bool asked_dup_ = false;
-    std::pair<std::optional<int>, std::optional<int>> asked_;  // my latest build's recommendations: data, reply
+    // my latest build's recommendations as the peer has them: its data mode, its reply modes
+    std::vector<int> asked_;
+    bool peer_omits_ = false;  // the peer has left T_REPLY out as unchanged (a mode, kept)
     // The modes the peer's next burst likely comes in (link.Station.expected_modes).
     std::vector<std::string> expected_modes() const;
     Bytes last_stream_;  // the control stream read_control read last
     bool primed_ctl_ = false;  // ... and only a primed retry read it
     // nods (docs/arq.md §3b): on for this session (a session's station); the peer hears them (its T_NODS:
-    // mine may go to it); the peer acted on a burst of mine carrying T_NODS (no more of it), my bursts that did.
+    // mine may go to it); my bursts carrying T_NODS (no more of it once acted on).
     // Their anchors: per burst of mine what it said, per peer burst seq the same as decoded and which
     // burst of mine it acted on.
     bool nod = false;
     bool nod_peer = false;
-    bool nods_told_ = false;
-    std::set<std::int64_t> nods_in_;
-    using Kept = std::tuple<int, std::optional<int>, bool>;  // size_hint, T_REPLY, T_CHAT
+    Told nods_told_;
+    // T_KEEP (docs/arq.md §8a): on for this session (a session's station); the peer keeps T_REPLY (its
+    // T_KEEP); my bursts carrying T_KEEP (no more of it once acted on).
+    bool keep = false;
+    bool keep_peer = false;
+    Told keep_told_;
+    // the peer keeps T_REPLY as I read its controls (peer_keeping): its latest burst carried T_KEEP; my
+    // bursts that acted on one that did
+    bool peer_said_keep_ = false;
+    Told keep_seen_;
+    // the peer's T_NODS likewise: its latest burst carried it; my bursts that acted on one that did
+    bool peer_said_nods_ = false;
+    Told nods_seen_;
+    // ... and the peer reads my controls so (reply_held): its latest burst acted on a T_KEEP burst of mine;
+    // my bursts that acted on such a burst
+    bool peer_acked_keep_ = false;
+    Told keep_sure_;
+    // Both stations keep T_REPLY and know the other does (link.Station._keeping).
+    bool keeping() const { return keep_default() && keep && keep_peer && keep_told_; }
+    // The peer was keeping T_REPLY when it built the bursts I have from it (link.Station._peer_keeping).
+    bool peer_keeping() const { return keep_default() && keep && keep_told_ && keep_seen_; }
+    // The reply recommendation the peer holds once it has my burst bn (link.Station._said): a mode code,
+    // REPLY_NONE or REPLY_UNKNOWN.
+    int said(std::int64_t bn) const;
+    // Drop the least useful optional TLV from ext, or cut T_REPLY's value where both keep it
+    // (link.Station._shed). -> whether anything went.
+    bool shed(Ext& ext) const;
+    // The peer holds `reply` whichever of my bursts before bn it has heard (link.Station._reply_held).
+    bool reply_held(std::int64_t bn, std::optional<int> reply) const;
+    // An empty flag TLV (2 B) fits the control's padding (link.Station._fits_padding).
+    bool fits_padding(const Ext& ext, int n_ctl, int cpb) const;
+    using Kept = std::tuple<int, int, bool>;  // size_hint, the reply the peer holds (said), T_CHAT
     struct SentCtl {
         std::int64_t cum;
         int rec, acted;
@@ -346,11 +398,13 @@ private:
     };
     int escalation() const;
     bool data_allowed(bool fresh, const std::string& submode);
+    std::optional<double> est_tx_end(const std::string& submode, int max_cw, std::size_t missing, bool fresh);
     std::optional<std::pair<int, nod::FamilyKey>> nod_of(std::int64_t bn, const std::string& submode, const Core& core,
-                                                         const Ext& ext) const;
-    static Kept kept(const Core& core, const Ext& ext);
+                                                         int said, const Ext& ext) const;
+    static Kept kept(const Core& core, int said, const Ext& ext);
     void start_abandon(int reset);
-    Ext control_tlvs(std::int64_t bn, std::optional<int> reply);
+    // -> (the TLVs, whether T_REPLY was left out as the peer's)
+    std::pair<Ext, bool> control_tlvs(std::int64_t bn, std::optional<int> reply);
     Fit fit(Ext& ext, int cum, const std::vector<std::int64_t>& missing, bool has_new, int max_cw,
             const std::string& submode, bool fresh);
     std::vector<const Codeword*> new_codewords(const std::string& submode, int room, int k, std::int64_t spare,
@@ -388,6 +442,7 @@ private:
         std::vector<Tlv> ext;
     };
     std::vector<Way> variants(bool data, int n_cw, int ctl_slots, bool pair) const;
+    std::vector<Way> reply_changes(const std::vector<Way>& ways) const;
     static std::optional<Hypothesis> pack_hypothesis(const Way& w, int cpb, int max_ctl, bool pair, int n_ctl);
     std::pair<std::optional<Bytes>, bool> primed(RxBurst& rx, int slot, int i, const std::vector<Hypothesis>& hyps);
     std::optional<std::string> implausible(const Core& core, const Ext& ext) const;

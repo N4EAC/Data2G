@@ -257,3 +257,65 @@ def test_a_preamble_cfo_off_by_a_pilot_alias_is_put_right(monkeypatch):
     monkeypatch.setattr(modem, "_best_header", off)
     b = modem.decode_received(modem.receive(y))
     assert b.payloads == sent and all(b.crc_ok)
+
+
+def test_stream_products_are_pair_products_of_its_outputs():
+    """StreamDetector.products_from, extended chunk by chunk and trimmed as
+    the receiver does, is pair_products of the kept outputs (find_copy reads
+    it instead of recomputing)."""
+    from data2g.config import FRAME_SAMPLES
+    from data2g.waveform import dsp, ofdm, sync
+
+    rng = np.random.default_rng(5)
+    y = rng.normal(size=6 * FS)
+    d = sync.StreamDetector(ofdm.band("w"))
+    fed = 0
+    while fed < len(y):
+        n = int(rng.integers(300, 5000))
+        d.feed(dsp.to_baseband(y[fed:fed + n], fed))
+        fed += n
+        if rng.random() < 0.3:
+            d.trim(fed - int(rng.integers(FS, 3 * FS)))
+        if rng.random() < 0.5:
+            a, D = d.products_from(d.c0 + 7, FRAME_SAMPLES, modem.COPY_PAIRS)
+            _, C = d.outputs_from(d.c0)
+            want = sync.pair_products(C, FRAME_SAMPLES, modem.COPY_PAIRS)[:, a - d.c0:]
+            assert a == d.c0 + 7 and D.shape == want.shape
+            # (bit for bit in Python; native rounds its products its own way)
+            np.testing.assert_allclose(D, want, rtol=0, atol=1e-12 * max(1.0, float(np.abs(want).max(initial=0.0))))
+
+
+def test_find_copy_on_audio_shorter_than_its_pairs():
+    """Fewer matched filter outputs than COPY_PAIRS frames: nothing found,
+    not an error (receive_any runs it on whatever it is given)."""
+    rng = np.random.default_rng(1)
+    for n in (1000, 3000):
+        assert modem.find_copy(rng.normal(size=n), "w") is None
+
+
+def _fold_walk(seed):
+    """Pair products with bursts 40 dB up, and windows that mostly slide
+    forward (the receiver's hops), sometimes jump back, change length."""
+    F = modem.FRAME_SAMPLES
+    rng = np.random.default_rng(seed)
+    D = (rng.normal(size=(25, 60 * F)) + 1j * rng.normal(size=(25, 60 * F))) * np.where(
+        rng.random(60 * F) < 0.3, 100.0, 1.0)
+    lo, steps = 0, []
+    for _ in range(300):
+        m = int(rng.integers(2, 10))
+        lo = (min(lo + int(rng.integers(0, 2500)), 60 * F - m * F) if rng.random() > 0.05
+              else int(rng.integers(0, 50 * F)))
+        steps.append((max(0, lo - int(rng.integers(0, 3 * F))), lo, lo + m * F))
+    return D, steps
+
+
+def test_fold_track_is_the_fold_of_its_window():
+    """modem.FoldTrack, kept running (adds, subtractions, fresh sums every
+    RENEW), rolled to its window's start: _pilot_fold's, to rounding."""
+    F = modem.FRAME_SAMPLES
+    D, steps = _fold_walk(3)
+    t = modem.FoldTrack()
+    for a, lo, hi in steps:
+        R = t.fold(D[:, a:], a, lo, hi)
+        ref = modem._pilot_fold(D, lo, (hi - lo) // F)
+        np.testing.assert_allclose(np.roll(R, -(lo % F), axis=1), ref, rtol=0, atol=1e-12 * np.abs(ref).max())

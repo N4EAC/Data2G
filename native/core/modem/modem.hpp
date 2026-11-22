@@ -117,6 +117,9 @@ std::optional<std::vector<double>> copy_llr(std::span<const cd> z, std::int64_t 
 struct BandStat {
     std::string_view band;
     const Mat<double>* S;
+    std::int64_t col0 = 0;  // S's first column is this start (the earlier ones: already searched)
+    // nothing in it reaches the band's preamble threshold (StreamDetector::peak): skipped, S not built
+    bool quiet = false;
 };
 
 struct BestHeader {
@@ -153,11 +156,34 @@ std::vector<double> pilot_coherence(std::span<const double> x, const Lock& lock,
 // neither. peak: the normalized pilot peak, if one was computed (find_copy.peak).
 std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, const Accept* accept = nullptr,
                               const Mat<cd>* C = nullptr, std::optional<double> level = {}, double* peak = nullptr);
-// The same with C as row pointers (C_rows empty: compute C, as C == nullptr),
-// each row `cols` long: StreamDetector.C rows, used in place.
+// The same from C's pair products (modem.find_copy's D: StreamDetector::products_from rows, each `dcols` long, used
+// in place; empty: compute them, as C == nullptr).
+// `fold`: step 1's fold of D's whole frames, if kept running (FoldTrack, rolled to D's start).
 std::optional<Lock> find_copy(std::span<const double> x, std::string_view band, const Accept* accept,
-                              std::span<const cd* const> C_rows, std::size_t cols, std::optional<double> level,
-                              double* peak = nullptr);
+                              std::span<const cd* const> D_rows, std::size_t dcols, std::optional<double> level,
+                              double* peak = nullptr, const Mat<cd>* fold = nullptr);
+// modem.FoldTrack: the pilot fold kept running over a window of a stream's pair products that slides forward, per
+// CFO bin and absolute frame phase; entering products added and leaving ones subtracted in stream order, a frame
+// phase's run at a time, summed afresh every RENEW folds or when the window moves any other way.
+class FoldTrack {
+public:
+    static constexpr int RENEW = 64;
+    void reset() {
+        have_ = false;
+        lo_ = hi_ = 0;
+        n_ = 0;
+    }
+    // the window [lo, hi) of stream starts (D: pair products from stream start a, dcols of them, covering it)
+    const Mat<cd>& fold(std::span<const cd* const> D_rows, std::size_t dcols, std::int64_t a, std::int64_t lo,
+                        std::int64_t hi);
+
+private:
+    void acc(std::span<const cd* const> D_rows, std::int64_t a, std::int64_t u0, std::int64_t u1, bool add);
+    Mat<cd> R_;
+    bool have_ = false;
+    std::int64_t lo_ = 0, hi_ = 0;
+    int n_ = 0;
+};
 std::vector<double> cfo_aliases(cd d, double centre);
 HeaderRead copy_header(std::span<const cd> z, const Lock& lock);
 

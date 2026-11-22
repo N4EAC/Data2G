@@ -868,13 +868,15 @@ COPY_DETECT = 14.0
 
 
 def find_copy(x: np.ndarray, band: str, accept: Accept | None = None, C: np.ndarray | None = None,
-              level: float | None = None) -> Lock | None:
+              level: float | None = None, D: np.ndarray | None = None, fold: np.ndarray | None = None) -> Lock | None:
     """A burst in real audio `x` found from its frame pilots and header copy
     alone (the preamble and first header lost): a Lock with "copy" (what
     receive() needs to rebuild the header), or None. The burst
     may run past the end of x. `C`, `level`: the preamble matched filter's
     outputs for x's starts (sync.StreamDetector.C) and noise level, if a
-    stream has them; computed here otherwise.
+    stream has them; computed here otherwise. `D`: their pair_products
+    (StreamDetector.products_from), instead of C. `fold`: step 1's fold of
+    D's whole frames, if kept running (FoldTrack.fold, rolled to D's start).
 
     1. The matched filter's outputs one frame apart, correlated as the
        preamble's are one repeat apart (the frame pilot is the preamble's
@@ -891,21 +893,21 @@ def find_copy(x: np.ndarray, band: str, accept: Accept | None = None, C: np.ndar
        (COPY_COHERENCE; the live BUSY floors pass noise) and keep the
        pilot's pattern (COPY_PATTERN: a CW ID or a narrower band's burst
        is coherent too)."""
-    if C is not None and level is None:
-        raise ValueError("find_copy: C needs its noise level")
+    if (C is not None or D is not None) and level is None:
+        raise ValueError("find_copy: C or D needs its noise level")
     b = ofdm.band(band)
     z0 = dsp.to_baseband(np.asarray(x, dtype=np.float64))
     freqs = _sync.cfo_grid()
-    if C is None:
+    if C is None and D is None:
         C = _sync.repeat_corrs(z0, _sync.unit_template(b), list(freqs))
         level = _sync.noise_level(C)
-    n = C.shape[1] - COPY_PAIRS * FRAME_SAMPLES
-    m = n // FRAME_SAMPLES
+    if D is None:
+        D = _sync.pair_products(C, FRAME_SAMPLES, COPY_PAIRS)
+    m = D.shape[1] // FRAME_SAMPLES
     if m < 1:
         return None
-    d = C[:, FRAME_SAMPLES:] * np.conj(C[:, :-FRAME_SAMPLES])
-    D = sum(d[:, j * FRAME_SAMPLES:j * FRAME_SAMPLES + m * FRAME_SAMPLES] for j in range(COPY_PAIRS))
-    fold = D.reshape(len(freqs), m, FRAME_SAMPLES).sum(axis=1)
+    if fold is None:
+        fold = _pilot_fold(D, 0, m)
     mag = np.abs(fold).max(axis=0)
     # on noise each product's magnitude is about the level, and the m x
     # COPY_PAIRS of them add at random: the header reads (nearly all of the
@@ -945,6 +947,61 @@ def find_copy(x: np.ndarray, band: str, accept: Accept | None = None, C: np.ndar
         if len(c) >= 2 and np.mean(c) >= COPY_COHERENCE and pat >= COPY_PATTERN:
             return lock
     return None
+
+
+def _pilot_fold(D: np.ndarray, t0: int, m: int) -> np.ndarray:
+    """find_copy's step 1 from start t0: per CFO bin and frame phase, the
+    pair products D (sync.pair_products of the matched filter's outputs,
+    COPY_PAIRS pairs a frame apart) folded over m frames."""
+    return D[:, t0:t0 + m * FRAME_SAMPLES].reshape(len(D), m, FRAME_SAMPLES).sum(axis=1)
+
+
+class FoldTrack:
+    """_pilot_fold kept running over a window of a stream's pair products
+    that slides forward (the receiver's search hops): per CFO bin and
+    absolute frame phase (stream index mod FRAME_SAMPLES), the window's sum.
+    Each fold() adds the products that entered the window and subtracts
+    those that left, in stream order, a frame phase's run at a time;
+    every RENEW folds, or when the window moves any other way, it is
+    summed afresh (the subtractions' rounding doesn't build up)."""
+
+    RENEW = 64
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.R = None
+        self.lo = self.hi = 0  # the window summed: stream starts [lo, hi)
+        self.n = 0  # folds since the last fresh sum
+
+    def _acc(self, D: np.ndarray, a: int, u0: int, u1: int, sign: int):
+        F, u = FRAME_SAMPLES, u0
+        while u < u1:
+            q = u % F
+            k = min(u1 - u, F - q)
+            if sign > 0:
+                self.R[:, q:q + k] += D[:, u - a:u - a + k]
+            else:
+                self.R[:, q:q + k] -= D[:, u - a:u - a + k]
+            u += k
+
+    def fold(self, D: np.ndarray, a: int, lo: int, hi: int) -> np.ndarray:
+        """The window [lo, hi) of stream starts (D: pair products from
+        stream start a, covering it), summed by frame phase: R[:, q] for
+        absolute phase q. np.roll(R, -(lo % FRAME_SAMPLES), axis=1) is
+        _pilot_fold's from lo."""
+        if (self.R is None or self.n >= self.RENEW or not self.lo <= lo <= self.hi <= hi or self.lo < a
+                or hi > a + D.shape[1]):
+            self.R = np.zeros((len(D), FRAME_SAMPLES), dtype=np.complex128)
+            self._acc(D, a, lo, hi, 1)
+            self.n = 0
+        else:
+            self._acc(D, a, self.hi, hi, 1)
+            self._acc(D, a, self.lo, lo, -1)
+            self.n += 1
+        self.lo, self.hi = lo, hi
+        return self.R
 
 
 def _cfo_aliases(d: complex, centre: float) -> list[float]:
@@ -1137,7 +1194,7 @@ def slot_soft(r: Received, est: DataEstimate, slot: int) -> np.ndarray:
 
 def snr_db(est: equalizer.ChannelEstimate, band: str) -> float:
     """Pilot SNR (dB) on `band`'s carriers, in the SNR_REF_BW_HZ convention."""
-    return 10 * np.log10(est["p_sig"] / est["n0"] * BANDS[band].nc * RS / SNR_REF_BW_HZ)
+    return 10 * np.log10(est["p_sig"] / est.get("n0_snr", est["n0"]) * BANDS[band].nc * RS / SNR_REF_BW_HZ)
 
 
 def symbol_times(r: Received) -> tuple[np.ndarray, np.ndarray]:

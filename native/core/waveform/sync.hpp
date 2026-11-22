@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -67,8 +68,12 @@ struct RawStat {
 
 // sync._raw_stat. repeats 0: the band's. levels_from: the levels from the
 // outputs from there on, by one partition (StreamDetector).
+// sink: each searched bin's outputs and statistic row, while still in cache, in place of S and outs
+// (left empty); called once per bin, possibly on pool threads at once (distinct i).
+using RawSink = std::function<void(std::size_t i, const cdouble* outs, const double* S)>;
 RawStat raw_stat(std::span<const cdouble> z, const Band& band, double reach = config::ACQUIRE_REACH_HZ,
-                 int repeats = 0, std::optional<std::size_t> levels_from = {}, bool keep_outs = false);
+                 int repeats = 0, std::optional<std::size_t> levels_from = {}, bool keep_outs = false,
+                 const RawSink* sink = nullptr);
 
 // (S / lowest noise level, the hypotheses).
 std::pair<Mat<double>, std::vector<double>> detection_stat(std::span<const cdouble> z, const Band& band,
@@ -88,10 +93,16 @@ std::vector<std::size_t> crossings(std::span<const double> D, double threshold, 
 
 // Find the preamble in baseband z. threshold: the band's if unset. search:
 // [start, end) starts to hunt in. S: a precomputed statistic for z's
-// starts (StreamDetector; -1 = do not search). Throws SyncError.
+// starts from col0 on (StreamDetector; -1 = do not search; the starts before
+// col0 are not searched, and search must be unset). Throws SyncError.
 Acquisition acquire(std::span<const cdouble> z, const Band& band, std::optional<double> threshold = {},
                     double reach = config::ACQUIRE_REACH_HZ,
-                    std::optional<std::pair<std::int64_t, std::int64_t>> search = {}, const Mat<double>* S = nullptr);
+                    std::optional<std::pair<std::int64_t, std::int64_t>> search = {}, const Mat<double>* S = nullptr,
+                    std::int64_t col0 = 0);
+
+// sync.pair_products: D[:, t] = sum over j < P of C[:, t + (j + 1) F] conj(C[:, t + j F]) for every start with all
+// P pairs in C (rows, each `cols` long).
+Mat<cdouble> pair_products(std::span<const cdouble* const> rows, std::size_t cols, int F, int P);
 
 // detection_stat for a stream, each start's statistic computed once
 // (sync.StreamDetector). The noise level is the median of the last CHUNKS
@@ -101,7 +112,9 @@ class StreamDetector {
 public:
     static constexpr int CHUNKS = 8;
 
-    explicit StreamDetector(const Band& band, double reach = config::ACQUIRE_REACH_HZ);
+    // keep_outputs false: C is not kept (no find_copy on this band: ~8 MB of rows nobody reads on a live
+    // receiver); C(bin) is then empty, outputs_from / products_from / kept_products unusable
+    explicit StreamDetector(const Band& band, double reach = config::ACQUIRE_REACH_HZ, bool keep_outputs = true);
 
     void reset();
     void restart_at(std::int64_t pos);  // reset(), the stream resuming at index `pos`
@@ -113,6 +126,9 @@ public:
     void trim(std::int64_t start);          // drop starts before stream index `start`
     std::optional<double> level() const;    // the noise level stat() divides by
     Mat<double> stat(std::int64_t lo, std::int64_t hi) const;  // starts [lo, hi), -1 where not computed
+    // max of stat(lo, hi) without building it (read-only): -1 if none was computed. Under the band's preamble
+    // threshold, acquire on that stat finds nothing (max(S) / q is max(S / q): division by q > 0 is monotone)
+    double peak(std::int64_t lo, std::int64_t hi) const;
 
     std::size_t bins() const { return S_.size(); }
     std::span<const double> S(std::size_t bin) const { return std::span(S_[bin]).subspan(s_off_); }  // from s0
@@ -126,13 +142,20 @@ public:
         std::size_t cols;
     };
     Outputs outputs_from(std::int64_t start) const;
+    // sync.StreamDetector.products_from: outputs_from for pair_products(C, F, P) (the same F and P every call),
+    // the starts not yet computed computed now.
+    Outputs products_from(std::int64_t start, int F, int P);
+    // sync.StreamDetector.kept_products: every pair product kept (start: d0), products_from's and up to
+    // KEEP_BEHIND before them (a running fold subtracts what leaves its window, modem::FoldTrack).
+    Outputs kept_products(int F, int P);
+    static constexpr std::int64_t KEEP_BEHIND = 4000;  // pair products kept past a trim: two search hops
 
     const Band& band;
     double reach;
     std::int64_t span;
     // State, public as in Python (read-only outside: restart_at / skip_to move `fed`).
     std::vector<cdouble> tail;  // the last span - 1 samples fed
-    std::int64_t s0 = 0, fed = 0, c0 = 0;
+    std::int64_t s0 = 0, fed = 0, c0 = 0, d0 = 0;
     std::vector<std::vector<double>> levels;  // per chunk, each bin's level
 
 private:
@@ -140,7 +163,11 @@ private:
     // hop's trim moves no memory (C is ~8 MB on the live receiver)
     std::vector<std::vector<double>> S_;
     std::vector<std::vector<cdouble>> C_;
-    std::size_t s_off_ = 0, c_off_ = 0;
+    std::vector<std::vector<cdouble>> D_;  // pair_products of C, from d0 (products_from, kept_products)
+    std::size_t s_off_ = 0, c_off_ = 0, d_off_ = 0;
+    bool keep_c_;
+    std::size_t c_n_ = 0;  // outputs from c0 (C(0).size() when kept)
+    void extend_products(int F, int P);
 };
 
 }  // namespace data2g::waveform
