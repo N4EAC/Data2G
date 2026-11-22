@@ -560,6 +560,10 @@ class Station:
     # its own _keep_told)
     _peer_said_keep: bool = False
     _keep_seen: Told = field(default_factory=Told)
+    # the peer's T_NODS likewise: its latest burst carried it; my bursts that acted on one that did
+    # (once it acts on one of those it says T_NODS no more: expect's hypotheses leave it out)
+    _peer_said_nods: bool = False
+    _nods_seen: Told = field(default_factory=Told)
     # ... and the peer reads my controls so (its own _peer_keeping; _reply_held): its latest
     # burst acted on a T_KEEP burst of mine; my bursts that acted on such a burst
     _peer_acked_keep: bool = False
@@ -691,6 +695,8 @@ class Station:
         self._asked = (rec, *replies)
         if self._peer_said_keep:
             self._keep_seen.mark(bn)  # it acts on a peer burst that carried T_KEEP
+        if self._peer_said_nods:
+            self._nods_seen.mark(bn)  # ... or T_NODS
         if self._peer_acked_keep:
             self._keep_sure.mark(bn)  # ... on one that acted on a T_KEEP of mine
         ctl = F.Control(core, ext).pack(cpb)
@@ -1132,6 +1138,7 @@ class Station:
             self._peer_acked_keep = self._keep_told.acted(acted)
             self._keep_seen.acted(acted)
             self._keep_sure.acted(acted)
+            self._nods_seen.acted(acted)
             # without T_REPLY: none (_note_peer), or as it was where the peer keeps it (T_KEEP),
             # this burst's acted-on counted
             if F.T_REPLY not in ext and self._peer_keeping:
@@ -1153,6 +1160,7 @@ class Station:
             self.nod_peer = True  # latched for the session
         self._nods_told.acted(acted)
         self._peer_said_keep = F.T_KEEP in ext
+        self._peer_said_nods = F.T_NODS in ext
         if F.T_KEEP in ext:
             self.keep_peer = True  # latched for the session
         self._peer_ctl[bool(slots)] = self._last_stream
@@ -1298,6 +1306,27 @@ class Station:
                     + [(c, [(t, v, b"\xc0") if t == F.T_REPLY and v else (t, v, m) for t, v, m in e]) for c, e in base
                        if any(t == F.T_REPLY and v for t, v, _ in e)]
                     + self._reply_changes(base))
+            if not data and not self._peer_ctl:
+                # Before a peer control was read, also try the session's initial
+                # capability announcements, with build()'s padding/replace rule.
+                # Keep the original ways for peers that do not announce them.
+                # Announced first: PRIME_TRIES can cut the old ways, a cost to legacy peers only
+                # (interleaving loses both kinds once the bank is full, as with data in flight).
+                announced = []
+                n_ctl = 1 if ctl_slots else rx.n_cw
+                for c, e in ways:
+                    a = list(e)
+                    fits = lambda: self._fits_padding({t: v for t, v, _ in a}, n_ctl, cpb)
+                    if NOD and self.nod and fits():
+                        a.append((F.T_NODS, b"", b""))
+                    if KEEP and self.keep:
+                        if fits():
+                            a.append((F.T_KEEP, b"", b""))
+                        elif any(t == F.T_REPLY for t, _, _ in a) and n_ctl < max_ctl:
+                            a = [t for t in a if t[0] != F.T_REPLY] + [(F.T_KEEP, b"", b"")]
+                    if a != e:
+                        announced.append((c, a))
+                ways = announced + ways
             for core, ext in ways:
                 # an OFDM control-only burst is its control: n_cw codewords, the
                 # last ones maybe all padding (build reserves room for data it may not send)
@@ -1357,10 +1386,11 @@ class Station:
             # unknown, 6 bits (at code level 0.0-0.2 dB on a CPM control)
             recommend=(0, 0),
             size_hint=(self.peer_size_hint, 3 if base else 0))
-        # (T_NODS, T_KEEP: sent until I acted on it, so mostly as last time. T_KEEP no more
-        # once the peer has acted on that, _keep_seen: its last control of this kind may be older)
+        # (T_NODS, T_KEEP: sent until I acted on it, so mostly as last time. Neither any more
+        # once the peer has acted on that, _keep_seen and _nods_seen: its last control of this
+        # kind may be older)
         common = [(t, pe[t], b"\xff" * len(pe[t])) for t in (F.T_CHAT, F.T_DUPCTL, F.T_NODS, F.T_KEEP)
-                  if t in pe and not (t == F.T_KEEP and self._keep_seen)]
+                  if t in pe and not (t == F.T_KEEP and self._keep_seen) and not (t == F.T_NODS and self._nods_seen)]
         # T_REPLY, a recommendation: as last time (80% of them at the floor; its
         # bits sit on weak polar positions, where 6 unknown cost 1-2 dB). A peer that keeps
         # it (T_KEEP) says it until its handshake ends, then mostly leaves it out (unchanged);

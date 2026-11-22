@@ -490,6 +490,7 @@ TxBurstPtr Station::build(bool fresh, bool nod_ok) {
         asked_.push_back(said);
     }
     if (peer_said_keep_) keep_seen_.mark(bn);   // it acts on a peer burst that carried T_KEEP
+    if (peer_said_nods_) nods_seen_.mark(bn);   // ... or T_NODS
     if (peer_acked_keep_) keep_sure_.mark(bn);  // ... on one that acted on a T_KEEP of mine
     Control control{core, ext};
     const auto ctl = control.pack(cpb);
@@ -860,6 +861,7 @@ bool Station::handle_inner(RxBurst& rxb) {
         peer_acked_keep_ = keep_told_.acted(acted);
         keep_seen_.acted(acted);
         keep_sure_.acted(acted);
+        nods_seen_.acted(acted);
         // without T_REPLY: none (note_peer), or as it was where the peer keeps it (T_KEEP), this burst's
         // acted-on counted
         if (!ext.count(T_REPLY) && peer_keeping()) {
@@ -881,6 +883,7 @@ bool Station::handle_inner(RxBurst& rxb) {
     nods_told_.acted(acted);
     if (ext.count(T_KEEP)) keep_peer = true;  // latched for the session
     peer_said_keep_ = ext.count(T_KEEP) > 0;
+    peer_said_nods_ = ext.count(T_NODS) > 0;
     peer_ctl_[!data.slots.empty()] = last_stream_;
     peer_last_ = std::make_pair(last_stream_, std::make_pair(rxb.submode(), rxb.n_cw()));
     answered_ = false;
@@ -1070,6 +1073,33 @@ std::vector<Station::Hypothesis> Station::expect(const RxBurst& rxb) const {
             if (has) ways.push_back(std::move(w));
         }
         for (auto& w : reply_changes(base)) ways.push_back(std::move(w));
+        if (!data && peer_ctl_.empty()) {
+            // Before any peer control was read, also try the session's initial
+            // announcements with build()'s padding/replace rule. Keep the old ways after them:
+            // PRIME_TRIES can cut those, a cost to legacy peers only (link.py says why not interleaved).
+            std::vector<Way> announced;
+            const int n_ctl = ctl_slots ? 1 : n_cw;
+            for (const auto& w : ways) {
+                Way a = w;
+                auto fits = [&] {
+                    Ext e;
+                    for (const auto& t : a.ext) e[t.type] = t.value;
+                    return fits_padding(e, n_ctl, cpb);
+                };
+                if (nod_default() && nod && fits()) a.ext.push_back({T_NODS, {}, {}});
+                if (keep_default() && keep) {
+                    if (fits()) {
+                        a.ext.push_back({T_KEEP, {}, {}});
+                    } else if (n_ctl < max_ctl && std::any_of(a.ext.begin(), a.ext.end(),
+                               [](const Tlv& t) { return t.type == T_REPLY; })) {
+                        std::erase_if(a.ext, [](const Tlv& t) { return t.type == T_REPLY; });
+                        a.ext.push_back({T_KEEP, {}, {}});
+                    }
+                }
+                if (a.ext != w.ext) announced.push_back(std::move(a));
+            }
+            ways.insert(ways.begin(), announced.begin(), announced.end());
+        }
         for (const auto& w : ways) {
             // an OFDM control-only burst is its control: n_cw codewords, the last ones maybe all padding
             auto h = pack_hypothesis(w, cpb, max_ctl, pair, (ctl_slots || data) ? 0 : n_cw);
@@ -1134,10 +1164,10 @@ std::vector<Station::Way> Station::variants(bool data, int n_cw, int ctl_slots, 
     c[F_REC] = {0, 0};  // the peer's recommendation moves with every measurement: unknown
     c[F_HINT] = {peer_size_hint, base ? 3 : 0};
     std::vector<Tlv> common;
-    // (T_NODS, T_KEEP: sent until I acted on it, so mostly as last time. T_KEEP no more once the peer has
-    // acted on that, keep_seen_: its last control of this kind may be older)
+    // (T_NODS, T_KEEP: sent until I acted on it, so mostly as last time. Neither any more once the peer
+    // has acted on that, keep_seen_ and nods_seen_: its last control of this kind may be older)
     for (int t : {T_CHAT, T_DUPCTL, T_NODS, T_KEEP})
-        if (auto e = pe.find(t); e != pe.end() && !(t == T_KEEP && keep_seen_))
+        if (auto e = pe.find(t); e != pe.end() && !(t == T_KEEP && keep_seen_) && !(t == T_NODS && nods_seen_))
             common.push_back({t, e->second, Bytes(e->second.size(), 0xFF)});
     // T_REPLY, a recommendation: as last time. A peer that keeps it (T_KEEP) says it until its handshake
     // ends, then mostly leaves it out (unchanged); the other ways come last (reply_changes)
