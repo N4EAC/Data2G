@@ -248,10 +248,14 @@ void noise_rule_config() {
 
 // DD's turnaround budget: my own t_turn (what I advertise; the peer's reply timers allow it) past the burst's
 // end, less PTT, TX latency and the time since the block came in; the dd_budget_s cap; none outside a session.
+// The time since the block is fixed at 0.05 s: a sanitizer build's steps take long enough to spend a real one.
 class BudgetEngine : public Engine {
 public:
     using Engine::Engine;
     using Engine::dd_budget;
+
+protected:
+    double since_block() const override { return 0.05; }
 };
 
 void turnaround_budget() {
@@ -269,10 +273,10 @@ void turnaround_budget() {
         s->set_tx_latency(0.2);
         s->set_ptt_delay(0.1);
     }
-    const double le = e.dd_budget(10.0, 10.3).value_or(-1);  // its own 1.0 - 0.3 - 0.2 - 0.1, less ms since the block
-    const double lb = b.dd_budget(10.0, 10.3).value_or(-1);  // its own 2.0 - 0.6
-    check::is_true(le > 0.2 && le <= 0.4 + 1e-9, "what my own turn leaves");
-    check::is_true(lb > 1.2 && lb <= 1.4 + 1e-9, "a slow station's own turn");
+    const double le = e.dd_budget(10.0, 10.3).value_or(-1);  // its own 1.0 - 0.3 - 0.2 - 0.1 - 0.05
+    const double lb = b.dd_budget(10.0, 10.3).value_or(-1);  // its own 2.0 - 0.6 - 0.05
+    check::is_true(std::abs(le - 0.35) < 1e-9, "what my own turn leaves");
+    check::is_true(std::abs(lb - 1.35) < 1e-9, "a slow station's own turn");
     check::is_true(e.dd_budget(10.0, 12.0) == std::optional(0.0), "past the deadline: none");
     EngineConfig u;
     u.dd_budget_s = std::nullopt;

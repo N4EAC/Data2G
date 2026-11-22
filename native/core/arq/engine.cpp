@@ -1236,16 +1236,19 @@ void Engine::nod_collect(std::span<const double> x, double t) {
     session_->on_rx(rx, t);
 }
 
+double Engine::since_block() const {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - arrived_).count();
+}
+
 // DD's seconds for a burst that ended at `end` (stream time; `t`: the block's end): dd_budget_s, and in a
 // session no further than my reply's latest start, my t_turn past `end` (advertised: the peer's timers allow
-// it) less my PTT and TX latency
-// and the time already spent since the block came in (receive, soft bits). It may be nothing. No limit
-// (nullopt or inf: paired studies) leaves DD unlimited (engine.py _dd_budget).
+// it) less my PTT and TX latency and the time already spent since the block came in (receive, soft bits). It
+// may be nothing. No limit (nullopt or inf: paired studies) leaves DD unlimited (engine.py _dd_budget).
 std::optional<double> Engine::dd_budget(double end, double t) const {
     const auto cap = cfg_.dd_budget_s;
     if (!cap || std::isinf(*cap) || session_->state == SessionState::IDLE || session_->state == SessionState::CLOSED)
         return cap;
-    const double spent = std::chrono::duration<double>(std::chrono::steady_clock::now() - arrived_).count();
+    const double spent = since_block();
     const double left = (end - t) + session_->t_turn - tx_latency_ - static_cast<double>(ptt_delay_) / config::FS;
     return std::max(0.0, std::min(*cap, left - spent));
 }

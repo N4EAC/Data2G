@@ -375,6 +375,8 @@ protected:
     virtual std::vector<double> tx_audio(const TxBurst& b) { return arq::tx_audio(b); }
     virtual void hear_burst(receiver::BurstEvent& ev, double t);
     std::optional<double> dd_budget(double end, double t) const;
+    // Wall seconds since the block being processed came in (dd_budget's; a seam so tests needn't race the clock).
+    virtual double since_block() const;
 
 private:
     struct Block {
