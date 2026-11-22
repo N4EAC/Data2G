@@ -75,6 +75,7 @@ Session::Session(std::string call_, std::shared_ptr<Policy> policy_, double t_tu
 std::shared_ptr<Station> Session::make_station(int direction, bool master_, int key) {
     auto st = std::make_shared<Station>(direction, policy, master_, key, std::nullopt, cap, chat);
     st->nod = nods;  // nods (docs/arq.md §3b): a session's station, unless the host turned them off
+    st->keep = true;  // T_REPLY only on change, once the peer keeps it too (T_KEEP, docs/arq.md §8a)
     return st;
 }
 
@@ -125,6 +126,7 @@ Bytes Session::read() { return station ? station->read() : Bytes{}; }
 
 TxBurstPtr Session::poll(double now) {
     now_ = now;
+    if (station) station->now = now;  // the shifter's gap input (Station::est_tx_end)
     if (stats_interval_s && live(state) && now >= stats_since + stats_interval_s) {
         log_stats("stats", now, stats_since, stats_prev);
         stats_since = now;
@@ -208,10 +210,10 @@ void Session::on_tx_end(const TxBurstPtr& burst, double now) {
         // a reply whose header I miss is still on air: don't poll over it
         if (state == SessionState::CONNECTED && station && burst)
             if (auto hold = policy->reply_hold(*station, *burst)) wait = std::max(wait, *hold);
-        deadline = now + t_turn + wait;
+        deadline = now + peer_turn() + wait;
     } else if (!m) {
         quiet_from = now;
-        wake_wait = t_turn + tune.reply_start_s + tune.wake_guard_s + rng->uniform(0, tune.wake_jitter_s * std::pow(2.0, wakes));
+        wake_wait = peer_turn() + tune.reply_start_s + tune.wake_guard_s + rng->uniform(0, tune.wake_jitter_s * std::pow(2.0, wakes));
     }
 }
 
@@ -221,7 +223,7 @@ void Session::on_header(const std::string& submode, int n_cw, double now) {
         // a peer's ID burst (one codeword in the connect mode) runs straight
         // into its reply, whose header must still be found (engine ID_INTERVAL_S)
         const bool is_id = n_cw == 1 && submode == policy->connect_mode(cap, 0);
-        deadline = std::max(*deadline, end + t_turn + (is_id ? tune.reply_start_s : 0.0));
+        deadline = std::max(*deadline, end + peer_turn() + (is_id ? tune.reply_start_s : 0.0));
     }
     if (!master()) quiet_from = std::max(quiet_from, end);
 }
@@ -232,6 +234,7 @@ void Session::on_cw(double now) {
 }
 
 void Session::on_rx(RxBurst& rx, double now) {
+    if (station) station->now = now;
     auto f = session_frame(rx);
     if (!f) f = repeated_frame(rx, now);
     if (f) {
@@ -323,6 +326,13 @@ void Session::disconnect() {
     if (state == SessionState::IDLE || state == SessionState::LISTEN || state == SessionState::CLOSED) return;
     want_disc = true;
     disc_why = "CLIENT";
+    if (state == SessionState::CONNECTING && out && out != nak) {
+        // a CONNECT not yet on air (the first, or a retry's) is dropped and
+        // the dial ends at the next poll; one on air has its answer waited for
+        out.reset();
+        due.reset();
+        deadline = -INF;
+    }
     if (build_at) build_at = -INF;  // the caller's idle poll: a DISC now instead
 }
 
@@ -361,8 +371,15 @@ void Session::close(const std::string& why, TxBurstPtr final_burst, double now) 
     deadline.reset();
 }
 
+// The peer's turnaround my reply timers allow: its advertised t_turn in a session, else mine (session.py).
+double Session::peer_turn() const {
+    if ((state == SessionState::CONNECTED || state == SessionState::DISCONNECTING) && peer_t_turn) return *peer_t_turn;
+    return t_turn;
+}
+
 void Session::connected(double now) {
     state = SessionState::CONNECTED;
+    station->now = now;
     heard(now);
     last_data = connected_at = stats_since = now;
     stats_prev.clear();
@@ -404,7 +421,9 @@ void Session::log_stats(const char* label, double now, double since, const std::
 }
 
 void Session::on_timeout(double now) {
-    if (state == SessionState::CONNECTING) {
+    if (state == SessionState::CONNECTING && want_disc) {
+        close("CLIENT unconfirmed");  // the host gave up on the dial: no more tries
+    } else if (state == SessionState::CONNECTING) {
         tries += 1;
         log_write(LOG, INFO, format("no answer to CONNECT %s, try %d of %d", peer.c_str(), tries, tune.connect_tries));
         if (tries >= tune.connect_tries) {
@@ -645,6 +664,7 @@ void Session::on_session_frame(const Frame& f, double now) {
         peer = caller;
         nonce = n;
         cap = std::min(c.cap, cap);
+        peer_t_turn = c.t_turn10 / 10.0;
         station = make_station(1, false, session_key(caller, call, n));
         flush_writes();
         connected(now);
@@ -655,11 +675,12 @@ void Session::on_session_frame(const Frame& f, double now) {
         const ConnectAck a = ConnectAck::unpack(body);
         if (a.nonce != nonce) return;
         cap = std::min(a.cap, cap);
+        peer_t_turn = a.t_turn10 / 10.0;
         station = make_station(0, true, session_key(call, peer, nonce));
         flush_writes();
         connected(now);
         events.push_back("CONNECTED " + peer);
-        queue(station->build(), now);
+        if (!disc(now)) queue(station->build(), now);  // a dial the host gave up on, answered: DISC first
     } else if (sub == CONNECT_NAK && state == SessionState::CONNECTING && f.key == 0) {
         if (const ConnectNak k = ConnectNak::unpack(body); k.nonce == nonce) {
             const char* why = nak_name(k.reason);

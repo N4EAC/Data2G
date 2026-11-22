@@ -27,6 +27,7 @@ class QCheckBox;
 class QLabel;
 class QPushButton;
 class QSettings;
+class QTimer;
 class QTableWidget;
 
 namespace data2g::gui {
@@ -54,6 +55,10 @@ public Q_SLOTS:
     void open_monitor();  // the Monitor window: every burst heard and sent, as a packet dump
     void show_about();
 
+protected:
+    void moveEvent(QMoveEvent* e) override;
+    void resizeEvent(QResizeEvent* e) override;
+
 private:
     void build_menu();
     void set_lamp(QLabel* lamp, bool lit, const char* color);
@@ -61,6 +66,7 @@ private:
     QSettings& store_;
     std::unique_ptr<app::Station> station_;
     QString error_;
+    QTimer* geometry_changed_ = nullptr;  // running: the window moved or resized and that is not saved yet
     Waterfall* waterfall_;
     ConstellationPlot* constellation_;
     QLabel *link_, *mode_, *busy_, *ptt_, *rx_, *tx_, *counters_, *status_;

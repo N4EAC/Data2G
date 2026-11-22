@@ -168,3 +168,52 @@ def test_cpm_control_padding_is_known_when_it_fails(monkeypatch):
         rx = PHY.ModemRx(r, {})
         assert ctl in rx.raw(0)
         assert rx.decode(0, ctl_mask(0, 0, 7), 0, None) == ctl
+
+
+def test_spread_tracks_doppler_through_symbol_jitter():
+    """cpm.spread: a Rayleigh tone's energy per symbol plus white jitter as
+    strong as the fading (what defeated the old lag-1 estimate: 3.0 always)."""
+    from data2g import hfchannel
+
+    g = cpm.GRIDS["c8r50"]
+    rng = np.random.default_rng(3)
+    for true in (0.5, 2.0, 6.0):
+        est = []
+        for _ in range(8):
+            h = hfchannel._gaussian_taps(400 * g.T, true, rng)[:: g.T]
+            e = np.abs(h) ** 2
+            est.append(cpm.spread(g, e + rng.exponential(np.mean(e), len(e)), 0.0))
+        assert abs(np.median(est) / true - 1) < 0.3, (true, est)
+    # no correlation past lag 0: too fast if the energy fades (Rayleigh per
+    # symbol), else no fading (a steady tone, the noise's own variance)
+    n0, s = 0.1, 1.0
+    awgn = s + n0 + rng.normal(0, np.sqrt(2 * n0 * s + n0 * n0), 400)
+    assert cpm.spread(g, s * rng.exponential(1.0, 400) + n0, n0) == cpm.SPREAD_MAX_HZ
+    assert cpm.spread(g, awgn, n0) == 0.0
+    assert cpm.spread(g, np.ones(10), n0) == cpm.UNMEASURED_SPREAD_HZ  # too short
+
+
+def test_coarse_track_is_a_fresh_transform_of_the_stream(pure):  # (native's: test_native_cpm's test_coarse_track)
+    """A receiver's CoarseTrack, fed 20 ms at a time from a buffer trimmed
+    behind it: its rows are coarse_rows of the stream at each phase's
+    stream-grid starts, as if transformed afresh (to rounding: pocketfft's
+    result depends on the batch a row is transformed in), and detect
+    reading them finds what detect over the same audio on that grid finds."""
+    rng = np.random.default_rng(5)
+    for g in cpm.GRIDS.values():
+        x = rng.normal(0, 1, 4 * 8000)
+        track, off, buf = cpm.CoarseTrack(g), 0, np.zeros(0)
+        for i in range(0, len(x), 160):
+            buf = np.concatenate([buf, x[i:i + 160]])
+            if len(buf) > 8000:  # trimmed to the last second, as a receiver's buffer
+                off, buf = off + len(buf) - 8000, buf[len(buf) - 8000:]
+            track.feed(buf, off)
+        a, b = off + 37, off + len(buf) - 11
+        for s, E in track.rows(a, b):
+            want = cpm.coarse_rows(g, x[a + s:b], track.extra)
+            assert len(E) == len(want) and len(E) > 10 and (a + s) % (g.T // 4) == 0, g.name
+            np.testing.assert_allclose(E, want, rtol=1e-12, atol=0)
+        ph = min(s for s, _ in track.rows(a, b))  # the stream grid's first start at or after a
+        kw = dict(front_only=True, fine=False)  # (the whole pattern is longer than the second held)
+        got, ref = cpm.detect(g, x[a:b], track=track, x0=a, **kw), cpm.detect(g, x[a + ph:b], **kw)
+        assert ref[0] > 0 and got[1:] == (ref[1] + ph, ref[2]) and got[0] == pytest.approx(ref[0], rel=1e-12), g.name

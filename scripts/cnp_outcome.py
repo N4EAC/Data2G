@@ -27,6 +27,27 @@ from data2g.config import BANDS, SUBMODES
 from . import train_outcome as T
 
 NEVER_DB = 40.0  # a threshold the ladder never reached, as a number
+LEGACY_CPM_SPREAD_HZ = 3.0  # what CPM's spread_est read on every channel before cpm.spread (abdbef3)
+
+
+def spread_cols() -> tuple[int, int]:
+    """outcome_inputs' columns for log(0.05 + spread_est) of the measured burst and of prev."""
+    m = dict({k: 0.0 for k in T.MEAS}, frames=16.0)
+    a, b = 0.123, 4.567  # spreads whose logs no other input takes here
+    x = P.outcome_inputs(dict(m, spread_est=a), "w", 0.0, 1.0, (dict(m, spread_est=b), "w", 0.0), T.BANDS, energy=True)
+    (c,), (cp,) = np.flatnonzero(np.isclose(x, np.log(0.05 + a))), np.flatnonzero(np.isclose(x, np.log(0.05 + b)))
+    return int(c), int(cp)
+
+
+def legacy_cpm_spread(x: np.ndarray, rows: list) -> np.ndarray:
+    """x as it read before cpm.spread: every CPM-measured spread_est (the
+    burst's own, prev's) LEGACY_CPM_SPREAD_HZ, what a teacher trained then saw."""
+    c, cp = spread_cols()
+    x = x.copy()
+    v = np.log(0.05 + LEGACY_CPM_SPREAD_HZ)
+    x[[r["band"] not in BANDS for r in rows], c] = v
+    x[[bool(r["prev_band"]) and r["prev_band"] not in BANDS for r in rows], cp] = v
+    return x
 
 
 def descriptor(name: str) -> list:
@@ -149,6 +170,14 @@ def main():
                     help="--teacher-cpm also for the OFDM polar and ACK modes (polar controls are primed: docs/arq.md §3a)")
     ap.add_argument("--cpm-below", type=float, default=None,
                     help="--teacher-cpm only on rows whose snr_est is under this (ramped over 2 dB below it)")
+    ap.add_argument("--legacy-cpm-spread", action="store_true",
+                    help="the teachers see each row's CPM-measured spreads as 3.0 (legacy_cpm_spread)")
+    ap.add_argument("--teacher-fast", default="",
+                    help="every mode's targets from this model on rows measured as fast (--fast-ramp), on the rows' own inputs")
+    ap.add_argument("--fast-ramp", default="4:6", help="LO:HI Hz of the row's spread_est: --teacher-fast from 0 at LO to 1 at HI")
+    ap.add_argument("--fast-snr-min", type=float, default=None,
+                    help="--teacher-fast only where the row's snr_est is at least this (ramped over 2 dB below): "
+                         "under -10 dB slow fading can read SPREAD_MAX_HZ on CPM")
     ap.add_argument("--init",default="", help="start from this CNP's weights (distillation only)")
     ap.add_argument("--lr", type=float, default=1e-3, help="distillation's learning rate")
     ap.add_argument("--hold", default="", help="modes left out of training (zero-shot test)")
@@ -172,12 +201,15 @@ def main():
     x, *_, rows, _ = T.load(a.data, energy=True)
     teach = P.outcome_model(a.teacher)
     assert tuple(teach.modes) == T.MODES
-    z_t = np.concatenate([teach(x[i:i + 4096]) for i in range(0, len(x), 4096)])  # (DATA2G_OUTCOME_LCB applies)
+    x_t = legacy_cpm_spread(x, rows) if a.legacy_cpm_spread else x  # what the teachers see
+    if a.legacy_cpm_spread:
+        print(f"legacy CPM spread: {np.mean(np.any(x_t != x, axis=1)):.1%} of rows changed for the teachers")
+    z_t = np.concatenate([teach(x_t[i:i + 4096]) for i in range(0, len(x), 4096)])  # (DATA2G_OUTCOME_LCB applies)
     n = len(T.MODES)
     if a.teacher_cpm:  # the CPM modes' columns from another teacher; the rest stay the main teacher's
         tc = P.outcome_model(a.teacher_cpm)
         assert tuple(tc.modes) == T.MODES
-        zc = np.concatenate([tc(x[i:i + 4096]) for i in range(0, len(x), 4096)])
+        zc = np.concatenate([tc(x_t[i:i + 4096]) for i in range(0, len(x), 4096)])
         cols = [k for k, m in enumerate(T.MODES) if m not in SUBMODES or (a.teacher_polar and ("ack" in m or "polar" in m))]
         cols += [n + k for k in cols]
         if a.cpm_below is not None:  # only where the row's snr_est is under it (a 2 dB ramp up to it)
@@ -188,6 +220,18 @@ def main():
         else:
             z_t[:, cols] = zc[:, cols]
         print(f"CPM columns from {a.teacher_cpm}: {[T.MODES[k] for k in cols[:len(cols) // 2]]}")
+    if a.teacher_fast:  # every column, where the row's own spread_est says fast (the teacher on the real inputs)
+        tf = P.outcome_model(a.teacher_fast)
+        assert tuple(tf.modes) == T.MODES
+        zf = np.concatenate([tf(x[i:i + 4096]) for i in range(0, len(x), 4096)])
+        lo, hi = (float(v) for v in a.fast_ramp.split(":"))
+        spread = np.array([float(r["spread_est"]) for r in rows])
+        w = np.clip((spread - lo) / (hi - lo), 0, 1)[:, None]
+        if a.fast_snr_min is not None:
+            snr_est = np.array([float(r["snr_est"]) for r in rows])
+            w = w * np.clip((snr_est - a.fast_snr_min + 2) / 2, 0, 1)[:, None]
+        z_t = w * zf + (1 - w) * z_t
+        print(f"fast teacher {a.teacher_fast}: weight mean {w.mean():.3f}, full on {np.mean(w == 1):.1%} of rows")
     if a.cond:  # the shifter's conditional offsets (policy.COND_OFFSETS), on each row's own spread_est
         spread = np.array([float(r["spread_est"]) for r in rows])
         snr_est = np.array([float(r["snr_est"]) for r in rows])

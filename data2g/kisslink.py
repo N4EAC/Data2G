@@ -512,6 +512,17 @@ class KissLink:
         stream += bytes(n_ctl * pb - len(stream))
         return [stream[i * pb:(i + 1) * pb] for i in range(n_ctl)]
 
+    def next_bursts(self) -> list[TxBurst]:
+        """Every queued frame, in bursts to go back to back on one PTT (no
+        listening between them). Their acks are due when the last has gone."""
+        out, acks = [], []
+        while (b := self.next_burst()) is not None:
+            out.append(b)
+            acks += self._inflight[1]
+        if out:
+            self._inflight = (out[-1], acks)
+        return out
+
     def next_burst(self) -> TxBurst | None:
         """The next burst to send: the first queued frame's port and mode,
         with every queued frame of that port that goes in the same mode, in

@@ -506,6 +506,15 @@ void Station::start() {
             flush();
         });
         engine_->set_on_preview([this](const arq::BurstPreview& p) {
+            if (p.dropped) {  // the modem gave up on it, no burst to follow: lost
+                std::lock_guard lock(status_mu_);
+                if (constellation_ && constellation_->live) {
+                    constellation_->live = false;
+                    constellation_->lost = true;
+                }
+                live_.reset();
+                return;
+            }
             auto plot = rx_constellation(p);
             if (!plot_visible(plot)) return;  // nothing to show yet: keep the last plot
             std::lock_guard lock(status_mu_);
