@@ -385,6 +385,7 @@ private:
         bool cw = false;  // a CW ID heard (cwid::CwSense) with no burst locked
         std::uint64_t gen = 0, seq = 0;
         std::int64_t gap = 0;  // samples dropped just before this block
+        std::int64_t rx_end = 0;  // the receiver's stream index past this block's last sample fed
     };
     struct Done {
         Out out;
@@ -446,6 +447,7 @@ private:
     };
     std::vector<PendingProbe> probes_;  // pings heard whose probe is still arriving
     std::int64_t fed_ = 0;              // stream samples heard, this block's included (n_'s basis)
+    std::int64_t rx_to_n_ = 0;          // n_ minus the receiver's stream index, as of this block
     std::vector<std::string> events_;  // host notifications from outside the session
     struct Pend {
         double deadline;

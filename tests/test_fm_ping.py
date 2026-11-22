@@ -137,3 +137,14 @@ def test_host_ping_command():
     h.command("PING BAD!CALL")
     assert h.out_cmd == ["OK", "WRONG"]
     assert [(b.submode, b.probe) for b in h.engine._extra] == [("f55-qpsk-r21", True)]
+
+
+@pytest.mark.parametrize("up, down", [(1001, 1000), (999, 1000)])
+def test_probe_survives_sample_clock_offset(up, down):
+    """+-1000 ppm between the two sound cards (a USB card's 100-300 ppm flattened the staircase on air before
+    probe._periods took the slip out): the staircase still steps."""
+    x = np.concatenate([PR.waveform("flat", 1.0), np.zeros(800)])
+    y = signal.resample_poly(x, up, down)
+    y = y + np.random.default_rng(0).normal(0, 0.01, len(y))
+    m = PR.summary(PR.analyse(y), PG.level(0.1 * y))
+    assert m["snr"][PR.REF] - m["snr"][4] > 10, m["snr"]

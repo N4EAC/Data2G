@@ -11,7 +11,7 @@
 #include "arq/ping.hpp"
 namespace data2g::arq::probe {
 inline constexpr double TONE_LO_HZ = 100.0, TONE_HI_HZ = 7000.0;
-inline constexpr int SETTLE = 2, MEAS = 10, SOUND_MEAS = 20;
+inline constexpr int SETTLE = 2, MEAS = 10, SOUND_MEAS = 20, GUARD = 1;
 inline constexpr double SOUND_DB = -12.0, GAP_S = 0.05;
 inline constexpr std::array<double, 6> STEPS_DB = {4.0, 0.0, -6.0, -12.0, -18.0, 0.0};
 inline constexpr int REF = 1;

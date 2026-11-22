@@ -32,6 +32,8 @@ PERIOD = FS // 50  # samples: 50 Hz bins
 BIN_HZ = FS / PERIOD
 TONE_LO_HZ, TONE_HI_HZ = 100.0, 7000.0
 SETTLE, MEAS = 2, 10  # periods per step: a limiter's / AGC's settling, then measured
+GUARD = 1  # of the SETTLE periods, measured at the stretch's end instead: a sample clock slow by up to
+# a period over the probe still keeps the next (louder) step out (-500 ppm reached it without)
 SOUND_DB, SOUND_MEAS = -12.0, 20
 STAIR_BAND = "f55"
 STEPS_DB = (4.0, 0.0, -6.0, -12.0, -18.0, 0.0)
@@ -120,17 +122,6 @@ def n_samples() -> int:
     return int(round(GAP_S * FS)) + (SETTLE + SOUND_MEAS + len(STEPS_DB) * (SETTLE + MEAS)) * PERIOD
 
 
-def _starts():
-    """(start sample of each measured stretch, its periods): the sounding, then each step."""
-    a = int(round(GAP_S * FS)) + SETTLE * PERIOD
-    out = [(a, SOUND_MEAS)]
-    a += SOUND_MEAS * PERIOD
-    for _ in STEPS_DB:
-        out.append((a + SETTLE * PERIOD, MEAS))
-        a += (SETTLE + MEAS) * PERIOD
-    return out
-
-
 def waveform(tx_path: str | None = None, level: float = 1.0) -> np.ndarray:
     """The probe (silence GAP_S, the sounding, the staircase), unit rms x
     `level` at STEPS_DB 0, through the TX path."""
@@ -141,29 +132,48 @@ def waveform(tx_path: str | None = None, level: float = 1.0) -> np.ndarray:
     return np.concatenate([np.zeros(int(round(GAP_S * FS))), x * level])
 
 
-def _stretch(y: np.ndarray, a: int, n: int, tones: np.ndarray, holes: np.ndarray) -> dict:
-    seg = y[a:a + n * PERIOD]
+def _periods(y: np.ndarray) -> np.ndarray:
+    """Every period's spectrum from the probe's start (the gap's end), the sample
+    clocks' offset taken out: between periods a slip of tau samples turns bin k
+    by -2 pi k tau / PERIOD, which coherent averaging over 10-20 periods cannot
+    survive (100 ppm, a cheap USB sound card's, flattened the staircase). tau is
+    fitted on the sounding (every tone, weighted by its strength) and every
+    period is turned back by its index."""
+    off = int(round(GAP_S * FS))
+    n = (len(STEPS_DB) * (SETTLE + MEAS) + SETTLE + SOUND_MEAS)
+    seg = y[off:off + n * PERIOD]
     if len(seg) < n * PERIOD:
         seg = np.concatenate([seg, np.zeros(n * PERIOD - len(seg))])
     F = np.fft.rfft(seg.reshape(n, PERIOD), axis=1)
-    T = F[:, tones]
+    S = F[SETTLE - GUARD:SETTLE - GUARD + SOUND_MEAS, TONES]
+    c = np.sum(S[1:] * np.conj(S[:-1]), axis=0)
+    w, th = np.abs(c), np.angle(c)
+    tau = -np.sum(w * TONES * th) / max(2 * np.pi / PERIOD * np.sum(w * TONES.astype(float) ** 2), 1e-30)
+    r = np.arange(n)[:, None]
+    k = np.arange(PERIOD // 2 + 1)[None, :]
+    return F * np.exp(2j * np.pi * k * tau * r / PERIOD)
+
+
+def _stretch(F: np.ndarray, r0: int, n: int, tones: np.ndarray, holes: np.ndarray) -> dict:
+    T = F[r0:r0 + n][:, tones]
     m = T.mean(axis=0)
     noise = np.sum(np.abs(T - m) ** 2, axis=0) / (n - 1)  # per period
     return dict(sig=np.maximum(np.abs(m) ** 2 - noise / n, 0.0),  # |mean|^2 holds noise / n
-                noise=noise, hole=np.mean(np.abs(F[:, holes]) ** 2, axis=0),
-                gap=np.mean(np.abs(F[:, GAPS]) ** 2, axis=0))
+                noise=noise, hole=np.mean(np.abs(F[r0:r0 + n][:, holes]) ** 2, axis=0))
 
 
 def analyse(y: np.ndarray) -> dict:
     """The probe as received, `y` starting where waveform() starts (a few
     samples either way is harmless: a delay only turns each tone's phase).
     -> {"sound": stretch, "steps": [stretch per STEPS_DB]}; a stretch: sig and
-    noise per tone, hole per empty odd bin, gap per even bin (powers in the
-    received audio's units, per period)."""
-    y = np.asarray(y, dtype=np.float64)
-    (a, n), *steps = _starts()
-    return dict(sound=_stretch(y, a, n, TONES, HOLES),
-                steps=[_stretch(y, a, n, stair_tones(), stair_holes()) for a, n in steps])
+    noise per tone, hole per empty odd bin (powers in the received audio's
+    units, per period)."""
+    F = _periods(np.asarray(y, dtype=np.float64))
+    steps, r = [], SETTLE + SOUND_MEAS
+    for _ in STEPS_DB:
+        steps.append(_stretch(F, r + SETTLE - GUARD, MEAS, stair_tones(), stair_holes()))
+        r += SETTLE + MEAS
+    return dict(sound=_stretch(F, SETTLE - GUARD, SOUND_MEAS, TONES, HOLES), steps=steps)
 
 
 def sinad_db(st: dict) -> float:

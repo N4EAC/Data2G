@@ -80,3 +80,21 @@ Level sweeps by PipeWire sink volume (cubic: 63% = -12 dB, 40% = -24 dB), one pi
 - S/N on the FT-8800R -> IC-9700 link swung 20.5-27.8 dB between pings seconds apart later in the day (noise across the IC-9700's AF band on bad bursts), 28 dB steady earlier.
 
 Two-ping step verdict (checkpoint; a one-over redesign is proposed): limiter if dist > DIST_DB and (dist falls >= 0.5 dB at -10 dB or S/N falls < 2 dB); else slope = S/N drop / 10 dB: >= 0.6 follows, <= 0.2 does not, step better by > 1 dB: ping again. On air with the rebuilt hosts: IC-9700 sink 100% 0.08 "does not follow", sink 15% 1.0 "follows", FT-8800R 0.34 "level OK".
+
+## One-over ping with the sounding probe (arq/probe; p2-probe*)
+
+- First run: the FT-8800R's probes read garbage at the IC-9700. Two causes, both fixed:
+  - sample clocks: the DigiRig and the IC-9700's codec differ by ~100-300 ppm, enough to wreck coherent
+    averaging over 10-20 periods (simulated: 100 ppm flattened the staircase); probe._periods now fits the
+    slip on the sounding and turns it back (+-1000 ppm within ~1 dB), with a guard period at each stretch's end;
+  - native only: the decode worker hands the BurstEvent over blocks after its audio, so the probe's start
+    came late by the decode latency; it now maps the header's receiver index to the engine's stream directly.
+- After (4 pings, 2 each way, consistent):
+
+| direction | passband | step S/N +4/0/-6/-12/-18 | SINAD at ref | verdict |
+|---|---|---|---|---|
+| IC-9700 -> FT-8800R | 750-3150 | 41/41/36/31/25 | 38.5-39 | NARROW only; level OK |
+| FT-8800R -> IC-9700 | 350-3450 | 38/38/30/26/21 | 36 | NARROW only; level OK |
+
+- NARROW in both directions: the IC-9700's AF path (TX and RX) stops near 3.4 kHz; seen by measurement, no decode had to fail.
+- The FT-8800R's +4 dB step: SINAD 23 dB. Its drive is just under a ceiling (DigiRig output or the 9600 input), so "raise it" would not help despite the low deviation.

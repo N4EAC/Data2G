@@ -496,14 +496,16 @@ TxBurstPtr Engine::ping_burst(const std::string& to, const std::optional<Bytes>&
     return b;
 }
 
-// engine.py _ping: a ping's identity burst heard; if it is to us, its probe follows from the burst's end: keep
+// engine.py _ping (the arithmetic differs: Python decodes as it feeds): a ping's identity burst heard; if it
+// is to us, its probe follows from the burst's end: keep
 // its place in the stream (probe_check reads it from the history ring once it is all in).
 void Engine::on_ping(ByteView body, const receiver::BurstEvent* ev) {
     auto [frm, to, report] = ping::unpack_ping(body);
     if (to != call_ && std::find(aliases_.begin(), aliases_.end(), to) == aliases_.end()) return;
     if (!ev || ev->header.end() <= ev->header.start()) return;
-    const auto after = static_cast<std::int64_t>(ev->audio.size()) - (ev->header.end() - ev->header.start());  // heard since its end
-    probes_.push_back({frm, to, report, fed_ - after});
+    // the burst's end in n_'s basis: its BurstEvent can come blocks after its audio (the decode worker), so
+    // not from how much audio the event holds
+    probes_.push_back({frm, to, report, ev->header.end() + rx_to_n_});
 }
 
 // engine.py _probe_check: probes now wholly heard: measure them; a ping: PING, and a reply when free (once per
@@ -750,6 +752,7 @@ Engine::Out Engine::step(std::span<const double> x) {
         log_write(LOG, INFO, format("RX %s header (score %.2f) under a CW ID: dropped", spec_name(*p).c_str(), p->score()));
         receiver_.drop();
     }
+    b.rx_end = receiver_.stream_end();
     b.busy = receiver_busy();
     busy_now_ = b.busy;
     channel_busy_now_ = receiver_channel_busy() || b.cw;
@@ -842,6 +845,7 @@ Engine::Done Engine::process(Block& b) {
     if (tx_) hist_zero(n_, k);
     else hist_put(n_, b.x);
     fed_ = n_ + k;
+    if (!tx_) rx_to_n_ = fed_ - b.rx_end;
     if (!tx_) {
         noise_.feed(b.x, now());
         const bool fresh = b.gen == want_gen_;  // else fed before a reset this stage asked for

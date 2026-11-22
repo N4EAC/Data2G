@@ -128,31 +128,53 @@ struct Stretch {
     std::vector<double> sig, noise, hole;
 };
 
-Stretch stretch(std::span<const double> y, std::size_t a, int n, const std::vector<int>& tn, const std::vector<int>& hl) {
+// probe.py _periods: every period's spectrum from the probe's start, the sample clocks' offset taken out
+// (tau fitted on the sounding, each period turned back by its index)
+std::vector<std::vector<cd>> periods(std::span<const double> y) {
     const int P = period();
-    Stretch s;
+    const int n = static_cast<int>(STEPS_DB.size()) * (SETTLE + MEAS) + SETTLE + SOUND_MEAS;
+    const auto off = static_cast<std::size_t>(std::lround(GAP_S * config::FS));
     std::vector<std::vector<cd>> F;
     for (int r = 0; r < n; ++r) {
         std::vector<cd> z(static_cast<std::size_t>(P));
         for (int i = 0; i < P; ++i) {
-            const std::size_t j = a + static_cast<std::size_t>(r * P + i);
+            const std::size_t j = off + static_cast<std::size_t>(r * P + i);
             z[static_cast<std::size_t>(i)] = j < y.size() ? y[j] : 0.0;
         }
         F.push_back(dsp::fft(z, true));
     }
+    double num = 0, den = 0;
+    for (int k : lists().tones) {
+        cd c{};
+        for (int r = SETTLE - GUARD + 1; r < SETTLE - GUARD + SOUND_MEAS; ++r)
+            c += F[static_cast<std::size_t>(r)][static_cast<std::size_t>(k)] *
+                 std::conj(F[static_cast<std::size_t>(r - 1)][static_cast<std::size_t>(k)]);
+        const double w = std::abs(c);
+        num += w * k * std::arg(c);
+        den += w * static_cast<double>(k) * k;
+    }
+    const double tau = -num / std::max(2.0 * M_PI / P * den, 1e-30);
+    for (int r = 0; r < n; ++r)
+        for (int k = 0; k <= P / 2; ++k)
+            F[static_cast<std::size_t>(r)][static_cast<std::size_t>(k)] *= std::polar(1.0, 2.0 * M_PI * k * tau * r / P);
+    return F;
+}
+
+Stretch stretch(const std::vector<std::vector<cd>>& F, int r0, int n, const std::vector<int>& tn, const std::vector<int>& hl) {
+    Stretch s;
     for (int k : tn) {
         cd m{};
-        for (const auto& row : F) m += row[static_cast<std::size_t>(k)];
+        for (int r = r0; r < r0 + n; ++r) m += F[static_cast<std::size_t>(r)][static_cast<std::size_t>(k)];
         m /= static_cast<double>(n);
         double v = 0;
-        for (const auto& row : F) v += std::norm(row[static_cast<std::size_t>(k)] - m);
+        for (int r = r0; r < r0 + n; ++r) v += std::norm(F[static_cast<std::size_t>(r)][static_cast<std::size_t>(k)] - m);
         v /= static_cast<double>(n - 1);
         s.noise.push_back(v);
         s.sig.push_back(std::max(std::norm(m) - v / n, 0.0));
     }
     for (int k : hl) {
         double v = 0;
-        for (const auto& row : F) v += std::norm(row[static_cast<std::size_t>(k)]);
+        for (int r = r0; r < r0 + n; ++r) v += std::norm(F[static_cast<std::size_t>(r)][static_cast<std::size_t>(k)]);
         s.hole.push_back(v / n);
     }
     return s;
@@ -199,17 +221,16 @@ std::vector<double> waveform(std::string_view tx_path, double level) {
 }
 
 Report measure(std::span<const double> y, const ping::Level& lvl) {
-    const int P = period();
     const auto& L = lists();
-    std::size_t a = static_cast<std::size_t>(std::lround(GAP_S * config::FS)) + static_cast<std::size_t>(SETTLE * P);
-    const Stretch sd = stretch(y, a, SOUND_MEAS, L.tones, L.holes);
-    a += static_cast<std::size_t>(SOUND_MEAS * P);
+    const auto F = periods(y);
+    const Stretch sd = stretch(F, SETTLE - GUARD, SOUND_MEAS, L.tones, L.holes);
     Report m;
+    int r = SETTLE + SOUND_MEAS;
     for (std::size_t i = 0; i < STEPS_DB.size(); ++i) {
-        const Stretch s = stretch(y, a + static_cast<std::size_t>(SETTLE * P), MEAS, L.stair_tones, L.stair_holes);
+        const Stretch s = stretch(F, r + SETTLE - GUARD, MEAS, L.stair_tones, L.stair_holes);
         m.snr[i] = db(sum(s.sig) / sum(s.noise));
         m.sinad[i] = sinad_db(s);
-        a += static_cast<std::size_t>((SETTLE + MEAS) * P);
+        r += SETTLE + MEAS;
     }
     const std::size_t nt = L.tones.size();
     std::vector<double> f(nt), snr(nt);
