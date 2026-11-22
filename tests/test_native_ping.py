@@ -15,9 +15,10 @@ M = dict(snr_db=21.3, rms_dbfs=-18.2, peak_dbfs=-3.1, clip_permille=2, thirds_db
 
 def test_wire_and_level(native, pure):
     for rep in (None, PG.pack_report(M)):
-        body = PG.ping_body("N0CALL", "W1AW", rep, 55)
-        assert native.ping.ping_body("N0CALL", "W1AW", rep, 55) == body
-        assert native.ping.unpack_ping(body) == PG.unpack_ping(body)
+        for step in (False, True):
+            body = PG.ping_body("N0CALL", "W1AW", rep, 55, step)
+            assert native.ping.ping_body("N0CALL", "W1AW", rep, 55, step) == body
+            assert native.ping.unpack_ping(body) == PG.unpack_ping(body)
     assert native.ping.pack_report(M) == PG.pack_report(M)
     got, want = native.ping.unpack_report(PG.pack_report(M)), PG.unpack_report(PG.pack_report(M))
     assert {k: list(v) if k == "thirds_db" else v for k, v in got.items()} == want
@@ -26,8 +27,15 @@ def test_wire_and_level(native, pure):
     assert native.ping.level(x) == pytest.approx(PG.level(x), rel=1e-12)
     assert native.ping.tx_level("mic") == PG.tx_level("mic") and native.ping.tx_level("flat") == 1.0
     assert native.ping.fmt(M) == PG.fmt(M)
-    for far, path, band in ((M, "mic", "f55"), (dict(M, dist_db=3.0), "flat", "f55"), (dict(M, snr_db=8.2), "mic", "f108")):
+    dead = dict(M, thirds_db=[24.0, 22.0, -3.5])
+    for far, path, band in ((M, "mic", "f55"), (dict(M, dist_db=3.0), "flat", "f55"), (dict(M, snr_db=8.2), "mic", "f108"),
+                            (dead, "mic", "f108"), (dead, "flat", "f55")):
         assert native.ping.verdict(far, path, band) == PG.verdict(far, path, band)
+    for full, step in ((dict(M, dist_db=2.5), dict(M, dist_db=2.5)), (dict(M, dist_db=3.2), dict(M, snr_db=11.0, dist_db=0.1)),
+                       (M, dict(M, snr_db=11.0)), (M, dict(M, snr_db=20.3)), (dead, dict(dead, snr_db=12.0)),
+                       (M, dict(M, snr_db=17.0)), (M, dict(M, snr_db=23.0))):
+        for path, band in (("mic", "f55"), ("flat", "f108")):
+            assert native.ping.level_verdict(full, step, path, band) == PG.level_verdict(full, step, path, band)
 
 
 @pytest.mark.parametrize("radio, path", [("mic", "flat"), ("flat", "mic")])

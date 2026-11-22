@@ -62,3 +62,21 @@ KC2G, 432.950 MHz simplex, minimum power, a few metres apart: full quieting thro
 | IC-9700 -> FT-8800R (USB MOD 10%, sink 100%) | 3955 bps (60.7 s) | 5256 bps | +33% |
 
 - HF mostly 16qam-r1/2 and 64l-r2/3, up to 256l-r5/8; all intact. One session per cell: several % noise.
+
+## Ping verdict calibration (runs/onair/2026-11-22/p2-pingcal, p2-pingstep*)
+
+Level sweeps by PipeWire sink volume (cubic: 63% = -12 dB, 40% = -24 dB), one ping each:
+
+| sender | sink | snr | rx rms | dist | old verdict |
+|---|---|---|---|---|---|
+| IC-9700 MOD 10% | 10/15/25/40/63/100 | 7.8/15.2/20.2/22.0/25.2/25.0 | -49.5..-21.5 | 0.0-0.5 | OK (S/N 8: too low) |
+| IC-9700 MOD 40% | 100/63/40/25/15 | 23.0/23.0/22.8/23.0/25.5 | -16.5 x3, -17.0, -23.5 | 2.5/2.5/2.5/1.8/0.0 | limiter, OK at 15% |
+| FT-8800R | 40/63/100 | 10.0/21.5/28.0 | -53/-41/-26.5 | 2.6/1.9/0.3 | low S/N / limiter (false) / OK |
+
+- The limiter holds the received level (IC-9700 at 40%) and its dist falls with the drive; a weak sender's dist rises as the drive falls (FT-8800R), which the single-burst rule called a limiter.
+- On the simulator the input rms is the discriminator's noise and does not follow the level: the verdict uses S/N and dist, not rms.
+- WIDE over the IC-9700's AF: top third -3.5..-8.9 dB (dead); "level OK" before; one f108 reply failed to decode at the IC-9700 (no PINGACK at all).
+- DigiRig AGC on: clip 255 per mille, caught by the existing clip line.
+- S/N on the FT-8800R -> IC-9700 link swung 20.5-27.8 dB between pings seconds apart later in the day (noise across the IC-9700's AF band on bad bursts), 28 dB steady earlier.
+
+Two-ping step verdict (checkpoint; a one-over redesign is proposed): limiter if dist > DIST_DB and (dist falls >= 0.5 dB at -10 dB or S/N falls < 2 dB); else slope = S/N drop / 10 dB: >= 0.6 follows, <= 0.2 does not, step better by > 1 dB: ping again. On air with the rebuilt hosts: IC-9700 sink 100% 0.08 "does not follow", sink 15% 1.0 "follows", FT-8800R 0.34 "level OK".

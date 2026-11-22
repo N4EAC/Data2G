@@ -11,8 +11,15 @@ matters. Each end measures the other's burst (measure); the reply carries
 the replier's measurement of the ping (pack_report), so the pinger learns
 how its own transmitter arrives, and a verdict (verdict) says what to change.
 
+A ping goes out twice: at its level, then (once the first reply is in) STEP_DB
+quieter. How the far end's reading moves between the two tells what a single
+burst cannot (level_verdict): a limiter holds the received level, a sender
+whose S/N follows its level wants more deviation, and one whose S/N stays put
+is on a ceiling of the radios that level does not change.
+
 Body: from call, to call (frames.pack_call, 8 bytes each), flags (bit 0:
-a reply, which carries an 8-byte report), then zeros to fill the codewords.
+a reply, which carries a REPORT_BYTES report; bit 1: the quieter step ping,
+or a reply to it), then zeros to fill the codewords.
 FM only (frames.T_PING); HF never sends or reads it."""
 
 import numpy as np
@@ -41,6 +48,29 @@ TILT_DB = 1.0
 NOISE_TILT_DB = 1.5
 MIN_SNR_DB = 12.0
 CLIP_DBFS = -0.1  # an input peak this close to full scale: the sound card clipped
+# The step pair, measured on air (runs/onair/2026-11-22/notes.md, IC-9700 and
+# FT-8800R, level sweeps 0..-36 dB) and on the FM simulator (tests/test_fm_ping.py).
+# STEP_DB: the second ping's level under the first. The limiter: dist over
+# DIST_DB and either falling with the level by DIST_FALL_DB (simulator 3.2 ->
+# 0.1; IC-9700 at its edge 1.8 -> 0.0) or S/N not falling by HELD_SNR_DB (the
+# IC-9700 over-driven: 2.5 at both, S/N unchanged). A weak sender's dist rises
+# instead as the level falls (FT-8800R: 0.3 at full, 1.9 at -12 dB, 2.6 at
+# -24 dB), with its S/N. The input's rms cannot stand in for the received level:
+# under full quieting it is the discriminator's noise. FOLLOW_SLOPE / FLAT_SLOPE:
+# S/N lost per dB of step at or above which S/N follows the level, at or under
+# which it does not (correct setups on the simulator 0.93-0.97, FT-8800R
+# under-driven 0.65-1.0; the IC-9700's ~25 dB ceiling ~0); between them a pair
+# cannot tell: on air, S/N swung +-4 dB from burst to burst on some runs. A step
+# ping more than VARIED_DB better than the first: S/N changed between the two.
+# DEAD_THIRD_DB: a third this far under the best carries nothing
+# (WIDE over the IC-9700's AF: -4 dB against +24).
+STEP_DB = 10.0
+HELD_SNR_DB = 2.0
+FOLLOW_SLOPE = 0.6
+FLAT_SLOPE = 0.2
+VARIED_DB = 1.0
+DIST_FALL_DB = 0.5
+DEAD_THIRD_DB = 15.0
 
 
 def tx_level(tx_path: str) -> float:
@@ -56,23 +86,24 @@ def fmt(m: dict) -> str:
             f"noise_tilt={m['noise_tilt_db']:.1f}")
 
 
-def ping_body(frm: str, to: str, report: bytes | None, payload_bytes: int) -> bytes:
+def ping_body(frm: str, to: str, report: bytes | None, payload_bytes: int, step: bool = False) -> bytes:
     """The T_PING extension body, zero-filled so the control takes MAX_CTL codewords."""
-    head = F.pack_call(frm) + F.pack_call(to) + bytes([1 if report is not None else 0]) + (report or b"")
+    flags = (1 if report is not None else 0) | (2 if step else 0)
+    head = F.pack_call(frm) + F.pack_call(to) + bytes([flags]) + (report or b"")
     fill = F.MAX_CTL * payload_bytes - 4 - 2 - len(head)  # core (4) and the extension's type/length (2)
     return head + bytes(min(255 - len(head), max(0, fill)))
 
 
-def unpack_ping(body: bytes) -> tuple[str, str, bytes | None]:
-    """-> (from, to, the report if a reply). ValueError if malformed."""
+def unpack_ping(body: bytes) -> tuple[str, str, bytes | None, bool]:
+    """-> (from, to, the report if a reply, the step flag). ValueError if malformed."""
     if len(body) < 17:
         raise ValueError("ping: short")
     frm, to, flags = F.unpack_call(body[:8]), F.unpack_call(body[8:16]), body[16]
     if flags & 1:
         if len(body) < 17 + REPORT_BYTES:
             raise ValueError("ping: short report")
-        return frm, to, body[17:17 + REPORT_BYTES]
-    return frm, to, None
+        return frm, to, body[17:17 + REPORT_BYTES], bool(flags & 2)
+    return frm, to, None, bool(flags & 2)
 
 
 def _q(v: float, step: float, lo: int, hi: int) -> int:
@@ -154,18 +185,50 @@ def measure(r: dict, payloads: list[bytes], audio_level: dict) -> dict:
                 dist_db=max(0.0, dist), **audio_level)
 
 
+def _dead_third(far: dict) -> int | None:
+    """The index of the worst band third if it carries nothing (DEAD_THIRD_DB)."""
+    t = far["thirds_db"]
+    i = int(np.argmin(t))
+    return i if t[i] < max(t) - DEAD_THIRD_DB else None
+
+
 def verdict(far: dict, tx_path: str, band: str = "f55") -> list[str]:
-    """Plain advice for the pinging station from `far`, the far end's
-    measurement of its burst (unpack_report) in `band`, given its own tx_path."""
+    """What one burst says, from `far`, the far end's measurement of the
+    pinging station's burst (unpack_report) in `band`, given its own tx_path.
+    The level itself (limiter, more deviation, OK) waits for the step ping
+    (level_verdict)."""
     out = []
+    dead = _dead_third(far)
     tilt = far["thirds_db"][0] - far["thirds_db"][2]
     if far["snr_db"] < MIN_SNR_DB:
         out.append(f"S/N {far['snr_db']:.0f} dB: too low to judge distortion")
-    elif far["dist_db"] > DIST_DB[band]:
-        out.append("your audio drives the radio's limiter: lower the TX level"
-                   + (", or set tx_path mic on a mic/speaker radio" if tx_path == "flat" else ""))
-    if tx_path == "mic" and tilt >= TILT_DB and far["noise_tilt_db"] >= NOISE_TILT_DB:
+    if dead is not None:
+        where = ("bottom", "middle", "top")[dead]
+        out.append(f"the {where} of the band does not get through ({max(far['thirds_db']) - far['thirds_db'][dead]:.0f} dB "
+                   "under the best third): " + ("use NARROW" if band == "f108" else "check the radios' audio filtering"))
+    elif tx_path == "mic" and tilt >= TILT_DB and far["noise_tilt_db"] >= NOISE_TILT_DB:
         out.append(f"top of band {tilt:.0f} dB under the bottom (a flat 9600 path's noise): set tx_path flat if this is a data port")
     if far["clip_permille"] or far["peak_dbfs"] >= CLIP_DBFS:
         out.append("the far end's sound card clipped: it should lower its input level")
-    return out or ["level OK"]
+    return out
+
+
+def level_verdict(full: dict, step: dict, tx_path: str, band: str = "f55") -> str:
+    """The level, from the far end's measurements of the ping (`full`) and of
+    the step ping STEP_DB under it (`step`)."""
+    drop = full["snr_db"] - step["snr_db"]
+    if (full["snr_db"] >= MIN_SNR_DB and _dead_third(full) is None and full["dist_db"] > DIST_DB[band]
+            and (full["dist_db"] >= step["dist_db"] + DIST_FALL_DB or drop < HELD_SNR_DB)):
+        return ("your audio drives the radio's limiter: lower the TX level"
+                + (", or set tx_path mic on a mic/speaker radio" if tx_path == "flat" else ""))
+    if drop < -VARIED_DB:
+        return "level OK; S/N varied between the two pings: ping again to see whether more level helps"
+    slope = drop / STEP_DB
+    if slope >= FOLLOW_SLOPE:
+        # a ping cannot see absolute deviation: S/N follows it on any noise-limited
+        # link, at the right drive as well as under it
+        return (f"level OK; S/N follows it ({slope:.1f} dB per dB): more deviation helps "
+                "if the radio's data input has headroom (under its rated level)")
+    if slope <= FLAT_SLOPE:
+        return "level OK; S/N does not follow it: more level will not help"
+    return "level OK"

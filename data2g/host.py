@@ -20,7 +20,10 @@ CQFRAME call bw (a CQ frame at 500 | 1200 | 2300 | 2750 Hz: no session;
 one heard is notified the same way, the sender's call and bandwidth),
 PING call [NARROW|WIDE] (FM: a level / TX path check, arq.ping, no session;
 -> PINGACK call far <how ours arrived there> near <how theirs arrived here>,
-then PINGVERDICT call <advice> lines; a ping to us: PING from to <measurement>,
+then PINGVERDICT call <advice> lines on that burst; then a second ping
+arq.ping.STEP_DB quieter goes out by itself, whose PINGACK ends step=-10,
+and the level's PINGVERDICT line follows it (none if that reply is lost:
+ping again); a ping to us: PING from to <measurement> [step=-10],
 answered automatically when no session is under way; measurements are
 snr= rms= peak= clip= thirds=a/b/c dist= noise_tilt= words, dB),
 BW500 | BW1200 | BW2300 | BW2750 (session bandwidth cap: BW500 keeps a

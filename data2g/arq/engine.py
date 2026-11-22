@@ -209,7 +209,8 @@ class Engine:
         self.chat = False
         self._idle_close_s = None  # set_idle_close
         self._extra: list = []  # bursts outside any session (CQ frames), sent when the channel is free
-        self._ping_replied: dict = {}  # caller -> time of our last ping reply (PG.REPLY_HOLDOFF_S)
+        self._ping_replied: dict = {}  # caller -> (time of our last ping reply, its step answered too)
+        self._ping_sent: dict = {}  # station we pinged -> its first reply's report, None until it comes
         self._events: list[str] = []  # host notifications from outside the session (CQFRAME)
         self.kiss = kiss
         self.stats_interval_s = stats_interval_s
@@ -547,40 +548,62 @@ class Engine:
         if self.session.state not in (S.IDLE, S.LISTEN, S.CLOSED):
             raise RuntimeError(f"session {self.session.state}")
         F.pack_call(to)  # ValueError now, not at send
+        self._ping_sent[to] = None
         self._extra.append(self._ping_burst(to, cap, None))
 
-    def _ping_burst(self, to: str, cap: int, report: bytes | None) -> B.TxBurst:
+    def _ping_burst(self, to: str, cap: int, report: bytes | None, step: bool = False) -> B.TxBurst:
         """A ping (or, with `report`, a reply): MAX_CTL control codewords of
-        the band's ping mode, mask 0, at the top modes' level."""
+        the band's ping mode, mask 0, at the top modes' level; a step ping
+        PG.STEP_DB under it."""
         mode = PG.PING_MODES[cap]
         pb = self.session.policy.payload_bytes(mode)
-        body = PG.ping_body(self.call, to, report, pb)
+        body = PG.ping_body(self.call, to, report, pb, step)
         payloads = F.Control(F.Core(ftype=F.SESSION), {F.T_PING: body}).pack(pb)
+        level = PG.tx_level(modem.TX_PATH) * (10 ** (-PG.STEP_DB / 20) if step and report is None else 1.0)
         return B.TxBurst(mode, [B.Slot(B.ctl_mask(0, i, 0), 0, p) for i, p in enumerate(payloads)], 0, cap,
-                         level=PG.tx_level(modem.TX_PATH))
+                         level=level)
 
     def _ping(self, rx, payloads: list, body: bytes, audio, t: float):
         """A ping heard: measure its sender's transmitter; ours: report it
-        (PING), and reply when free (once per caller per REPLY_HOLDOFF_S); a
-        reply to ours: PINGACK (how ours arrived there, and theirs here) and
-        PINGVERDICT lines (arq.ping.verdict)."""
-        frm, to, report = PG.unpack_ping(body)
+        (PING), and reply when free (once per caller per REPLY_HOLDOFF_S, and
+        to the step ping that follows); a reply to ours: PINGACK (how ours
+        arrived there, and theirs here) and PINGVERDICT lines (arq.ping.verdict),
+        then the step ping; its reply: the level's PINGVERDICT line
+        (arq.ping.level_verdict)."""
+        frm, to, report, step = PG.unpack_ping(body)
         if to not in (self.call, *self.aliases):
             return
         m = PG.measure(rx.r, payloads, PG.level(audio if audio is not None else np.zeros(0)))
         cap = 2 if rx.r["spec"].band == "f108" else 1
+        tag = f" step=-{PG.STEP_DB:.0f}" if step else ""
         if report is None:
-            log.info("RX PING from %s: %s", frm, PG.fmt(m))
-            self._events.append(f"PING {frm} {to} {PG.fmt(m)}")
+            log.info("RX PING from %s: %s%s", frm, PG.fmt(m), tag)
+            self._events.append(f"PING {frm} {to} {PG.fmt(m)}{tag}")
             last = self._ping_replied.get(frm)
-            if self.session.state in (S.IDLE, S.LISTEN, S.CLOSED) and (last is None or t - last >= PG.REPLY_HOLDOFF_S):
-                self._ping_replied[frm] = t
-                self._extra.append(self._ping_burst(frm, cap, PG.pack_report(m)))
+            free = self.session.state in (S.IDLE, S.LISTEN, S.CLOSED)
+            if step:  # the step after a ping we answered: once, inside the holdoff
+                ok = last is not None and not last[1] and t - last[0] < 3 * PG.REPLY_HOLDOFF_S
+            else:
+                ok = last is None or t - last[0] >= PG.REPLY_HOLDOFF_S
+            if free and ok:
+                self._ping_replied[frm] = (last[0] if step else t, step)
+                self._extra.append(self._ping_burst(frm, cap, PG.pack_report(m), step))
             return
         far = PG.unpack_report(report)
-        log.info("RX PINGACK from %s: far %s, near %s", frm, PG.fmt(far), PG.fmt(m))
-        self._events.append(f"PINGACK {frm} far {PG.fmt(far)} near {PG.fmt(m)}")
-        self._events += [f"PINGVERDICT {frm} {v}" for v in PG.verdict(far, modem.TX_PATH, rx.r["spec"].band)]
+        log.info("RX PINGACK from %s: far %s, near %s%s", frm, PG.fmt(far), PG.fmt(m), tag)
+        self._events.append(f"PINGACK {frm} far {PG.fmt(far)} near {PG.fmt(m)}{tag}")
+        if frm not in self._ping_sent:
+            return
+        band = rx.r["spec"].band
+        if not step:
+            if self._ping_sent[frm] is None:
+                self._ping_sent[frm] = far
+                self._events += [f"PINGVERDICT {frm} {v}" for v in PG.verdict(far, modem.TX_PATH, band)]
+                self._extra.append(self._ping_burst(frm, cap, None, step=True))
+            return
+        full = self._ping_sent.pop(frm)
+        if full is not None:
+            self._events.append(f"PINGVERDICT {frm} {PG.level_verdict(full, far, modem.TX_PATH, band)}")
 
     def _open_frame(self, cap: int, ext: int, body: bytes) -> B.TxBurst:
         """A control-only burst anyone can read (frame type SESSION, mask 0),

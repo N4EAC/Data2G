@@ -50,25 +50,27 @@ std::string fmt(const Report& m) {
            f1(m.thirds_db[2]) + " dist=" + f1(m.dist_db) + " noise_tilt=" + f1(m.noise_tilt_db);
 }
 
-Bytes ping_body(const std::string& frm, const std::string& to, const std::optional<Bytes>& report, int payload_bytes) {
+Bytes ping_body(const std::string& frm, const std::string& to, const std::optional<Bytes>& report, int payload_bytes,
+                bool step) {
     Bytes head = pack_call(frm);
     const Bytes t = pack_call(to);
     head.insert(head.end(), t.begin(), t.end());
-    head.push_back(report ? 1 : 0);
+    head.push_back(static_cast<std::uint8_t>((report ? 1 : 0) | (step ? 2 : 0)));
     if (report) head.insert(head.end(), report->begin(), report->end());
     const long fill = static_cast<long>(MAX_CTL) * payload_bytes - 4 - 2 - static_cast<long>(head.size());
     head.resize(head.size() + static_cast<std::size_t>(std::min<long>(255 - static_cast<long>(head.size()), std::max(0L, fill))), 0);
     return head;
 }
 
-std::tuple<std::string, std::string, std::optional<Bytes>> unpack_ping(ByteView body) {
+std::tuple<std::string, std::string, std::optional<Bytes>, bool> unpack_ping(ByteView body) {
     if (body.size() < 17) throw std::invalid_argument("ping: short");
     std::string frm = unpack_call(body.subspan(0, 8)), to = unpack_call(body.subspan(8, 8));
+    const bool step = body[16] & 2;
     if (body[16] & 1) {
         if (body.size() < 17 + static_cast<std::size_t>(REPORT_BYTES)) throw std::invalid_argument("ping: short report");
-        return {frm, to, Bytes(body.begin() + 17, body.begin() + 17 + REPORT_BYTES)};
+        return {frm, to, Bytes(body.begin() + 17, body.begin() + 17 + REPORT_BYTES), step};
     }
-    return {frm, to, std::nullopt};
+    return {frm, to, std::nullopt, step};
 }
 
 Bytes pack_report(const Report& m) {
@@ -183,21 +185,46 @@ Report measure(const modem::Received& r, const std::vector<Bytes>& payloads, con
     return m;
 }
 
+namespace {
+// ping.py _dead_third: the worst third's index if it carries nothing, else -1
+int dead_third(const Report& far) {
+    const auto& t = far.thirds_db;
+    const int i = static_cast<int>(std::min_element(t.begin(), t.end()) - t.begin());
+    return t[i] < *std::max_element(t.begin(), t.end()) - DEAD_THIRD_DB ? i : -1;
+}
+std::string f0(double v) { return std::to_string(static_cast<int>(std::lround(v))); }
+}  // namespace
+
 std::vector<std::string> verdict(const Report& far, std::string_view tx_path, const std::string& band) {
     std::vector<std::string> out;
+    const int dead = dead_third(far);
     const double tilt = far.thirds_db[0] - far.thirds_db[2];
-    if (far.snr_db < MIN_SNR_DB) {
-        out.push_back("S/N " + std::to_string(static_cast<int>(std::lround(far.snr_db))) + " dB: too low to judge distortion");
-    } else if (far.dist_db > DIST_DB.at(band)) {
-        out.push_back(std::string("your audio drives the radio's limiter: lower the TX level") +
-                      (tx_path == "flat" ? ", or set tx_path mic on a mic/speaker radio" : ""));
+    if (far.snr_db < MIN_SNR_DB) out.push_back("S/N " + f0(far.snr_db) + " dB: too low to judge distortion");
+    if (dead >= 0) {
+        static const char* where[] = {"bottom", "middle", "top"};
+        const double best = *std::max_element(far.thirds_db.begin(), far.thirds_db.end());
+        out.push_back(std::string("the ") + where[dead] + " of the band does not get through (" + f0(best - far.thirds_db[dead]) +
+                      " dB under the best third): " + (band == "f108" ? "use NARROW" : "check the radios' audio filtering"));
+    } else if (tx_path == "mic" && tilt >= TILT_DB && far.noise_tilt_db >= NOISE_TILT_DB) {
+        out.push_back("top of band " + f0(tilt) + " dB under the bottom (a flat 9600 path's noise): set tx_path flat if this is a data port");
     }
-    if (tx_path == "mic" && tilt >= TILT_DB && far.noise_tilt_db >= NOISE_TILT_DB)
-        out.push_back("top of band " + std::to_string(static_cast<int>(std::lround(tilt))) +
-                      " dB under the bottom (a flat 9600 path's noise): set tx_path flat if this is a data port");
     if (far.clip_permille || far.peak_dbfs >= CLIP_DBFS) out.push_back("the far end's sound card clipped: it should lower its input level");
-    if (out.empty()) out.push_back("level OK");
     return out;
+}
+
+std::string level_verdict(const Report& full, const Report& step, std::string_view tx_path, const std::string& band) {
+    const double drop = full.snr_db - step.snr_db;
+    if (full.snr_db >= MIN_SNR_DB && dead_third(full) < 0 && full.dist_db > DIST_DB.at(band)
+        && (full.dist_db >= step.dist_db + DIST_FALL_DB || drop < HELD_SNR_DB))
+        return std::string("your audio drives the radio's limiter: lower the TX level") +
+               (tx_path == "flat" ? ", or set tx_path mic on a mic/speaker radio" : "");
+    if (drop < -VARIED_DB) return "level OK; S/N varied between the two pings: ping again to see whether more level helps";
+    const double slope = drop / STEP_DB;
+    if (slope >= FOLLOW_SLOPE)
+        return "level OK; S/N follows it (" + f1(slope) + " dB per dB): more deviation helps "
+               "if the radio's data input has headroom (under its rated level)";
+    if (slope <= FLAT_SLOPE) return "level OK; S/N does not follow it: more level will not help";
+    return "level OK";
 }
 
 }  // namespace data2g::arq::ping

@@ -479,27 +479,30 @@ void Engine::send_ping(const std::string& to, int cap) {
     if (st != SessionState::IDLE && st != SessionState::LISTEN && st != SessionState::CLOSED)
         throw std::runtime_error("session under way");
     pack_call(to);  // throws now, not at send
+    ping_sent_[to] = std::nullopt;
     extra_.push_back(ping_burst(to, cap, std::nullopt));
 }
 
-// A ping (or, with report, a reply): MAX_CTL control codewords of the band's ping mode, mask 0, at the top modes' level.
-TxBurstPtr Engine::ping_burst(const std::string& to, int cap, const std::optional<Bytes>& report) const {
+// A ping (or, with report, a reply): MAX_CTL control codewords of the band's ping mode, mask 0, at the top modes'
+// level; a step ping ping::STEP_DB under it.
+TxBurstPtr Engine::ping_burst(const std::string& to, int cap, const std::optional<Bytes>& report, bool step) const {
     const std::string& mode = ping::PING_MODES.at(cap);
     const int pb = session_->policy->payload_bytes(mode);
-    Control ctl{Core{.ftype = SESSION}, {{T_PING, ping::ping_body(call_, to, report, pb)}}};
+    Control ctl{Core{.ftype = SESSION}, {{T_PING, ping::ping_body(call_, to, report, pb, step)}}};
     const auto payloads = ctl.pack(pb);
     auto b = std::make_shared<TxBurst>();
     b->submode = mode;
     b->cap = cap;
-    b->level = ping::tx_level(modem::tx_path());
+    b->level = ping::tx_level(modem::tx_path()) * (step && !report ? std::pow(10.0, -ping::STEP_DB / 20.0) : 1.0);
     for (std::size_t i = 0; i < payloads.size(); ++i) b->slots.push_back({ctl_mask(0, static_cast<int>(i), 0), 0, payloads[i]});
     return b;
 }
 
 // engine.py _ping: measure the sender's transmitter; ours: PING, and a reply when free (once per caller per
-// REPLY_HOLDOFF_S); a reply to ours: PINGACK and PINGVERDICT lines.
+// REPLY_HOLDOFF_S, and to the step ping that follows); a reply to ours: PINGACK and PINGVERDICT lines, then the
+// step ping; its reply: the level's PINGVERDICT line.
 void Engine::on_ping(ModemRx& rx, const std::vector<Bytes>& payloads, ByteView body, const receiver::BurstEvent* ev, double t) {
-    auto [frm, to, report] = ping::unpack_ping(body);
+    auto [frm, to, report, step] = ping::unpack_ping(body);
     if (to != call_ && std::find(aliases_.begin(), aliases_.end(), to) == aliases_.end()) return;
     const auto& r = *rx.heard().ofdm;
     std::span<const double> audio;
@@ -507,22 +510,38 @@ void Engine::on_ping(ModemRx& rx, const std::vector<Bytes>& payloads, ByteView b
         std::min<std::size_t>(ev->audio.size(), static_cast<std::size_t>(std::max<std::int64_t>(0, ev->header.end() - ev->header.start()))));
     const auto m = ping::measure(r, payloads, ping::level(audio));
     const int cap = r.spec->band == "f108" ? 2 : 1;
+    const std::string tag = step ? " step=-" + std::to_string(static_cast<int>(ping::STEP_DB)) : "";
     if (!report) {
-        log_write(LOG, INFO, format("RX PING from %s: %s", frm.c_str(), ping::fmt(m).c_str()));
-        events_.push_back("PING " + frm + " " + to + " " + ping::fmt(m));
+        log_write(LOG, INFO, format("RX PING from %s: %s%s", frm.c_str(), ping::fmt(m).c_str(), tag.c_str()));
+        events_.push_back("PING " + frm + " " + to + " " + ping::fmt(m) + tag);
         const auto st = session_->state;
         const auto last = ping_replied_.find(frm);
-        if ((st == SessionState::IDLE || st == SessionState::LISTEN || st == SessionState::CLOSED)
-            && (last == ping_replied_.end() || t - last->second >= ping::REPLY_HOLDOFF_S)) {
-            ping_replied_[frm] = t;
-            extra_.push_back(ping_burst(frm, cap, ping::pack_report(m)));
+        const bool free = st == SessionState::IDLE || st == SessionState::LISTEN || st == SessionState::CLOSED;
+        const bool ok = step ? (last != ping_replied_.end() && !last->second.second && t - last->second.first < 3 * ping::REPLY_HOLDOFF_S)
+                             : (last == ping_replied_.end() || t - last->second.first >= ping::REPLY_HOLDOFF_S);
+        if (free && ok) {
+            ping_replied_[frm] = {step ? last->second.first : t, step};
+            extra_.push_back(ping_burst(frm, cap, ping::pack_report(m), step));
         }
         return;
     }
     const auto far = ping::unpack_report(*report);
-    log_write(LOG, INFO, format("RX PINGACK from %s: far %s, near %s", frm.c_str(), ping::fmt(far).c_str(), ping::fmt(m).c_str()));
-    events_.push_back("PINGACK " + frm + " far " + ping::fmt(far) + " near " + ping::fmt(m));
-    for (const auto& v : ping::verdict(far, modem::tx_path(), std::string(r.spec->band))) events_.push_back("PINGVERDICT " + frm + " " + v);
+    log_write(LOG, INFO, format("RX PINGACK from %s: far %s, near %s%s", frm.c_str(), ping::fmt(far).c_str(), ping::fmt(m).c_str(), tag.c_str()));
+    events_.push_back("PINGACK " + frm + " far " + ping::fmt(far) + " near " + ping::fmt(m) + tag);
+    const auto sent = ping_sent_.find(frm);
+    if (sent == ping_sent_.end()) return;
+    const std::string band(r.spec->band);
+    if (!step) {
+        if (!sent->second) {
+            sent->second = far;
+            for (const auto& v : ping::verdict(far, modem::tx_path(), band)) events_.push_back("PINGVERDICT " + frm + " " + v);
+            extra_.push_back(ping_burst(frm, cap, std::nullopt, true));
+        }
+        return;
+    }
+    const auto full = sent->second;
+    ping_sent_.erase(sent);
+    if (full) events_.push_back("PINGVERDICT " + frm + " " + ping::level_verdict(*full, far, modem::tx_path(), band));
 }
 
 TxBurstPtr Engine::open_frame(int cap, int ext, const Bytes& body) const {

@@ -265,14 +265,14 @@ void bind_arq_ping(py::module_& m) {
     namespace pg = arq::ping;
     auto g = m.def_submodule("ping", "data2g.arq.ping");
     g.def("tx_level", [](const std::string& path) { return pg::tx_level(path); });
-    g.def("ping_body", [](const std::string& frm, const std::string& to, const py::object& report, int pb) {
-        return pyb(pg::ping_body(frm, to, report.is_none() ? std::nullopt : std::optional<Bytes>(bytes_of(report)), pb));
-    });
+    g.def("ping_body", [](const std::string& frm, const std::string& to, const py::object& report, int pb, bool step) {
+        return pyb(pg::ping_body(frm, to, report.is_none() ? std::nullopt : std::optional<Bytes>(bytes_of(report)), pb, step));
+    }, py::arg("frm"), py::arg("to"), py::arg("report"), py::arg("payload_bytes"), py::arg("step") = false);
     g.def("unpack_ping", [](const py::bytes& body) {
         const Bytes b = bytes_of(body);
         try {
-            auto [frm, to, rep] = pg::unpack_ping(b);
-            return py::make_tuple(frm, to, rep ? py::object(pyb(*rep)) : py::object(py::none()));
+            auto [frm, to, rep, step] = pg::unpack_ping(b);
+            return py::make_tuple(frm, to, rep ? py::object(pyb(*rep)) : py::object(py::none()), step);
         } catch (const std::invalid_argument& e) {
             throw py::value_error(e.what());
         }
@@ -303,6 +303,9 @@ void bind_arq_ping(py::module_& m) {
     g.def("verdict", [](const py::dict& far, const std::string& path, const std::string& band) {
         return pg::verdict(report_of(far), path, band);
     }, py::arg("far"), py::arg("tx_path"), py::arg("band") = "f55");
+    g.def("level_verdict", [](const py::dict& full, const py::dict& step, const std::string& path, const std::string& band) {
+        return pg::level_verdict(report_of(full), report_of(step), path, band);
+    }, py::arg("full"), py::arg("step"), py::arg("tx_path"), py::arg("band") = "f55");
     g.def("fmt", [](const py::dict& d) { return pg::fmt(report_of(d)); });
 }
 
