@@ -1078,17 +1078,16 @@ std::vector<Station::Hypothesis> Station::expect(const RxBurst& rxb) const {
             // announcements with build()'s padding/replace rule. Keep the old ways.
             std::vector<Way> announced;
             const int n_ctl = ctl_slots ? 1 : n_cw;
-            const int room = n_ctl * cpb;
             for (const auto& w : ways) {
                 Way a = w;
-                auto size = [&] {
-                    int n = 4;
-                    for (const auto& t : a.ext) n += 2 + static_cast<int>(t.value.size());
-                    return n;
+                auto fits = [&] {
+                    Ext e;
+                    for (const auto& t : a.ext) e[t.type] = t.value;
+                    return fits_padding(e, n_ctl, cpb);
                 };
-                if (nod_default() && nod && size() + 2 <= room) a.ext.push_back({T_NODS, {}, {}});
+                if (nod_default() && nod && fits()) a.ext.push_back({T_NODS, {}, {}});
                 if (keep_default() && keep) {
-                    if (size() + 2 <= room) {
+                    if (fits()) {
                         a.ext.push_back({T_KEEP, {}, {}});
                     } else if (n_ctl < max_ctl && std::any_of(a.ext.begin(), a.ext.end(),
                                [](const Tlv& t) { return t.type == T_REPLY; })) {

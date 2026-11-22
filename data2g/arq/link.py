@@ -1311,16 +1311,16 @@ class Station:
                 # capability announcements, with build()'s padding/replace rule.
                 # Keep the original ways for peers that do not announce them.
                 announced = []
-                room = (1 if ctl_slots else rx.n_cw) * cpb
+                n_ctl = 1 if ctl_slots else rx.n_cw
                 for c, e in ways:
                     a = list(e)
-                    size = lambda: 4 + sum(2 + len(v) for _, v, _ in a)
-                    if NOD and self.nod and size() + 2 <= room:
+                    fits = lambda: self._fits_padding({t: v for t, v, _ in a}, n_ctl, cpb)
+                    if NOD and self.nod and fits():
                         a.append((F.T_NODS, b"", b""))
                     if KEEP and self.keep:
-                        if size() + 2 <= room:
+                        if fits():
                             a.append((F.T_KEEP, b"", b""))
-                        elif any(t == F.T_REPLY for t, _, _ in a) and (1 if ctl_slots else rx.n_cw) < max_ctl:
+                        elif any(t == F.T_REPLY for t, _, _ in a) and n_ctl < max_ctl:
                             a = [t for t in a if t[0] != F.T_REPLY] + [(F.T_KEEP, b"", b"")]
                     if a != e:
                         announced.append((c, a))
