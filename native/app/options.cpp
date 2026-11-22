@@ -103,7 +103,9 @@ const char* HELP =
     "                        connect through two mkfifo pipes. --sample-rate and the devices are then unused.\n"
     "  --tci, --no-tci       the radio over TCI (ExpertSDR, Thetis, AetherSDR...): audio, PTT and the dial,\n"
     "                        in place of the sound card and Hamlib. --sample-rate 8000, 24000 or 48000;\n"
-    "                        --rig-mode usb or pkt_usb sets USB or DIGU on connect (default: off)\n"
+    "                        --rig-mode usb or pkt_usb sets USB or DIGU on connect (default: off). A sound\n"
+    "                        card or radio flag here (--input-device, --output-device, --audio-io, --rig-model,\n"
+    "                        --rig-device, --ptt-method, --ptt-device) turns a saved TCI off\n"
     "  --tci-host HOST[:PORT]  the TCI server (default localhost:50001)\n"
     "  --threads N           threads for decode and sync, the calling one included (default: min(4, cores / 2))\n"
     "  --realtime, --no-realtime\n"
@@ -263,7 +265,11 @@ Args parse(int argc, char** argv, Args a, const char* prog, const char* extra_he
     // The flags on this command line that others depend on (value: the last one given).
     std::map<std::string, std::string> given;
     static const std::set<std::string> tracked = {"--rig-model", "--rig-device", "--no-rig", "--ptt-device", "--ptt-gpio",
-                                                    "--record-dir", "--no-record"};
+                                                    "--record-dir", "--no-record", "--tci", "--no-tci", "--input-device",
+                                                    "--output-device", "--audio-io", "--ptt-method"};
+    // a sound card or radio named here means not TCI: they turn a saved TCI off (TCI ignores them)
+    static const std::vector<std::string> not_tci = {"--input-device", "--output-device", "--audio-io", "--rig-model",
+                                                     "--rig-device", "--ptt-method", "--ptt-device"};
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-h" || arg == "--help") {
@@ -291,7 +297,12 @@ Args parse(int argc, char** argv, Args a, const char* prog, const char* extra_he
         if (tracked.count(arg)) given[arg] = "";
         if (arg == "--rig") given.erase("--no-rig");
         if (arg == "--record") given.erase("--no-record");
+        if (arg == "--tci") given.erase("--no-tci");
+        if (arg == "--no-tci") given.erase("--tci");
     }
+    if (!given.count("--tci"))  // --tci given here as well: check() says what clashes
+        for (const auto& f : not_tci)
+            if (given.count(f)) a.tci = false;
     // A model or device given here turns a saved 'no rig' on, as a directory
     // to record to turns recording on.
     if (given.count("--no-rig") && (given.count("--rig-model") || given.count("--rig-device")))
