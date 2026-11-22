@@ -1075,7 +1075,8 @@ std::vector<Station::Hypothesis> Station::expect(const RxBurst& rxb) const {
         for (auto& w : reply_changes(base)) ways.push_back(std::move(w));
         if (!data && peer_ctl_.empty()) {
             // Before any peer control was read, also try the session's initial
-            // announcements with build()'s padding/replace rule. Keep the old ways.
+            // announcements with build()'s padding/replace rule. Keep the old ways after them:
+            // PRIME_TRIES can cut those, a cost to legacy peers only (link.py says why not interleaved).
             std::vector<Way> announced;
             const int n_ctl = ctl_slots ? 1 : n_cw;
             for (const auto& w : ways) {

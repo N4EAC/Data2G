@@ -115,7 +115,42 @@ def test_cpp_first_control_primes_identically(native, pure, mode, dup, announcem
         bootstrap_control(L.Station, mode, dup, announcements, direction)
 
 
-def lockstep(seed, cls_a, cls_b, p_burst, p_ctl, n_a, n_b, forge=0.0, modes=("m4", "m22", "m46"), max_cw=20,
+class DataPolicy(BootstrapPolicy):
+    def choose(self, station, escalation):
+        return self.mode, 5 if station.tx.pending() else 1
+
+
+def reply_to_data(cls, dup):
+    """The caller's first burst carries data (its bank is full of cumulative-ack ways); the
+    callee's control-only reply fails blind and must still be primed. An announcing callee
+    only: the announced ways come first, and a legacy one (nod, keep off) loses its
+    T_DUPCTL-toggled ways past PRIME_TRIES here (expect)."""
+    a = cls(0, DataPolicy("fsk16r25-r1/2", dup), master=True, nod=True, keep=True)
+    b = cls(1, DataPolicy("fsk16r25-r1/2", dup), nod=True, keep=True)
+    a.write(bytes(range(64)))
+    stats = dict(mismatch=0, primed=0, primed_ok=0, forged=0)
+    first = PrimeRx(a.build(), random.Random(1), 0, {}, stats, p_ctl=0, p_known=1)
+    first.n_ctl_slots = 1
+    assert b.handle(first)
+    reply = b.build()
+    rx = PrimeRx(reply, random.Random(1), 0, {}, stats, p_ctl=1, p_known=1)
+    rx.n_ctl_slots = 1
+    hypotheses = a.expect(rx)
+    assert a.handle(rx), (dup, hypotheses)
+    return _burst(reply), hypotheses
+
+
+@pytest.mark.parametrize("dup", [False, True])
+def test_reply_to_data_can_be_primed(dup):
+    reply_to_data(L.Station, dup)
+
+
+@pytest.mark.parametrize("dup", [False, True])
+def test_cpp_reply_to_data_primes_identically(native, pure, dup):
+    assert reply_to_data(native.arq.Station, dup) == reply_to_data(L.Station, dup)
+
+
+def lockstep(seed,cls_a, cls_b, p_burst, p_ctl, n_a, n_b, forge=0.0, modes=("m4", "m22", "m46"), max_cw=20,
              max_turns=4000):
     """Two stations, a's data to b and b's to a, through PrimeRx: -> (trace, outcome, stats)."""
     rng = random.Random(seed)

@@ -1310,6 +1310,8 @@ class Station:
                 # Before a peer control was read, also try the session's initial
                 # capability announcements, with build()'s padding/replace rule.
                 # Keep the original ways for peers that do not announce them.
+                # Announced first: PRIME_TRIES can cut the old ways, a cost to legacy peers only
+                # (interleaving loses both kinds once the bank is full, as with data in flight).
                 announced = []
                 n_ctl = 1 if ctl_slots else rx.n_cw
                 for c, e in ways:
