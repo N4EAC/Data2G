@@ -628,6 +628,8 @@ void bind_arq_link(py::module_& m) {
         .def_readwrite("call", &Session::call)
         .def_property_readonly("policy", [](const Session& s) { return policy_py(s.policy); })
         .def_readwrite("t_turn", &Session::t_turn)
+        .def_readwrite("peer_t_turn", &Session::peer_t_turn)
+        .def("peer_turn", &Session::peer_turn)
         .def_property_readonly("rng", [](const Session& s) -> py::object {
             auto* r = dynamic_cast<PyRng*>(s.rng.get());
             return r ? r->obj : py::none();

@@ -37,9 +37,11 @@ CONNECT_CTL_BYTES = 4 + 2 + F.Connect.BYTES  # a CONNECT's Control: core, T_SESS
 DISC_TRIES = 3
 # failed connect frames further apart are not one CONNECT's tries (a robust try and its wait: under 15 s)
 REPEAT_GAP_S = 30.0
-# past t_turn: a reply's header must have been heard by then: the peer's
-# decode and PTT (~0.7 s), audio latency both ways, the reply's lead-in,
-# preamble and header (0.4-0.6 s) and the receiver's search step (0.25 s)
+# past t_turn: a reply's header must have been heard by then. t_turn is the
+# replier's from my burst's end to its reply keyed (decode, DD, PTT: the
+# engine's turnaround deadline); this covers the rest: audio latency both
+# ways, the reply's lead-in, preamble and header (0.4-0.6 s) and the
+# receiver's search step (0.25 s)
 # (the audio loopback timed out on replies already on air at 1.0). On air
 # (recordings/20261002-224419) a reply's whole head was in at 1.9 s and its
 # header reported at 2.2 s: 1.5 left no margin for a slower peer or radio
@@ -94,6 +96,7 @@ class Session:
     policy: L.Policy  # connect_mode and airtime too
     t_turn: float = 1.0
     rng: random.Random = field(default_factory=random.Random)
+    peer_t_turn: float | None = None  # from its CONNECT or CONNECT_ACK: how long it takes to reply
     state: str = IDLE
     peer: str = ""
     cap: int = 2
@@ -283,10 +286,10 @@ class Session:
                     and (hold := self.policy.reply_hold(self.station, burst)) is not None):
                 # a reply whose header I miss is still on air: don't poll over it
                 wait = max(wait, hold)
-            self._deadline = now + self.t_turn + wait
+            self._deadline = now + self.peer_turn() + wait
         elif not self.master:
             self._quiet_from = now
-            self._wake_wait = (self.t_turn + REPLY_START_S + WAKE_GUARD_S
+            self._wake_wait = (self.peer_turn() + REPLY_START_S + WAKE_GUARD_S
                                + self.rng.uniform(0, WAKE_JITTER_S * 2 ** self._wakes))
 
     def expecting(self) -> list[str]:
@@ -307,7 +310,7 @@ class Session:
             # a peer's ID burst (one codeword in the connect mode) runs straight
             # into its reply, whose header must still be found (engine.ID_INTERVAL_S)
             is_id = n_cw == 1 and submode == self.policy.connect_mode(self.cap)
-            self._deadline = max(self._deadline, end + self.t_turn + (REPLY_START_S if is_id else 0.0))
+            self._deadline = max(self._deadline, end + self.peer_turn() + (REPLY_START_S if is_id else 0.0))
         if not self.master:
             self._quiet_from = max(self._quiet_from, end)
 
@@ -429,6 +432,15 @@ class Session:
         self._out, self._due = (final, now) if final is not None else (None, None)
         self._deadline = None
         return None
+
+    def peer_turn(self) -> float:
+        """The peer's turnaround, from the end of my burst to its reply keyed,
+        that my reply timers allow: the t_turn it advertised, in a session;
+        before one, mine (its CONNECT_ACK's isn't known yet). My own t_turn
+        is what I advertise and my decode keeps to (engine._dd_budget)."""
+        if self.state in (CONNECTED, DISCONNECTING) and self.peer_t_turn is not None:
+            return self.peer_t_turn
+        return self.t_turn
 
     def _connected(self, now: float):
         self.state = CONNECTED
@@ -675,6 +687,7 @@ class Session:
                 return self._refuse(c, f["mode"], NAK_REFUSED, now)
             self.call = callee  # the call it dialed (the session key derives from it)
             self.peer, self._nonce, self.cap = caller, nonce, min(c.cap, self.cap)
+            self.peer_t_turn = c.t_turn10 / 10
             self.station = L.Station(1, self.policy, master=False, key=session_key(caller, self.call, nonce),
                                      cap=self.cap, max_misses=None, chat=self.chat, nod=True, keep=True)
             self._flush_writes()
@@ -687,6 +700,7 @@ class Session:
             if a.nonce != self._nonce:
                 return
             self.cap = min(a.cap, self.cap)
+            self.peer_t_turn = a.t_turn10 / 10
             self.station = L.Station(0, self.policy, master=True, key=session_key(self.call, self.peer, self._nonce),
                                      cap=self.cap, max_misses=None, chat=self.chat, nod=True, keep=True)
             self._flush_writes()

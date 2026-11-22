@@ -313,6 +313,11 @@ class BlindFail:
 
 
 def handshake(cls, forge=None, t_turn_b=1.0):
+    a, b = connect(cls, forge, t_turn_b)
+    return a.state, b.state, list(a.events), list(b.events)
+
+
+def connect(cls, forge=None, t_turn_b=1.0):
     a = cls("W1AW", CpmConnect(), rng=random.Random(1))
     b = cls("K2XYZ", CpmConnect(), rng=random.Random(2))
     b.t_turn = t_turn_b
@@ -325,7 +330,36 @@ def handshake(cls, forge=None, t_turn_b=1.0):
     if ack is not None:
         b.on_tx_end(ack, 11.0)
         a.on_rx(BlindFail(ack, forge), 11.5)
-    return a.state, b.state, list(a.events), list(b.events)
+    return a, b
+
+
+def turnarounds(cls):
+    """(caller's and callee's peer_turn, an idle session's, how much later the
+    caller's reply deadline falls for a callee advertising 2.5 s than 1.0 s)."""
+    from data2g.arq import session as S
+
+    def deadline(t_turn_b):
+        a, b = connect(cls, t_turn_b=t_turn_b)
+        assert (a.state, b.state) == (S.CONNECTED, S.CONNECTED)
+        burst = a.poll(20.0)
+        a.on_tx_end(burst, 21.0)
+        return a, b, a.next_event()
+
+    a, b, slow = deadline(2.5)
+    *_, fast = deadline(1.0)
+    return a.peer_turn(), b.peer_turn(), cls("W1AW", CpmConnect()).peer_turn(), round(slow - fast, 9)
+
+
+def test_reply_timers_allow_the_peers_t_turn():
+    """t_turn is a station's own turnaround, advertised in its CONNECT or
+    CONNECT_ACK: the other side's reply timers allow it (before a session,
+    their own)."""
+    from data2g.arq import session as S
+    assert turnarounds(S.Session) == (2.5, 1.0, 1.0, 1.5)
+
+
+def test_cpp_reply_timers(native, pure):
+    assert turnarounds(native.arq.Session) == (2.5, 1.0, 1.0, 1.5)
 
 
 def test_primed_connect_and_connect_ack():

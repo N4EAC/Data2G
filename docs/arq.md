@@ -618,7 +618,7 @@ without). So the last codeword of a write rides in the control's padding when it
 - **Idle:** the caller keeps the link alive with a poll a random 15-30 s after the
   last exchange.
   - The callee breaks idle itself when its host writes: a wake burst, built like any
-    other (data, its ACK), once t_turn + 2.5 s + 1 s plus a random 0-1 s has passed
+    other (data, its ACK), once the caller's t_turn + 2.5 s + 1 s plus a random 0-1 s has passed
     in silence since its last burst. By then the caller's answer or timeout retry
     would have started. A header heard meanwhile holds the wake past that burst.
   - Only from idle: the callee's last burst carried no data, so the caller's receive
@@ -654,7 +654,11 @@ without). So the last codeword of a write rides in the control's padding when it
   - v1 (until 2026-10) let only the caller start turns, polling 2 s after the last
     exchange and doubling to 16 s (2-4 s with chat on): up to 16 s of callee latency,
     and constant keying.
-- **Waiting for a reply:** t_turn + 1 s for the reply to start, detected as a decoded
+- **Turnaround (t_turn):** each station's own, from the end of the burst it hears to
+  its reply keyed (decode, DD, PTT), advertised in its CONNECT or CONNECT_ACK. Its
+  decode keeps to it (DD stops at that deadline); the other side's reply timers allow
+  it. Before the handshake completes, a station assumes its own.
+- **Waiting for a reply:** the peer's t_turn + 1 s for the reply to start, detected as a decoded
   burst header. The header gives submode and codeword count, so the wait then extends
   to the reply's known end. The master doesn't sit through a worst-case reply length
   before retrying.
