@@ -53,3 +53,12 @@ KC2G, 432.950 MHz simplex, minimum power, a few metres apart: full quieting thro
 - USB MOD 40% overdrives the IC-9700's limiter (dist 2.4); 10% clears it.
 - Below ~40% sink a fixed noise floor sets S/N; above it a ~25 dB ceiling that rises with the signal (not compression: dist 0). Source not separated (IC-9700 TX audio path or FT-8800R RX); a third receiver of the IC-9700 would settle it.
 - Session IC-9700 -> FT-8800R at USB MOD 10%, sink 100%: 45.7 s, 5256 bps, intact (3991 bps at 40%/40%). New IC-9700 setting for P2: USB MOD 10%, sink 100%.
+
+## HF profile over the same path (native/build data2g-host, BW2300, 30 kB, same radios and levels)
+
+| direction | HF BW2300 | FM NARROW | FM gain |
+|---|---|---|---|
+| FT-8800R -> IC-9700 | 4731 bps (50.7 s) | 7008 bps | +48% |
+| IC-9700 -> FT-8800R (USB MOD 10%, sink 100%) | 3955 bps (60.7 s) | 5256 bps | +33% |
+
+- HF mostly 16qam-r1/2 and 64l-r2/3, up to 256l-r5/8; all intact. One session per cell: several % noise.
