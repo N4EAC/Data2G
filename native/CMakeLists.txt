@@ -199,6 +199,10 @@ endif()
 add_executable(data2g-replay apps/data2g_replay.cpp)
 target_link_libraries(data2g-replay PRIVATE data2g_core data2g_applog)
 
+# data2g-bench-turn: two engines in real time over AWGN, the receiving station's turnaround on the air.
+add_executable(data2g-bench-turn apps/data2g_bench_turn.cpp)
+target_link_libraries(data2g-bench-turn PRIVATE data2g_core)
+
 # data2g-bench-rx: a burst's decode latency by stage (receive, soft bits, prepare, decodes), offline.
 add_executable(data2g-bench-rx apps/data2g_bench_rx.cpp)
 target_link_libraries(data2g-bench-rx PRIVATE data2g_core)
