@@ -147,7 +147,11 @@ Receiver::Receiver(modem::Accept accept, std::vector<std::string_view> cpm_grids
     hold_ = keep_;
     for (const auto* g : grids_) hold_ = std::max(hold_, cpm::hdr_span(*g, 2) + config::FS);
     detectors_.reserve(bands_.size());
-    for (const auto b : bands_) detectors_.push_back({b, waveform::StreamDetector(waveform::band(b))});
+    for (const auto b : bands_) {  // matched filter outputs kept only where find_copy reads them
+        const bool copy = std::find(config::HEADER_COPY_BANDS.begin(), config::HEADER_COPY_BANDS.end(), b) !=
+                          config::HEADER_COPY_BANDS.end();
+        detectors_.push_back({b, waveform::StreamDetector(waveform::band(b), config::ACQUIRE_REACH_HZ, copy)});
+    }
     if (blank) blanker_.emplace();
     reset();
 }
@@ -167,9 +171,14 @@ void Receiver::reset() {
     last_start_ = -1;
     decided_.clear();
     decided_mid_.clear();
+    coarse_.clear();
+    for (const auto* g : grids_) coarse_.emplace(g->name, cpm::CoarseTrack(*g));
     cpm_wait_.clear();
     expected_.reset();
-    for (auto& d : detectors_) d.d.reset();
+    for (auto& d : detectors_) {
+        d.d.reset();
+        d.copy_fold.reset();
+    }
 }
 
 void Receiver::expect(std::vector<std::string_view> grids, std::int64_t lo, std::int64_t hi, double cfo) {
@@ -259,7 +268,9 @@ void Receiver::trim(int64_t n) {
 Receiver::Stats Receiver::stats(int64_t w0) {
     Stats out;
     out.mats.reserve(detectors_.size());
-    for (auto& [band, d] : detectors_) {
+    for (auto& det : detectors_) {
+        const auto band = det.band;
+        auto& d = det.d;
         if (d.fed < off_) d.restart_at(off_);  // its audio was trimmed away: start over
         auto from = static_cast<std::size_t>(d.fed - off_);
         // A confirmed burst isn't searched, so its audio goes unfed until a search is wanted again (a late
@@ -277,11 +288,14 @@ Receiver::Stats Receiver::stats(int64_t w0) {
         const int64_t n = len() - w0 - d.span + 1;
         if (n <= 0) continue;
         const int64_t lo = off_ + w0;
-        Mat<double> S = d.stat(lo, lo + n);
-        const auto masked = static_cast<std::size_t>(std::clamp<int64_t>(decided(band) - lo, 0, n));
-        for (std::size_t r = 0; r < S.rows; ++r) std::fill(S[r], S[r] + masked, -1.0);
-        out.mats.push_back(std::move(S));
-        out.v.push_back({band, &out.mats.back()});
+        // only the starts not yet decided: the rest of the window (most of it) would be all -1
+        const int64_t masked = std::clamp<int64_t>(decided(band) - lo, 0, n);
+        if (d.peak(lo + masked, lo + n) < waveform::band(band).preamble_threshold()) {
+            out.v.push_back({band, nullptr, masked, true});  // acquire would find nothing: no matrix built
+            continue;
+        }
+        out.mats.push_back(d.stat(lo + masked, lo + n));
+        out.v.push_back({band, &out.mats.back(), masked});
     }
     return out;
 }
@@ -301,21 +315,33 @@ void Receiver::searched() {
     }
 }
 
-std::optional<modem::Lock> Receiver::find_copy() const {
+std::optional<modem::Lock> Receiver::find_copy() {
     std::optional<modem::Lock> best;
     int64_t best_k = 0;
+    constexpr int64_t PF = static_cast<int64_t>(modem::COPY_PAIRS) * config::FRAME_SAMPLES;
     for (const auto band : config::HEADER_COPY_BANDS) {
         const auto it = std::find_if(detectors_.begin(), detectors_.end(), [&](const Detector& d) { return d.band == band; });
         if (it == detectors_.end()) continue;
-        const auto& d = it->d;
+        auto& d = it->d;
         const auto level = d.level();
         if (!level) continue;
-        const auto c = d.outputs_from(off_);  // from the stream index both the buffer and C cover
+        // from the stream index both the buffer and the products cover
+        const auto c = d.products_from(off_, config::FRAME_SAMPLES, modem::COPY_PAIRS);
         const int64_t a = c.start;
         const auto x = std::span<const double>(buf_).subspan(static_cast<std::size_t>(a - off_));
         const auto cols = static_cast<std::size_t>(std::max<int64_t>(
-            0, std::min(static_cast<int64_t>(c.cols), static_cast<int64_t>(x.size()) - config::M + 1)));
-        const auto lock = modem::find_copy(x, band, &accept_, c.rows, cols, level);
+            0, std::min(static_cast<int64_t>(c.cols), static_cast<int64_t>(x.size()) - config::M + 1 - PF)));
+        const int64_t FR = config::FRAME_SAMPLES, m = static_cast<int64_t>(cols) / FR;
+        Mat<std::complex<double>> fold;
+        if (m >= 1) {  // the running fold, rolled to the products' start
+            const auto k = d.kept_products(config::FRAME_SAMPLES, modem::COPY_PAIRS);
+            const auto& R = it->copy_fold.fold(k.rows, k.cols, k.start, a, a + m * FR);
+            fold = Mat<std::complex<double>>(R.rows, R.cols);
+            const auto s = static_cast<std::size_t>(a % FR);
+            for (std::size_t f = 0; f < R.rows; ++f)
+                for (std::size_t ph = 0; ph < R.cols; ++ph) fold[f][ph] = R[f][(s + ph) % R.cols];
+        }
+        const auto lock = modem::find_copy(x, band, &accept_, c.rows, cols, level, nullptr, m >= 1 ? &fold : nullptr);
         if (lock && (!best || lock->score > best->score)) {
             best = lock;
             best_k = a - off_;
@@ -346,8 +372,10 @@ std::optional<cpm::Lock> Receiver::find_cpm() {
         if (auto lock = cpm::late_lock(*w.g, buf_, c)) return lock;
     }
     for (const auto* g : grids_) {
+        auto& track = coarse_.at(g->name);
+        track.feed(buf_, off_);
         auto lock = cpm::find(*g, buf_, std::nullopt, 150.0, true, std::max<int64_t>(0, decided(g->name) - off_),
-                              len() - grid_span(*g) + 2 * g->T, true);
+                              len() - grid_span(*g) + 2 * g->T, true, &track, off_);
         if (!lock) continue;
         if (!lock->wait) return lock;
         lock->start += off_;
@@ -361,7 +389,8 @@ std::optional<cpm::Lock> Receiver::find_cpm() {
     }
     for (const auto* g : grids_) {  // the front missed: the mid block and both header copies
         const auto lock = cpm::find_mid(*g, buf_, std::max<int64_t>(0, decided_mid(*g) - off_),
-                                        len() - (static_cast<int64_t>(g->mid_block.size()) + g->hdr_len - 1) * g->T);
+                                        len() - (static_cast<int64_t>(g->mid_block.size()) + g->hdr_len - 1) * g->T,
+                                        &coarse_.at(g->name), off_);
         if (lock) return lock;
     }
     return std::nullopt;

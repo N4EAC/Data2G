@@ -26,6 +26,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <complex>
 #include <condition_variable>
 #include <cstdint>
@@ -193,6 +194,9 @@ struct BurstPreview {
     const modem::Spec* ofdm = nullptr;     // OFDM: the spec, and its symbols (modem::preview_frame)
     std::vector<std::complex<double>> iq;
     Mat<double> shares;                    // CPM: each data symbol's tone shares (cpm::shares)
+    // the lock was let go with no burst to follow (a receiver reset, a CW ID over a suspect header):
+    // the preview ends here, unread, and no on_burst comes for it
+    bool dropped = false;
 };
 
 // The engine's receive helpers, for a receiver of its own (monitor::Monitor).
@@ -371,6 +375,9 @@ protected:
     }
     virtual std::vector<double> tx_audio(const TxBurst& b) { return arq::tx_audio(b); }
     virtual void hear_burst(receiver::BurstEvent& ev, double t);
+    std::optional<double> dd_budget(double end, double t) const;
+    // Wall seconds since the block being processed came in (dd_budget's; a seam so tests needn't race the clock).
+    virtual double since_block() const;
 
 private:
     struct Block {
@@ -380,6 +387,7 @@ private:
         bool cw = false;  // a CW ID heard (cwid::CwSense) with no burst locked
         std::uint64_t gen = 0, seq = 0;
         std::int64_t gap = 0;  // samples dropped just before this block
+        std::chrono::steady_clock::time_point arrived{};  // when step() took it: DD's turnaround clock
     };
     struct Done {
         Out out;
@@ -391,7 +399,7 @@ private:
     Done process(Block& b);  // the session stage
     Done process_safe(Block& b);  // process(); a throw drops the session and plays silence
     void hear(std::vector<receiver::Receiver::Item>& items, double t);
-    TxBurstPtr kiss_burst(std::int64_t k, bool busy);
+    std::vector<TxBurstPtr> kiss_burst(std::int64_t k, bool busy);
     bool cq(ModemRx& rx);
     TxBurstPtr id_frame(const Session& s) const;
     void id_check(double t);
@@ -421,6 +429,7 @@ private:
     receiver::NoiseProfile noise_;  // the passband's noise between bursts (recorded with each burst heard)
     std::atomic<std::int64_t> ptt_delay_;  // set_ptt_delay on the session stage; read on both
     std::atomic<double> tx_latency_{0.0};
+    std::chrono::steady_clock::time_point arrived_{};  // the block being processed: Block::arrived
     std::optional<Recorder> rec_;
     std::int64_t n_ = 0;
     std::optional<Tx> tx_;
@@ -495,6 +504,7 @@ private:
     };
     Preview preview_;
     void preview();
+    void preview_dropped();  // before the pending lock is let go silently
 
     // between the stages
     std::atomic<bool> transmitting_{false}, busy_now_{false}, channel_busy_now_{false}, abort_pending_{false};

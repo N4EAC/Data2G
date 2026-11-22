@@ -20,6 +20,7 @@ on its own thread).
 import dataclasses
 import json
 import logging
+import math
 import random
 import threading
 import time
@@ -192,6 +193,7 @@ class Engine:
         self.tx_latency_s = 0.0
         self.rec = Recorder(record_dir, self.call) if record_dir else None
         self.n = 0  # samples processed
+        self._arrived = time.monotonic()  # when step's block came in (_dd_budget)
         self.tx = None  # [burst, audio, position]
         self.session = None
         self.store = {}  # soft bits per codeword key, across bursts (phy.ModemRx)
@@ -637,6 +639,7 @@ class Engine:
         (a burst's peak at 1.0), PTT."""
         k = len(x)
         t = self.now + k / FS  # the block's end: when anything in it is known
+        self._arrived = time.monotonic()  # the block's end, on the clock DD's budget runs on
         out = np.zeros(k)
         if self.rec:
             self.rec.audio(x if self.tx is None else np.zeros(k))
@@ -660,6 +663,10 @@ class Engine:
             hand_free = t >= self._hand_hold and self._hand_tx is None
             free = t >= self._hold and t >= self._cw_until and hand_free
             busy = self.receiver.busy or cw
+            if busy and self._id_pending is not None:
+                # the peer's trailing ID runs past ID_GUARD_S: its CW after its ID frame
+                # (cw_id "add"), which CwSense needs ~1 s to hear, so a gap opened there
+                self._id_pending[1] = max(self._id_pending[1], t + ID_GUARD_S)
             if not busy and not held:  # a burst still arriving holds any reply (half duplex)
                 self._carrier_hold(t)
                 burst = self.session.poll(t)
@@ -674,9 +681,9 @@ class Engine:
                     bursts = self._cw_ahead([main], t)
             if (bursts is None and self.kiss is not None and free
                     and (self.session.state in (S.IDLE, S.LISTEN, S.CLOSED) or self.session.idle())):
-                burst = self._kiss_burst(k, busy)  # KISS between ARQ sessions, or while one is idle
-                bursts, main = (self._cw_ahead([burst], t), burst) if burst is not None else (None, None)
-                self._tx_kiss = burst is not None
+                kb = self._kiss_burst(k, busy)  # KISS between ARQ sessions, or while one is idle
+                bursts, main = (self._cw_ahead(kb, t), kb[-1]) if kb else (None, None)
+                self._tx_kiss = bool(kb)
             else:
                 self._kiss_busy = 0
             if bursts is None and self._cw_due(t, free and not busy and not held):
@@ -775,6 +782,20 @@ class Engine:
     def next_event(self) -> float | None:
         return self.session.next_event()
 
+    def _dd_budget(self, end: float, t: float) -> float | None:
+        """DD's seconds for a burst that ended at `end` (stream time; `t`: the
+        block's end): DD_BUDGET_S, and in a session no further than my reply's
+        latest start, my t_turn past `end` (what I advertise: the peer's
+        reply timers allow it) less my PTT and TX latency and the time
+        already spent since the block came in (receive, soft bits). It may be
+        nothing. An infinite DD_BUDGET_S (paired studies) leaves DD
+        unlimited."""
+        cap = PHY.DD_BUDGET_S
+        if cap is None or math.isinf(cap) or self.session.state in (S.IDLE, S.CLOSED):
+            return cap
+        left = (end - t) + self.session.t_turn - self.tx_latency_s - self.ptt_delay / FS
+        return max(0.0, min(cap, left - (time.monotonic() - self._arrived)))
+
     def _hear(self, x: np.ndarray, t: float):
         if self._nod is not None:
             self._nod_feed(x, t)
@@ -820,7 +841,7 @@ class Engine:
                     # maybe an open port's: BCAST * MISSED
                     self.kiss.missed(h["spec"].name, h["n_cw"], self._span_snr(*span) if span else None)
                 continue
-            rx = PHY.ModemRx(r, self.store, PHY.DD_BUDGET_S)
+            rx = PHY.ModemRx(r, self.store, self._dd_budget(end, t))
             # in a session, its peer's bursts are the likely ones: the session
             # claims the burst before KISS tries its keys on it (two failed
             # decodes per ARQ burst: ~10% of a Pat exchange's CPU). Asked
@@ -856,7 +877,8 @@ class Engine:
         reading is at least that less ENERGY_FLOOR_DB. Receiver AGC lifts the
         gaps' noise under a strong signal: on air (recordings/20261021-161109,
         20 dB snr_est) the gaps read 23 dB louder out of band than the bursts,
-        the energy ~0 dB, and the shifter held w48-qpsk-r1/2."""
+        the energy ~0 dB, and the shifter held w48-qpsk-r1/2. span_snr_db now
+        scales its floor by the out-of-band fall under the burst (issue #257)."""
         snr = self._span_snr(start, end, mode)
         e = None if snr is None else snr + PHY.peak_db(mode, self._rx_cap())
         if e is not None and floor_db is not None:  # a reading floored, never one made up
@@ -891,7 +913,7 @@ class Engine:
         if s._deadline is None or t < s._deadline or self._tx_end is None or exp is None:
             return
         start = self._tx_end + EXPECT_REPLY_S
-        until = start + exp[1] + s.t_turn  # the reply's end, as on_header waits for one heard
+        until = start + exp[1] + s.peer_turn()  # the reply's end, as on_header waits for one heard
         if until <= t:
             return
         from . import predictor as P
@@ -920,8 +942,10 @@ class Engine:
         start = self._tx_end + EXPECT_REPLY_S
         self._energy(start, start + exp[1], exp[0], self.now, MISSED_MIN_DB)
 
-    def _kiss_burst(self, k: int, busy: bool):
-        """The next KISS burst if it may go now. A burst that waited on BUSY
+    def _kiss_burst(self, k: int, busy: bool) -> list | None:
+        """The queued KISS bursts if they may go now, back to back on one PTT
+        (nothing is heard between them); just the next while a HAND LISTEN
+        waits for its frame's burst to end (its window opens there). A burst that waited on BUSY
         is p-persistent after it: each slot (SLOTTIME) is taken with
         probability (P + 1) / 256, so stations that queued under the same
         burst don't all key up as it ends. One queued on a free channel (a
@@ -947,7 +971,11 @@ class Engine:
                     self._kiss_slot = self.n + int(link.slot_s * FS)
                     return None
         self._kiss_busy, self._kiss_deferred = 0, False
-        return link.next_burst()
+        hl = self._hand_listen
+        if hl is not None and not hl["open"]:
+            b = link.next_burst()
+            return [b] if b is not None else None
+        return link.next_bursts()
 
     def _cq(self, rx) -> bool:
         """A CQ frame (notified: CQFRAME call cap) or an ID frame (ID call key)?

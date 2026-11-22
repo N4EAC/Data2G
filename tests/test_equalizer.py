@@ -136,3 +136,55 @@ def test_delay_support_noise_gate_keeps_a_lone_path_narrow():
     # the premise (ungated noise spreads it) needs HF's 4 ms CP of search: FM's 2 ms holds too few bins
     assert config.PROFILE != "hf" or np.median(wide) > 40
     assert max(narrow) <= 8
+
+
+def test_dd_time_pass_low_rank_matches_the_exact_solve(monkeypatch):
+    """refine's time pass in its reduced-rank form (DD_LOWRANK_TOL) against the exact solve (a negative
+    tolerance: full rank, which the cost rule sends to the exact solve), on a real fading receive with half
+    the codewords known and then all: well under the estimate's own error."""
+    import copy
+
+    from data2g import equalizer, hfchannel
+    from data2g.arq import phy
+    from data2g.hfchannel import FadingPreset
+
+    spec = SUBMODES["w48-qpsk-r1/2"]
+    rng = np.random.default_rng(16)
+    sent = [rng.bytes(codes.payload_bytes(spec)) for _ in range(16)]
+    x = np.concatenate([np.zeros(3000), modem.modulate(sent, spec), np.zeros(3000)])
+    y = hfchannel.apply_channel(x, snr_db=10.0, fading_preset=FadingPreset("mpd", 2.0, 2.0), seed=16)
+    calls, refine = [], equalizer.refine
+    monkeypatch.setattr(equalizer, "refine", lambda *a, **k: calls.append(copy.deepcopy((a, k))) or refine(*a, **k))
+    r = modem.receive(y)
+    bits = np.stack([codes.encode(spec, p, index=i) for i, p in enumerate(sent)])
+    post = {i: 30.0 * (1 - 2.0 * bits[i]) for i in range(0, len(sent), 2)}
+    phy._dd_estimate(r, post)
+    phy._dd_estimate(r, {i: 30.0 * (1 - 2.0 * bits[i]) for i in range(len(sent))})
+    assert len(calls) == 2
+    for a, k in calls:
+        h1, m1 = refine(*a, **k)
+        monkeypatch.setattr(equalizer, "DD_LOWRANK_TOL", -1.0)
+        h0, m0 = refine(*a, **k)
+        monkeypatch.undo()
+        m0 = np.maximum(m0, 1e-12 * a[6]["p_sig"])
+        assert np.max(np.abs(h1 - h0) ** 2 / m0) < 1e-6
+        assert np.max(np.abs(m1 - m0) / m0) < 1e-3
+
+
+def test_snr_noise_ignores_what_repeats_in_every_pilot():
+    """A fixed weak echo past the support (a radio passband's tail) and a
+    fixed per-carrier pattern (n4) read as noise in n0, not in n0_snr."""
+    from data2g import equalizer
+    from data2g.config import FS
+    from data2g.waveform import ofdm
+
+    rng = np.random.default_rng(5)
+    for band, extra in (("w", lambda bb: 0.1 * np.exp(-2j * np.pi * bb * 26 / FS)),  # -20 dB at 26 samples
+                        ("n4", lambda bb: 0.1 * np.exp(2j * np.pi * rng.uniform(size=len(bb))))):
+        bb = ofdm.band(band).bb.astype(float)
+        n_p, n0 = 40, 1e-3  # 30 dB
+        h = np.ones((n_p, len(bb)), complex) + extra(bb)
+        h += np.sqrt(n0 / 2) * (rng.standard_normal(h.shape) + 1j * rng.standard_normal(h.shape))
+        est = equalizer.estimate(h, (0, 0), bb, n0_pre=n0)
+        assert est["n0"] > 3 * n0, band
+        assert abs(10 * np.log10(est["n0_snr"] / n0)) < 1.0, band

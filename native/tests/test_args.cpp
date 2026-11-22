@@ -2,6 +2,7 @@
 // to HamlibConfig, and check()'s messages. The usage errors (which exit)
 // are tested on the binary, in tests/test_native_host_e2e.py.
 
+#include <cstdio>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -42,6 +43,29 @@ void test_listen() {
     check::current_step = "listen";
     check::equal(parse({}).listen, std::string("127.0.0.1"), "default 127.0.0.1");
     check::equal(parse({"--listen", "0.0.0.0"}).listen, std::string("0.0.0.0"), "--listen");
+}
+
+void test_vara_launch() {
+    check::current_step = "vara launch";
+    const app::Args t = parse({"TCPIP", "192.168.1.5", "8320"});
+    check::is_true(t.listen == "192.168.1.5" && t.command_port == 8320, "TCPIP HOST PORT: the address and the command port");
+    check::equal(parse({"TCPIP", "127.0.0.1", "8320", "--command-port", "8400"}).command_port, 8400, "a flag after it wins");
+
+#ifdef _WIN32
+    // "C:\Program Files\Data2G\data2g-gui.exe TCPIP 127.0.0.1 8320", unquoted
+    const auto dir = std::filesystem::temp_directory_path() / "data2g test args";
+    std::filesystem::create_directories(dir);
+    const auto program = dir / "data2g-gui.exe";
+    std::fclose(std::fopen(program.string().c_str(), "w"));
+    const std::string path = program.string();
+    const auto space = path.rfind(' ');
+    std::vector<std::string> args = {path.substr(0, space), path.substr(space + 1), "TCPIP", "127.0.0.1", "8320"};
+    std::vector<char*> argv;
+    for (auto& s : args) argv.push_back(s.data());
+    check::equal(app::parse(static_cast<int>(argv.size()), argv.data(), {}).command_port, 8320, "a program path split at its space");
+    check::equal(app::parse(2, argv.data(), {}).command_port, 8300, "...and with nothing after it");
+    std::filesystem::remove_all(dir);
+#endif
 }
 
 void test_tci() {
@@ -199,6 +223,7 @@ void test_nods() {
 int main() {
     test_rig_flags();
     test_listen();
+    test_vara_launch();
     test_tci();
     test_record();
     test_every_flag();

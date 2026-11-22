@@ -24,7 +24,7 @@
 #                          still builds the rig controller and PTT keyer.
 
 cmake_minimum_required(VERSION 3.24)
-project(data2g_native VERSION 0.5.1 LANGUAGES CXX)
+project(data2g_native VERSION 0.5.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -219,6 +219,10 @@ endif()
 # data2g-replay: a recording's receive audio through the engine, offline, for timing the receive path.
 add_executable(data2g-replay apps/data2g_replay.cpp)
 target_link_libraries(data2g-replay PRIVATE data2g_core data2g_applog)
+
+# data2g-bench-turn: two engines in real time over AWGN, the receiving station's turnaround on the air.
+add_executable(data2g-bench-turn apps/data2g_bench_turn.cpp)
+target_link_libraries(data2g-bench-turn PRIVATE data2g_core)
 
 # data2g-bench-rx: a burst's decode latency by stage (receive, soft bits, prepare, decodes), offline.
 add_executable(data2g-bench-rx apps/data2g_bench_rx.cpp)
