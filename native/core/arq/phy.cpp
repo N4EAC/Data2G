@@ -14,6 +14,7 @@
 #include "dsp/dsp.hpp"
 #include "generated/config.hpp"
 #include "arq/nod.hpp"
+#include "arq/probe.hpp"
 #include "equalizer/equalizer.hpp"
 
 namespace data2g::arq {
@@ -187,8 +188,13 @@ std::vector<double> tx_audio(const TxBurst& burst, std::string_view tx_path, std
     auto x = modem::modulate_bits(
         codes::spread<std::uint8_t>(bits, static_cast<int>(n), md.ofdm->bits_per_cu, modem::spread_group(*md.ofdm)), *md.ofdm,
         tx_path);
-    if (const double g = level.value_or(burst.level); g != 1.0)
+    const double g = level.value_or(burst.level);
+    if (g != 1.0)
         for (double& v : x) v *= g;
+    if (burst.probe) {
+        const auto p = probe::waveform(tx_path.empty() ? std::string_view(modem::tx_path()) : tx_path, g);
+        x.insert(x.end(), p.begin(), p.end());
+    }
     return x;
 }
 

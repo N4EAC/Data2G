@@ -70,7 +70,8 @@ inline constexpr int PRIMED_PATHS = 4;
 std::uint32_t mask_value(const MaskId& m);
 
 // A TxBurst -> unit-RMS audio. Throws std::out_of_range for an unknown mode.
-// times burst.level (or `level`); tx_path: FM's (modem::modulate's; default modem's)
+// times burst.level (or `level`), then the sounding probe if burst.probe (arq/probe); tx_path: FM's
+// (modem::modulate's; default modem's)
 std::vector<double> tx_audio(const TxBurst& burst, std::string_view tx_path = {}, std::optional<double> level = {});
 // A burst's unit-RMS audio for the sound card (phy.py full_scale): HF, its envelope peak at
 // full scale (PEP limited); FM, one fixed scale (config::FM_TX_PEAK) so modes keep their levels.

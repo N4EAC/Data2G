@@ -473,75 +473,73 @@ void Engine::send_cq(const std::string& call, int cap) {
 }
 
 void Engine::send_ping(const std::string& to, int cap) {
-    if (config::PROFILE != "fm" || !ping::PING_MODES.contains(cap))
-        throw std::invalid_argument("ping: FM only, cap 1 (NARROW) or 2 (WIDE)");
+    if (config::PROFILE != "fm" || (cap != 1 && cap != 2)) throw std::invalid_argument("ping: FM only, cap 1 (NARROW) or 2 (WIDE)");
     const auto st = session_->state;
     if (st != SessionState::IDLE && st != SessionState::LISTEN && st != SessionState::CLOSED)
         throw std::runtime_error("session under way");
     pack_call(to);  // throws now, not at send
-    ping_sent_[to] = std::nullopt;
-    extra_.push_back(ping_burst(to, cap, std::nullopt));
+    ping_sent_.insert(to);
+    extra_.push_back(ping_burst(to, std::nullopt));
 }
 
-// A ping (or, with report, a reply): MAX_CTL control codewords of the band's ping mode, mask 0, at the top modes'
-// level; a step ping ping::STEP_DB under it.
-TxBurstPtr Engine::ping_burst(const std::string& to, int cap, const std::optional<Bytes>& report, bool step) const {
-    const std::string& mode = ping::PING_MODES.at(cap);
-    const int pb = session_->policy->payload_bytes(mode);
-    Control ctl{Core{.ftype = SESSION}, {{T_PING, ping::ping_body(call_, to, report, pb, step)}}};
+// A ping (or, with report, a reply): its identity burst at the top modes' level, the probe behind it.
+TxBurstPtr Engine::ping_burst(const std::string& to, const std::optional<Bytes>& report) const {
+    const int pb = session_->policy->payload_bytes(ping::PING_MODE);
+    Control ctl{Core{.ftype = SESSION}, {{T_PING, ping::ping_body(call_, to, report)}}};
     const auto payloads = ctl.pack(pb);
     auto b = std::make_shared<TxBurst>();
-    b->submode = mode;
-    b->cap = cap;
-    b->level = ping::tx_level(modem::tx_path()) * (step && !report ? std::pow(10.0, -ping::STEP_DB / 20.0) : 1.0);
+    b->submode = ping::PING_MODE;
+    b->cap = 1;
+    b->level = ping::tx_level(modem::tx_path());
+    b->probe = true;
     for (std::size_t i = 0; i < payloads.size(); ++i) b->slots.push_back({ctl_mask(0, static_cast<int>(i), 0), 0, payloads[i]});
     return b;
 }
 
-// engine.py _ping: measure the sender's transmitter; ours: PING, and a reply when free (once per caller per
-// REPLY_HOLDOFF_S, and to the step ping that follows); a reply to ours: PINGACK and PINGVERDICT lines, then the
-// step ping; its reply: the level's PINGVERDICT line.
-void Engine::on_ping(ModemRx& rx, const std::vector<Bytes>& payloads, ByteView body, const receiver::BurstEvent* ev, double t) {
-    auto [frm, to, report, step] = ping::unpack_ping(body);
+// engine.py _ping: a ping's identity burst heard; if it is to us, its probe follows from the burst's end: keep
+// its place in the stream (probe_check reads it from the history ring once it is all in).
+void Engine::on_ping(ByteView body, const receiver::BurstEvent* ev) {
+    auto [frm, to, report] = ping::unpack_ping(body);
     if (to != call_ && std::find(aliases_.begin(), aliases_.end(), to) == aliases_.end()) return;
-    const auto& r = *rx.heard().ofdm;
-    std::span<const double> audio;
-    if (ev) audio = std::span<const double>(ev->audio).first(
-        std::min<std::size_t>(ev->audio.size(), static_cast<std::size_t>(std::max<std::int64_t>(0, ev->header.end() - ev->header.start()))));
-    const auto m = ping::measure(r, payloads, ping::level(audio));
-    const int cap = r.spec->band == "f108" ? 2 : 1;
-    const std::string tag = step ? " step=-" + std::to_string(static_cast<int>(ping::STEP_DB)) : "";
-    if (!report) {
-        log_write(LOG, INFO, format("RX PING from %s: %s%s", frm.c_str(), ping::fmt(m).c_str(), tag.c_str()));
-        events_.push_back("PING " + frm + " " + to + " " + ping::fmt(m) + tag);
-        const auto st = session_->state;
-        const auto last = ping_replied_.find(frm);
-        const bool free = st == SessionState::IDLE || st == SessionState::LISTEN || st == SessionState::CLOSED;
-        const bool ok = step ? (last != ping_replied_.end() && !last->second.second && t - last->second.first < 3 * ping::REPLY_HOLDOFF_S)
-                             : (last == ping_replied_.end() || t - last->second.first >= ping::REPLY_HOLDOFF_S);
-        if (free && ok) {
-            ping_replied_[frm] = {step ? last->second.first : t, step};
-            extra_.push_back(ping_burst(frm, cap, ping::pack_report(m), step));
+    if (!ev || ev->header.end() <= ev->header.start()) return;
+    const auto after = static_cast<std::int64_t>(ev->audio.size()) - (ev->header.end() - ev->header.start());  // heard since its end
+    probes_.push_back({frm, to, report, fed_ - after});
+}
+
+// engine.py _probe_check: probes now wholly heard: measure them; a ping: PING, and a reply when free (once per
+// caller per REPLY_HOLDOFF_S); a reply to ours: PINGACK and PINGVERDICT lines (probe::verdict).
+void Engine::probe_check(double t) {
+    const auto n = static_cast<std::int64_t>(probe::n_samples());
+    const auto H = static_cast<std::int64_t>(hist_.size());
+    for (auto it = probes_.begin(); it != probes_.end();) {
+        if (fed_ < it->first + n) {
+            ++it;
+            continue;
         }
-        return;
-    }
-    const auto far = ping::unpack_report(*report);
-    log_write(LOG, INFO, format("RX PINGACK from %s: far %s, near %s%s", frm.c_str(), ping::fmt(far).c_str(), ping::fmt(m).c_str(), tag.c_str()));
-    events_.push_back("PINGACK " + frm + " far " + ping::fmt(far) + " near " + ping::fmt(m) + tag);
-    const auto sent = ping_sent_.find(frm);
-    if (sent == ping_sent_.end()) return;
-    const std::string band(r.spec->band);
-    if (!step) {
-        if (!sent->second) {
-            sent->second = far;
-            for (const auto& v : ping::verdict(far, modem::tx_path(), band)) events_.push_back("PINGVERDICT " + frm + " " + v);
-            extra_.push_back(ping_burst(frm, cap, std::nullopt, true));
+        const PendingProbe p = *it;
+        it = probes_.erase(it);
+        if (p.first < fed_ - H) continue;
+        std::vector<double> y(static_cast<std::size_t>(n));
+        for (std::int64_t i = 0; i < n; ++i) y[static_cast<std::size_t>(i)] = hist_[static_cast<std::size_t>((p.first + i) % H)];
+        const auto m = probe::measure(y, ping::level(y));
+        if (!p.report) {
+            log_write(LOG, INFO, format("RX PING from %s: %s", p.frm.c_str(), probe::fmt(m).c_str()));
+            events_.push_back("PING " + p.frm + " " + p.to + " " + probe::fmt(m));
+            const auto st = session_->state;
+            const auto last = ping_replied_.find(p.frm);
+            if ((st == SessionState::IDLE || st == SessionState::LISTEN || st == SessionState::CLOSED)
+                && (last == ping_replied_.end() || t - last->second >= ping::REPLY_HOLDOFF_S)) {
+                ping_replied_[p.frm] = t;
+                extra_.push_back(ping_burst(p.frm, probe::pack_report(m)));
+            }
+            continue;
         }
-        return;
+        const auto far = probe::unpack_report(*p.report);
+        log_write(LOG, INFO, format("RX PINGACK from %s: far %s, near %s", p.frm.c_str(), probe::fmt(far).c_str(), probe::fmt(m).c_str()));
+        events_.push_back("PINGACK " + p.frm + " far " + probe::fmt(far) + " near " + probe::fmt(m));
+        if (ping_sent_.erase(p.frm))
+            for (const auto& v : probe::verdict(far, modem::tx_path())) events_.push_back("PINGVERDICT " + p.frm + " " + v);
     }
-    const auto full = sent->second;
-    ping_sent_.erase(sent);
-    if (full) events_.push_back("PINGVERDICT " + frm + " " + ping::level_verdict(*full, far, modem::tx_path(), band));
 }
 
 TxBurstPtr Engine::open_frame(int cap, int ext, const Bytes& body) const {
@@ -843,11 +841,13 @@ Engine::Done Engine::process(Block& b) {
     if (rec_) rec_->audio(tx_ ? d.out.audio : b.x);
     if (tx_) hist_zero(n_, k);
     else hist_put(n_, b.x);
+    fed_ = n_ + k;
     if (!tx_) {
         noise_.feed(b.x, now());
         const bool fresh = b.gen == want_gen_;  // else fed before a reset this stage asked for
         nod_collect(b.x, t);
         if (fresh) hear(b.items, t);
+        if (!probes_.empty()) probe_check(t);
         hand_collect(b.x);
         const bool cw = fresh && b.cw && !(hand_hold_ > 0.0 && t < hand_hold_ + HAND_CW_TAIL_S);  // Hands, not an ID
         if (cw) cw_hold(t);
@@ -1501,7 +1501,7 @@ bool Engine::cq(ModemRx& rx, const receiver::BurstEvent* ev, double t) {
     try {
         const auto ext = Control::unpack(payloads).ext;
         if (const auto it = ext.find(T_PING); config::PROFILE == "fm" && it != ext.end()) {
-            on_ping(rx, payloads, it->second, ev, t);
+            on_ping(it->second, ev);
             return true;
         }
         if (const auto it = ext.find(T_ID); it != ext.end()) {

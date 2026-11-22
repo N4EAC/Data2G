@@ -43,7 +43,9 @@
 #include <vector>
 
 #include "arq/phy.hpp"
+#include <set>
 #include "arq/ping.hpp"
+#include "arq/probe.hpp"
 #include "arq/policy.hpp"
 #include "arq/nod.hpp"
 #include "arq/session.hpp"
@@ -396,8 +398,9 @@ private:
     void hear(std::vector<receiver::Receiver::Item>& items, double t);
     TxBurstPtr kiss_burst(std::int64_t k, bool busy);
     bool cq(ModemRx& rx, const receiver::BurstEvent* ev = nullptr, double t = 0.0);
-    TxBurstPtr ping_burst(const std::string& to, int cap, const std::optional<Bytes>& report, bool step = false) const;
-    void on_ping(ModemRx& rx, const std::vector<Bytes>& payloads, ByteView body, const receiver::BurstEvent* ev, double t);
+    TxBurstPtr ping_burst(const std::string& to, const std::optional<Bytes>& report) const;
+    void on_ping(ByteView body, const receiver::BurstEvent* ev);
+    void probe_check(double t);
     TxBurstPtr id_frame(const Session& s) const;
     void id_check(double t);
     std::pair<std::vector<TxBurstPtr>, TxBurstPtr> with_id(TxBurstPtr burst, double t);
@@ -434,8 +437,15 @@ private:
     bool chat_ = false;
     std::optional<double> idle_close_;  // set_idle_close
     std::deque<TxBurstPtr> extra_;  // bursts outside any session (CQ frames)
-    std::map<std::string, std::pair<double, bool>> ping_replied_;  // caller -> (time of our last ping reply, its step answered too)
-    std::map<std::string, std::optional<ping::Report>> ping_sent_;  // station we pinged -> its first reply's report
+    std::map<std::string, double> ping_replied_;  // caller -> time of our last ping reply (ping::REPLY_HOLDOFF_S)
+    std::set<std::string> ping_sent_;              // stations we pinged, until their reply
+    struct PendingProbe {
+        std::string frm, to;
+        std::optional<Bytes> report;
+        std::int64_t first;  // the probe's first sample, an n_ value
+    };
+    std::vector<PendingProbe> probes_;  // pings heard whose probe is still arriving
+    std::int64_t fed_ = 0;              // stream samples heard, this block's included (n_'s basis)
     std::vector<std::string> events_;  // host notifications from outside the session
     struct Pend {
         double deadline;

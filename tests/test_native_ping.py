@@ -1,56 +1,67 @@
-"""Native parity of the FM ping / level check (data2g.arq.ping, native/core/arq/ping)."""
+"""Native parity of the FM ping and its sounding probe (data2g.arq.ping, data2g.arq.probe; native/core/arq/ping, probe)."""
 
 import numpy as np
 import pytest
 
-from data2g import config, fmchannel, modem
+from data2g import config, fmchannel
 from data2g.arq import ping as PG
+from data2g.arq import probe as PR
 from data2g.config import FS
 
 pytestmark = pytest.mark.skipif(config.PROFILE != "fm", reason="FM only")
 
-M = dict(snr_db=21.3, rms_dbfs=-18.2, peak_dbfs=-3.1, clip_permille=2, thirds_db=[24.0, 20.5, 15.0], dist_db=0.7,
-         noise_tilt_db=2.5)
+M = dict(lo_hz=300.0, hi_hz=3350.0, snr_nb=24.5, snr_top=-11.0, snr_tilt=0.5, noise_tilt=-1.0,
+         snr=[36.0, 34.5, 29.0, 23.0, 17.0, 34.0], sinad=[14.5, 30.0, 35.0, 28.0, 22.5, 30.0],
+         rms_dbfs=-21.5, peak_dbfs=-8.0, clip_permille=0)
+REPORTS = [M, dict(M, hi_hz=6050.0, sinad=[12.5, 12.5, 30.5, 34.5, 30.0, 12.5]),
+           dict(M, sinad=[38.0, 34.0, 28.5, 22.0, 16.5, 34.0]), dict(M, sinad=[14.5, 22.0, 35.0, 28.0, 22.5, 27.0]),
+           dict(M, hi_hz=0.0), dict(M, clip_permille=3, snr_tilt=8.0, noise_tilt=4.5)]
 
 
 def test_wire_and_level(native, pure):
-    for rep in (None, PG.pack_report(M)):
-        for step in (False, True):
-            body = PG.ping_body("N0CALL", "W1AW", rep, 55, step)
-            assert native.ping.ping_body("N0CALL", "W1AW", rep, 55, step) == body
-            assert native.ping.unpack_ping(body) == PG.unpack_ping(body)
-    assert native.ping.pack_report(M) == PG.pack_report(M)
-    got, want = native.ping.unpack_report(PG.pack_report(M)), PG.unpack_report(PG.pack_report(M))
-    assert {k: list(v) if k == "thirds_db" else v for k, v in got.items()} == want
+    rep = PR.pack_report(M)
+    for r in (None, rep):
+        body = PG.ping_body("N0CALL", "W1AW", r)
+        assert native.ping.ping_body("N0CALL", "W1AW", r) == body
+        assert native.ping.unpack_ping(body) == PG.unpack_ping(body)
     x = np.random.default_rng(0).normal(0, 0.2, 5000)
     x[7] = 1.0
     assert native.ping.level(x) == pytest.approx(PG.level(x), rel=1e-12)
     assert native.ping.tx_level("mic") == PG.tx_level("mic") and native.ping.tx_level("flat") == 1.0
-    assert native.ping.fmt(M) == PG.fmt(M)
-    dead = dict(M, thirds_db=[24.0, 22.0, -3.5])
-    for far, path, band in ((M, "mic", "f55"), (dict(M, dist_db=3.0), "flat", "f55"), (dict(M, snr_db=8.2), "mic", "f108"),
-                            (dead, "mic", "f108"), (dead, "flat", "f55")):
-        assert native.ping.verdict(far, path, band) == PG.verdict(far, path, band)
-    for full, step in ((dict(M, dist_db=2.5), dict(M, dist_db=2.5)), (dict(M, dist_db=3.2), dict(M, snr_db=11.0, dist_db=0.1)),
-                       (M, dict(M, snr_db=11.0)), (M, dict(M, snr_db=20.3)), (dead, dict(dead, snr_db=12.0)),
-                       (M, dict(M, snr_db=17.0)), (M, dict(M, snr_db=23.0))):
-        for path, band in (("mic", "f55"), ("flat", "f108")):
-            assert native.ping.level_verdict(full, step, path, band) == PG.level_verdict(full, step, path, band)
 
 
-@pytest.mark.parametrize("radio, path", [("mic", "flat"), ("flat", "mic")])
-def test_measure(native, pure, radio, path):
-    from test_fm_ping import _ping
+def test_report_and_verdict(native, pure):
+    assert list(native.probe.tones()) == list(PR.TONES) and list(native.probe.holes()) == list(PR.HOLES)
+    assert native.probe.n_samples() == PR.n_samples()
+    for m in REPORTS:
+        b = PR.pack_report(m)
+        assert native.probe.pack_report(m) == b
+        got, want = native.probe.unpack_report(b), PR.unpack_report(b)
+        assert {k: list(v) if isinstance(v, (list, tuple)) else v for k, v in got.items()} == want
+        assert native.probe.fmt(want) == PR.fmt(want)
+        assert native.probe.best_step(want) == PR.best_step(want)
+        for path in ("mic", "flat"):
+            assert native.probe.verdict(want, path) == PR.verdict(want, path)
 
-    from data2g.arq.phy import tx_audio
 
-    b, payloads = _ping(1)
-    x = np.concatenate([np.zeros(FS // 2), tx_audio(b, tx_path=path, level=1.0), np.zeros(FS // 2)])
-    drive = {"mic": 1460.0, "flat": 2350.0}[radio] * PG.tx_level(path)
-    y = fmchannel.FmChannel("static", radio, 20, seed=1, duration_s=len(x) / FS + 2, drive_dev_hz=drive).apply(x)
-    r = modem.receive(y)
-    lvl = PG.level(0.1 * y)
-    want, got = PG.measure(r, payloads, lvl), native.ping.measure(r, payloads, lvl)
-    for k in ("snr_db", "dist_db", "noise_tilt_db"):
+@pytest.mark.parametrize("path", ["mic", "flat"])
+def test_waveform(native, pure, path):
+    want = PR.waveform(path, PG.tx_level(path))
+    got = np.asarray(native.probe.waveform(path, PG.tx_level(path)))
+    assert got.shape == want.shape
+    np.testing.assert_allclose(got, want, atol=1e-9)
+
+
+@pytest.mark.parametrize("radio, path, hot", [("mic", "mic", 1.0), ("mic", "mic", 2.0), ("flat", "flat", 1.0)])
+def test_measure(native, pure, radio, path, hot):
+    x = np.concatenate([np.zeros(FS // 2), PR.waveform(path, 1.0), np.zeros(FS // 2)])
+    drive = {"mic": 1460.0, "flat": 2350.0}[radio] * hot * PG.tx_level(path)
+    y = fmchannel.FmChannel("static", radio, 25, seed=1, duration_s=len(x) / FS + 2, drive_dev_hz=drive).apply(x)
+    y = 0.1 * y[FS // 2:FS // 2 + PR.n_samples()]
+    lvl = PG.level(y)
+    want, got = PR.summary(PR.analyse(y), lvl), native.probe.measure(y, lvl)
+    for k in ("lo_hz", "hi_hz", "snr_nb", "snr_top", "snr_tilt", "noise_tilt"):
         assert abs(got[k] - want[k]) < 1e-6, (k, got[k], want[k])
-    np.testing.assert_allclose(got["thirds_db"], want["thirds_db"], atol=1e-6)
+    np.testing.assert_allclose(got["snr"], want["snr"], atol=1e-6)
+    np.testing.assert_allclose(got["sinad"], want["sinad"], atol=1e-6)
+    assert native.probe.pack_report(got) == PR.pack_report(want)

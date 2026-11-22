@@ -18,14 +18,13 @@ fails, and the session disconnects when the far end closes it; LISTEN ON|OFF
 ends it), CONNECT from to, DISCONNECT, ABORT,
 CQFRAME call bw (a CQ frame at 500 | 1200 | 2300 | 2750 Hz: no session;
 one heard is notified the same way, the sender's call and bandwidth),
-PING call [NARROW|WIDE] (FM: a level / TX path check, arq.ping, no session;
--> PINGACK call far <how ours arrived there> near <how theirs arrived here>,
-then PINGVERDICT call <advice> lines on that burst; then a second ping
-arq.ping.STEP_DB quieter goes out by itself, whose PINGACK ends step=-10,
-and the level's PINGVERDICT line follows it (none if that reply is lost:
-ping again); a ping to us: PING from to <measurement> [step=-10],
-answered automatically when no session is under way; measurements are
-snr= rms= peak= clip= thirds=a/b/c dist= noise_tilt= words, dB),
+PING call [NARROW|WIDE] (FM: a level / TX path / bandwidth check, arq.ping
+and arq.probe, no session; one probe covers both bandwidths, the argument is
+accepted and ignored; -> PINGACK call far <how ours arrived there> near <how
+theirs arrived here>, then PINGVERDICT call <advice> lines; a ping to us:
+PING from to <measurement>, answered automatically when no session is under
+way; measurements are probe.fmt's band= snr= top= tilt= noise_tilt= steps=
+step_snr= sinad= rms= peak= clip= words, Hz and dB),
 BW500 | BW1200 | BW2300 | BW2750 (session bandwidth cap: BW500 keeps a
 session inside a 500 Hz band-plan segment; BW2300/BW2750 are the full
 2400 Hz; BW1200 is a Data2G extension), CHAT ON|OFF, VERSION, SN (-> SN

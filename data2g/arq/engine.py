@@ -36,6 +36,7 @@ from . import link as LK
 from . import nod as N
 from . import phy as PHY
 from . import ping as PG
+from . import probe as PR
 from . import session as S
 from .modes import MODES, burst_seconds, max_ctl
 from .policy import CONNECT, ROBUST_CONNECT, GearShifter
@@ -209,8 +210,10 @@ class Engine:
         self.chat = False
         self._idle_close_s = None  # set_idle_close
         self._extra: list = []  # bursts outside any session (CQ frames), sent when the channel is free
-        self._ping_replied: dict = {}  # caller -> (time of our last ping reply, its step answered too)
-        self._ping_sent: dict = {}  # station we pinged -> its first reply's report, None until it comes
+        self._ping_replied: dict = {}  # caller -> time of our last ping reply (PG.REPLY_HOLDOFF_S)
+        self._ping_sent: set = set()  # stations we pinged, until their reply
+        self._probes: list = []  # pings heard whose probe is still arriving: [from, to, report, first sample]
+        self._fed = 0  # stream samples heard, this block's included (self.n's basis)
         self._events: list[str] = []  # host notifications from outside the session (CQFRAME)
         self.kiss = kiss
         self.stats_interval_s = stats_interval_s
@@ -540,70 +543,63 @@ class Engine:
         self._extra.append(self._open_frame(cap, F.T_CQ, F.pack_cq(call, cap)))
 
     def send_ping(self, to: str, cap: int = 1):
-        """FM: a ping to `to` (arq.ping): a measurement burst in the cap's band
-        (1 NARROW f55, 2 WIDE f108). Its reply comes back as PINGACK events.
-        Not while a session is under way."""
-        if PROFILE != "fm" or cap not in PG.PING_MODES:
+        """FM: a ping to `to` (arq.ping): an identity burst and the sounding
+        probe behind it, which measures both bandwidths (`cap` is accepted for
+        the host's PING call [NARROW|WIDE]). Its reply comes back as PINGACK
+        and PINGVERDICT events. Not while a session is under way."""
+        if PROFILE != "fm" or cap not in (1, 2):
             raise ValueError("ping: FM only, cap 1 (NARROW) or 2 (WIDE)")
         if self.session.state not in (S.IDLE, S.LISTEN, S.CLOSED):
             raise RuntimeError(f"session {self.session.state}")
         F.pack_call(to)  # ValueError now, not at send
-        self._ping_sent[to] = None
-        self._extra.append(self._ping_burst(to, cap, None))
+        self._ping_sent.add(to)
+        self._extra.append(self._ping_burst(to, None))
 
-    def _ping_burst(self, to: str, cap: int, report: bytes | None, step: bool = False) -> B.TxBurst:
-        """A ping (or, with `report`, a reply): MAX_CTL control codewords of
-        the band's ping mode, mask 0, at the top modes' level; a step ping
-        PG.STEP_DB under it."""
-        mode = PG.PING_MODES[cap]
-        pb = self.session.policy.payload_bytes(mode)
-        body = PG.ping_body(self.call, to, report, pb, step)
-        payloads = F.Control(F.Core(ftype=F.SESSION), {F.T_PING: body}).pack(pb)
-        level = PG.tx_level(modem.TX_PATH) * (10 ** (-PG.STEP_DB / 20) if step and report is None else 1.0)
-        return B.TxBurst(mode, [B.Slot(B.ctl_mask(0, i, 0), 0, p) for i, p in enumerate(payloads)], 0, cap,
-                         level=level)
+    def _ping_burst(self, to: str, report: bytes | None) -> B.TxBurst:
+        """A ping (or, with `report`, a reply): its identity burst at the top
+        modes' level, the probe behind it."""
+        pb = self.session.policy.payload_bytes(PG.PING_MODE)
+        payloads = F.Control(F.Core(ftype=F.SESSION), {F.T_PING: PG.ping_body(self.call, to, report)}).pack(pb)
+        return B.TxBurst(PG.PING_MODE, [B.Slot(B.ctl_mask(0, i, 0), 0, p) for i, p in enumerate(payloads)], 0, 1,
+                         level=PG.tx_level(modem.TX_PATH), probe=True)
 
-    def _ping(self, rx, payloads: list, body: bytes, audio, t: float):
-        """A ping heard: measure its sender's transmitter; ours: report it
-        (PING), and reply when free (once per caller per REPLY_HOLDOFF_S, and
-        to the step ping that follows); a reply to ours: PINGACK (how ours
-        arrived there, and theirs here) and PINGVERDICT lines (arq.ping.verdict),
-        then the step ping; its reply: the level's PINGVERDICT line
-        (arq.ping.level_verdict)."""
-        frm, to, report, step = PG.unpack_ping(body)
-        if to not in (self.call, *self.aliases):
+    def _ping(self, body: bytes, ev: dict | None):
+        """A ping's identity burst heard: if it is to us, its probe follows from
+        the burst's end; keep its place in the stream (_probe_check reads it
+        from the history ring once it is all in)."""
+        frm, to, report = PG.unpack_ping(body)
+        if to not in (self.call, *self.aliases) or not ev or "end" not in ev["header"]:
             return
-        m = PG.measure(rx.r, payloads, PG.level(audio if audio is not None else np.zeros(0)))
-        cap = 2 if rx.r["spec"].band == "f108" else 1
-        tag = f" step=-{PG.STEP_DB:.0f}" if step else ""
-        if report is None:
-            log.info("RX PING from %s: %s%s", frm, PG.fmt(m), tag)
-            self._events.append(f"PING {frm} {to} {PG.fmt(m)}{tag}")
-            last = self._ping_replied.get(frm)
-            free = self.session.state in (S.IDLE, S.LISTEN, S.CLOSED)
-            if step:  # the step after a ping we answered: once, inside the holdoff
-                ok = last is not None and not last[1] and t - last[0] < 3 * PG.REPLY_HOLDOFF_S
-            else:
-                ok = last is None or t - last[0] >= PG.REPLY_HOLDOFF_S
-            if free and ok:
-                self._ping_replied[frm] = (last[0] if step else t, step)
-                self._extra.append(self._ping_burst(frm, cap, PG.pack_report(m), step))
-            return
-        far = PG.unpack_report(report)
-        log.info("RX PINGACK from %s: far %s, near %s%s", frm, PG.fmt(far), PG.fmt(m), tag)
-        self._events.append(f"PINGACK {frm} far {PG.fmt(far)} near {PG.fmt(m)}{tag}")
-        if frm not in self._ping_sent:
-            return
-        band = rx.r["spec"].band
-        if not step:
-            if self._ping_sent[frm] is None:
-                self._ping_sent[frm] = far
-                self._events += [f"PINGVERDICT {frm} {v}" for v in PG.verdict(far, modem.TX_PATH, band)]
-                self._extra.append(self._ping_burst(frm, cap, None, step=True))
-            return
-        full = self._ping_sent.pop(frm)
-        if full is not None:
-            self._events.append(f"PINGVERDICT {frm} {PG.level_verdict(full, far, modem.TX_PATH, band)}")
+        h = ev["header"]
+        after = len(ev["audio"]) - (h["end"] - h["start"])  # heard since the burst's end
+        self._probes.append([frm, to, report, self._fed - after])
+
+    def _probe_check(self, t: float):
+        """Probes now wholly heard: measure them; a ping: PING, and a reply when
+        free (once per caller per REPLY_HOLDOFF_S); a reply to ours: PINGACK (how
+        ours arrived there, and theirs here) and PINGVERDICT lines (probe.verdict)."""
+        n = PR.n_samples()
+        for p in [p for p in self._probes if self._fed >= p[3] + n]:
+            self._probes.remove(p)
+            frm, to, report, first = p
+            if first < self._fed - len(self._hist):
+                continue
+            y = self._hist[np.arange(first, first + n) % len(self._hist)]
+            m = PR.summary(PR.analyse(y), PG.level(y))
+            if report is None:
+                log.info("RX PING from %s: %s", frm, PR.fmt(m))
+                self._events.append(f"PING {frm} {to} {PR.fmt(m)}")
+                last = self._ping_replied.get(frm)
+                if self.session.state in (S.IDLE, S.LISTEN, S.CLOSED) and (last is None or t - last >= PG.REPLY_HOLDOFF_S):
+                    self._ping_replied[frm] = t
+                    self._extra.append(self._ping_burst(frm, PR.pack_report(m)))
+                continue
+            far = PR.unpack_report(report)
+            log.info("RX PINGACK from %s: far %s, near %s", frm, PR.fmt(far), PR.fmt(m))
+            self._events.append(f"PINGACK {frm} far {PR.fmt(far)} near {PR.fmt(m)}")
+            if frm in self._ping_sent:
+                self._ping_sent.discard(frm)
+                self._events += [f"PINGVERDICT {frm} {v}" for v in PR.verdict(far, modem.TX_PATH)]
 
     def _open_frame(self, cap: int, ext: int, body: bytes) -> B.TxBurst:
         """A control-only burst anyone can read (frame type SESSION, mask 0),
@@ -721,10 +717,13 @@ class Engine:
             self.rec.audio(x if self.tx is None else np.zeros(k))
         idx = np.arange(self.n, self.n + k) % len(self._hist)
         self._hist[idx] = x if self.tx is None else 0.0
+        self._fed = self.n + k
         if self.tx is None:
             self.noise.feed(x, self.now)
             cw = self.cw.feed(x)
             self._hear(x, t)
+            if self._probes:
+                self._probe_check(t)
             self._hand_collect(x, k)
             self._cw_false_lock()
             cw = cw and not (self._hand_hold and t < self._hand_hold + HAND_CW_TAIL_S)  # Hands, not an ID
@@ -1065,9 +1064,7 @@ class Engine:
         try:
             ext = F.Control.unpack(payloads).ext
             if PROFILE == "fm" and F.T_PING in ext:
-                h = ev["header"] if ev else None
-                audio = ev["audio"][:h["end"] - h["start"]] if ev and h and "end" in h else None
-                self._ping(rx, payloads, ext[F.T_PING], audio, t)
+                self._ping(ext[F.T_PING], ev)
                 return True
             if F.T_ID in ext:
                 call, key = F.unpack_id(ext[F.T_ID])

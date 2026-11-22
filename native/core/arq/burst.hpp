@@ -58,6 +58,7 @@ struct TxBurst {
     // acted-on); the slots hold the control it stands for
     std::optional<std::pair<int, std::array<int, 4>>> nod{};
     double level = 1.0;  // audio level against the mode's own (an FM ping: its top modes', arq/ping)
+    bool probe = false;  // FM: the sounding probe follows on the same PTT (arq/probe; a ping)
 };
 using TxBurstPtr = std::shared_ptr<const TxBurst>;
 

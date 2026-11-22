@@ -1,117 +1,121 @@
-"""FM ping / level check (data2g.arq.ping; FM plan M7)."""
+"""FM ping / level check (data2g.arq.ping, data2g.arq.probe; FM plan M7)."""
 
 import numpy as np
 import pytest
+from scipy import signal
 
-from data2g import config, fmchannel, modem
-from data2g.arq import burst as B
+from data2g import config, fmchannel
 from data2g.arq import frames as F
 from data2g.arq import ping as PG
+from data2g.arq import probe as PR
 from data2g.arq.engine import Engine
-from data2g.arq.phy import tx_audio
-from data2g.arq.policy import GearShifter
 from data2g.config import FS, SNR_REF_BW_HZ
 
 pytestmark = pytest.mark.skipif(config.PROFILE != "fm", reason="FM only")
 
-M = dict(snr_db=21.3, rms_dbfs=-18.2, peak_dbfs=-3.1, clip_permille=2, thirds_db=[24.0, 20.5, 15.0], dist_db=0.7,
-         noise_tilt_db=2.5)
-
-
-def _ping(cap=1, report=None):
-    mode = PG.PING_MODES[cap]
-    pb = GearShifter().payload_bytes(mode)
-    payloads = F.Control(F.Core(ftype=F.SESSION), {F.T_PING: PG.ping_body("N0CALL", "W1AW", report, pb)}).pack(pb)
-    return B.TxBurst(mode, [B.Slot(B.ctl_mask(0, i, 0), 0, p) for i, p in enumerate(payloads)], 0, cap), payloads
+M = dict(lo_hz=300.0, hi_hz=3350.0, snr_nb=24.5, snr_top=-11.0, snr_tilt=0.5, noise_tilt=-1.0,
+         snr=[36.0, 34.5, 29.0, 23.0, 17.0, 34.0], sinad=[14.5, 30.0, 35.0, 28.0, 22.5, 30.0],
+         rms_dbfs=-21.5, peak_dbfs=-8.0, clip_permille=0)
 
 
 def test_wire_round_trip_and_quantisation():
-    _, payloads = _ping(report=PG.pack_report(M))
-    assert len(payloads) == F.MAX_CTL  # the body fills the control: 4 codewords to measure on
-    frm, to, rep, step = PG.unpack_ping(F.Control.unpack(payloads).ext[F.T_PING])
-    assert not step
-    got = PG.unpack_report(rep)
+    rep = PR.pack_report(M)
+    assert len(rep) == PR.REPORT_BYTES
+    body = PG.ping_body("N0CALL", "W1AW", rep)
+    pb = 55  # f55-qpsk-r21: the identity and its report in one codeword
+    assert len(F.Control(F.Core(ftype=F.SESSION), {F.T_PING: body}).pack(pb)) == 1
+    frm, to, got = PG.unpack_ping(body)
     assert (frm, to) == ("N0CALL", "W1AW")
-    for k in ("snr_db", "rms_dbfs", "peak_dbfs", "dist_db", "noise_tilt_db"):
-        assert abs(got[k] - M[k]) <= 0.25, k
-    assert got["clip_permille"] == 2 and np.allclose(got["thirds_db"], M["thirds_db"], atol=0.25)
-    assert PG.unpack_ping(F.Control.unpack(_ping()[1]).ext[F.T_PING])[2] is None
-    for rep in (None, PG.pack_report(M)):
-        assert PG.unpack_ping(PG.ping_body("N0CALL", "W1AW", rep, 55, step=True))[3]
+    got = PR.unpack_report(got)
+    for k in ("lo_hz", "hi_hz", "snr_nb", "snr_top", "snr_tilt", "noise_tilt", "rms_dbfs", "peak_dbfs"):
+        assert abs(got[k] - M[k]) <= 25.0 if k.endswith("hz") else abs(got[k] - M[k]) <= 0.25, k
+    assert np.allclose(got["snr"], M["snr"], atol=0.25) and np.allclose(got["sinad"], M["sinad"], atol=0.25)
+    assert PG.unpack_ping(PG.ping_body("N0CALL", "W1AW", None))[2] is None
 
 
-def _measure(radio, path, hot=1.0, cnr=20.0, cap=1):
-    b, payloads = _ping(cap)
-    x = np.concatenate([np.zeros(FS // 2), tx_audio(b, tx_path=path, level=1.0), np.zeros(FS // 2)])
+def test_probe_fits_the_sound_card():
+    """At the ping's level the probe's peaks stay under full scale (config.FM_TX_PEAK)."""
+    for path in ("mic", "flat"):
+        assert np.abs(PR.waveform(path, PG.tx_level(path))).max() < config.FM_TX_PEAK
+
+
+def _report(radio, path, hot=1.0, cnr=30.0, seed=1):
+    x = np.concatenate([np.zeros(FS // 2), PR.waveform(path, 1.0), np.zeros(FS // 2)])
     drive = {"mic": 1460.0, "flat": 2350.0}[radio] * hot * PG.tx_level(path)
-    y = fmchannel.FmChannel("static", radio, cnr, seed=1, duration_s=len(x) / FS + 2, drive_dev_hz=drive).apply(x)
-    return PG.measure(modem.receive(y), payloads, PG.level(0.1 * y))
+    y = fmchannel.FmChannel("static", radio, cnr, seed=seed, duration_s=len(x) / FS + 2, drive_dev_hz=drive).apply(x)
+    return PR.unpack_report(PR.pack_report(PR.summary(PR.analyse(y[FS // 2:]), PG.level(0.1 * y))))
 
 
-@pytest.mark.parametrize("radio, path, hot, want", [
-    ("mic", "mic", 1.0, "level OK"),
-    ("mic", "flat", 1.0, "limiter"),  # a mic radio set flat: full level into its limiter
-    ("mic", "mic", 2.0, "limiter"),  # 6 dB too hot
-    ("flat", "flat", 1.0, "level OK"),
-    ("flat", "mic", 1.0, "tx_path flat"),  # a 9600 port set mic: untilted
+@pytest.mark.parametrize("radio, path, hot, cnr, want", [
+    ("mic", "mic", 1.0, 30, ["NARROW only", "level OK"]),
+    ("mic", "mic", 0.5, 30, ["NARROW only", "level OK"]),
+    ("mic", "mic", 1.0, 12, ["NARROW only", "level OK"]),
+    ("mic", "mic", 2.0, 30, ["NARROW only", "lower the TX level about 6 dB"]),
+    ("mic", "mic", 4.0, 30, ["NARROW only", "lower the TX level about 12 dB"]),
+    ("mic", "flat", 1.0, 30, ["NARROW only", "set tx_path mic"]),  # a mic radio set flat
+    ("flat", "flat", 1.0, 30, ["WIDE works", "level OK"]),
+    ("flat", "flat", 0.3, 30, ["WIDE works", "level OK"]),
+    ("flat", "flat", 1.0, 12, ["WIDE works", "level OK"]),
+    ("flat", "flat", 2.0, 30, ["WIDE works", "lower the TX level about 6 dB"]),
+    ("flat", "mic", 1.0, 30, ["set tx_path flat", "level OK"]),  # a 9600 port set mic: untilted
 ])
-def test_verdicts_on_the_simulator(radio, path, hot, want):
-    full = _measure(radio, path, hot)
-    step = _measure(radio, path, hot * 10 ** (-PG.STEP_DB / 20))
-    v = PG.verdict(full, path) + [PG.level_verdict(full, step, path)]
-    assert any(want in s for s in v), v
-    if want == "level OK":
-        assert len(v) == 1 and v[0].startswith("level OK"), v
+def test_verdicts_on_the_simulator(radio, path, hot, cnr, want):
+    v = PR.verdict(_report(radio, path, hot, cnr), path)
+    for w in want:
+        assert any(w in s for s in v), (w, v)
 
 
-def _far(snr, rms, dist, thirds=(20.0, 25.0, 24.0)):
-    return dict(M, snr_db=snr, rms_dbfs=rms, dist_db=dist, thirds_db=list(thirds), clip_permille=0, peak_dbfs=-10.0)
+def test_varied_link():
+    """The reference step and its repeat apart: no level advice from this probe."""
+    v = PR.verdict(dict(M, sinad=[14.5, 22.0, 35.0, 28.0, 22.5, 27.0]), "mic")
+    assert any("varied" in s for s in v) and not any(w in s for s in v for w in ("level OK", "lower", "raise")), v
 
 
-@pytest.mark.parametrize("full, step, want", [
-    # on air, 2026-11-22 (runs/onair/2026-11-22/notes.md); steps 12 dB there, not STEP_DB
-    (_far(23.0, -16.5, 2.5), _far(23.0, -16.5, 2.5), "limiter"),  # IC-9700 USB MOD 40%: level held
-    (_far(23.0, -17.0, 1.8), _far(25.5, -23.5, 0.0), "limiter"),  # its edge: dist falls with the level
-    (_far(25.2, -21.5, 0.0), _far(25.2, -27.5, 0.0), "does not follow"),  # USB MOD 10%: its ~25 dB ceiling
-    (_far(28.0, -26.5, 0.3), _far(21.5, -41.0, 1.9), "S/N follows"),  # FT-8800R under-driven
-    (_far(21.5, -41.0, 1.9), _far(10.0, -53.0, 2.6), "S/N follows"),  # lower still: dist rises, no limiter
-    (_far(20.5, -26.0, 0.0), _far(21.8, -36.0, 0.7), "ping again"),  # a noisy first burst: the step read better
-    (_far(27.8, -26.5, 0.5), _far(23.2, -36.5, 1.5), "level OK"),  # between: one pair cannot tell
-])
-def test_level_verdict_on_air(full, step, want):
-    assert want in PG.level_verdict(full, step, "flat")
+def _pair(lowpass_hz=None, seconds=40):
+    """A pings B over noise (and, if given, a lowpass: a narrow path)."""
+    a, b = Engine("N0CALL", seed=1), Engine("W1AW", seed=2)
+    b.listen()
+    a.send_ping("W1AW", 2)
+    rng, block = np.random.default_rng(0), FS // 10
+    sigma = np.sqrt((FS / 2) / SNR_REF_BW_HZ / 10 ** (25 / 10)) * 0.2  # 25 dB under the FM full-scale rms
+    sos = signal.butter(8, lowpass_hz, fs=FS, output="sos") if lowpass_hz else None
+    zi = [signal.sosfilt_zi(sos) * 0, signal.sosfilt_zi(sos) * 0] if sos is not None else None
 
+    def path(x, i):
+        if sos is None:
+            return x
+        y, zi[i] = signal.sosfilt(sos, x, zi=zi[i])
+        return y
 
-def test_dead_third():
-    """WIDE over a radio's AF path that stops near 4 kHz: say so, and judge no distortion there."""
-    far = _far(20.8, -24.5, 3.0, thirds=(24.0, 22.0, -3.5))
-    v = PG.verdict(far, "mic", "f108")
-    assert any("top of the band does not get through" in s and "NARROW" in s for s in v), v
-    assert "limiter" not in PG.level_verdict(far, _far(14.0, -31.0, 0.5, thirds=(18.0, 16.0, -4.0)), "mic", "f108")
+    a_out = b_out = np.zeros(block)
+    a_ev, b_ev = [], []
+    for _ in range(int(seconds * FS / block)):
+        a_out, _ = a.step(path(b_out, 0) + rng.normal(0, sigma, block))
+        b_out, _ = b.step(path(a_out, 1) + rng.normal(0, sigma, block))
+        a_ev += a.events()
+        b_ev += b.events()
+        if sum(e.startswith("PINGVERDICT") for e in a_ev) >= 2:
+            break
+    return a_ev, b_ev
 
 
 def test_two_stations_ping_and_reply():
-    """A pings B over a noisy link; B (listening, no session) answers once;
-    A gets PINGACK (both measurements) and a verdict."""
-    a, b = Engine("N0CALL", seed=1), Engine("W1AW", seed=2)
-    b.listen()
-    a.send_ping("W1AW", 1)
-    rng, block = np.random.default_rng(0), FS // 10
-    sigma = np.sqrt((FS / 2) / SNR_REF_BW_HZ / 10 ** (25 / 10)) * 0.2  # 25 dB under the FM full-scale rms
-    a_out = b_out = np.zeros(block)
-    a_ev, b_ev = [], []
-    for _ in range(int(40 * FS / block)):
-        a_out, _ = a.step(b_out + rng.normal(0, sigma, block))
-        b_out, _ = b.step(a_out + rng.normal(0, sigma, block))
-        a_ev += a.events()
-        b_ev += b.events()
-        if any(e.startswith("PINGVERDICT W1AW level") for e in a_ev):
-            break
-    assert any(e.startswith("PING N0CALL W1AW snr=") for e in b_ev), b_ev
-    assert any(e.startswith("PING N0CALL W1AW snr=") and e.endswith(" step=-10") for e in b_ev), b_ev
-    acks = [e for e in a_ev if e.startswith("PINGACK W1AW far snr=")]
-    assert len(acks) == 2 and " near snr=" in acks[0] and acks[1].endswith(" step=-10"), a_ev
-    assert any(e.startswith("PINGVERDICT W1AW level OK") for e in a_ev), a_ev
+    """One round trip: B (listening, no session) measures the probe and
+    answers once; A gets PINGACK (both measurements) and the verdict."""
+    a_ev, b_ev = _pair()
+    assert any(e.startswith("PING N0CALL W1AW band=") for e in b_ev), b_ev
+    acks = [e for e in a_ev if e.startswith("PINGACK W1AW far band=")]
+    assert len(acks) == 1 and " near band=" in acks[0], a_ev
+    v = [e for e in a_ev if e.startswith("PINGVERDICT W1AW ")]
+    # an AWGN link, no radio: S/N follows the drive, so "level OK" or "raise"
+    assert any("WIDE works" in e for e in v) and any("level OK" in e or "raise" in e for e in v), v
+
+
+def test_narrow_path_recognised():
+    """Over a path that stops near 3.3 kHz, the probe says so: nothing has to decode."""
+    a_ev, _ = _pair(lowpass_hz=3300)
+    v = [e for e in a_ev if e.startswith("PINGVERDICT W1AW ")]
+    assert any("NARROW only" in e for e in v), a_ev
 
 
 @pytest.mark.python_only("the profile is compiled into native (config::PROFILE)")
@@ -125,11 +129,11 @@ def test_hf_ignores_t_ping(monkeypatch):
 
 
 def test_host_ping_command():
-    """PING call [NARROW|WIDE]: OK and a burst queued; a callsign that won't pack is WRONG."""
+    """PING call [NARROW|WIDE]: OK and a ping queued (f55 identity, probe behind); a callsign that won't pack is WRONG."""
     from data2g import host
 
     h = host.Host(Engine("W1AW", seed=1))
     h.command("PING K2XYZ WIDE")
     h.command("PING BAD!CALL")
     assert h.out_cmd == ["OK", "WRONG"]
-    assert [b.submode for b in h.engine._extra] == ["f108-qpsk-r21"]
+    assert [(b.submode, b.probe) for b in h.engine._extra] == [("f55-qpsk-r21", True)]

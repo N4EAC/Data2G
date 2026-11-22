@@ -8,6 +8,7 @@
 
 #include "arq_convert.hpp"
 #include "arq/ping.hpp"
+#include "arq/probe.hpp"
 
 namespace data2g::bind {
 
@@ -232,81 +233,95 @@ private:
 
 namespace {
 
-arq::ping::Report report_of(const py::dict& d) {
-    arq::ping::Report m;
-    m.snr_db = d.contains("snr_db") ? d["snr_db"].cast<double>() : 0.0;
+arq::probe::Report report_of(const py::dict& d) {
+    arq::probe::Report m;
+    m.lo_hz = d["lo_hz"].cast<double>();
+    m.hi_hz = d["hi_hz"].cast<double>();
+    m.snr_nb = d["snr_nb"].cast<double>();
+    m.snr_top = d["snr_top"].cast<double>();
+    m.snr_tilt = d["snr_tilt"].cast<double>();
+    m.noise_tilt = d["noise_tilt"].cast<double>();
+    const auto snr = d["snr"].cast<std::vector<double>>(), sinad = d["sinad"].cast<std::vector<double>>();
+    for (std::size_t i = 0; i < m.snr.size(); ++i) m.snr[i] = snr.at(i), m.sinad[i] = sinad.at(i);
     m.rms_dbfs = d["rms_dbfs"].cast<double>();
     m.peak_dbfs = d["peak_dbfs"].cast<double>();
     m.clip_permille = d["clip_permille"].cast<int>();
-    if (d.contains("thirds_db")) {
-        auto t = d["thirds_db"].cast<std::vector<double>>();
-        for (int i = 0; i < 3; ++i) m.thirds_db[i] = t.at(i);
-    }
-    m.dist_db = d.contains("dist_db") ? d["dist_db"].cast<double>() : 0.0;
-    m.noise_tilt_db = d.contains("noise_tilt_db") ? d["noise_tilt_db"].cast<double>() : 0.0;
     return m;
 }
 
-py::dict report_py(const arq::ping::Report& m) {
+py::dict report_py(const arq::probe::Report& m) {
     py::dict d;
-    d["snr_db"] = m.snr_db;
+    d["lo_hz"] = m.lo_hz;
+    d["hi_hz"] = m.hi_hz;
+    d["snr_nb"] = m.snr_nb;
+    d["snr_top"] = m.snr_top;
+    d["snr_tilt"] = m.snr_tilt;
+    d["noise_tilt"] = m.noise_tilt;
+    d["snr"] = std::vector<double>(m.snr.begin(), m.snr.end());
+    d["sinad"] = std::vector<double>(m.sinad.begin(), m.sinad.end());
     d["rms_dbfs"] = m.rms_dbfs;
     d["peak_dbfs"] = m.peak_dbfs;
     d["clip_permille"] = m.clip_permille;
-    d["thirds_db"] = py::make_tuple(m.thirds_db[0], m.thirds_db[1], m.thirds_db[2]);
-    d["dist_db"] = m.dist_db;
-    d["noise_tilt_db"] = m.noise_tilt_db;
     return d;
+}
+
+arq::ping::Level level_of(const py::dict& d) {
+    return {d["rms_dbfs"].cast<double>(), d["peak_dbfs"].cast<double>(), d["clip_permille"].cast<int>()};
 }
 
 }  // namespace
 
 void bind_arq_ping(py::module_& m) {
     namespace pg = arq::ping;
+    namespace pr = arq::probe;
     auto g = m.def_submodule("ping", "data2g.arq.ping");
     g.def("tx_level", [](const std::string& path) { return pg::tx_level(path); });
-    g.def("ping_body", [](const std::string& frm, const std::string& to, const py::object& report, int pb, bool step) {
-        return pyb(pg::ping_body(frm, to, report.is_none() ? std::nullopt : std::optional<Bytes>(bytes_of(report)), pb, step));
-    }, py::arg("frm"), py::arg("to"), py::arg("report"), py::arg("payload_bytes"), py::arg("step") = false);
+    g.def("ping_body", [](const std::string& frm, const std::string& to, const py::object& report) {
+        return pyb(pg::ping_body(frm, to, report.is_none() ? std::nullopt : std::optional<Bytes>(bytes_of(report))));
+    });
     g.def("unpack_ping", [](const py::bytes& body) {
         const Bytes b = bytes_of(body);
         try {
-            auto [frm, to, rep, step] = pg::unpack_ping(b);
-            return py::make_tuple(frm, to, rep ? py::object(pyb(*rep)) : py::object(py::none()), step);
+            auto [frm, to, rep] = pg::unpack_ping(b);
+            return py::make_tuple(frm, to, rep ? py::object(pyb(*rep)) : py::object(py::none()));
         } catch (const std::invalid_argument& e) {
             throw py::value_error(e.what());
         }
     });
-    g.def("pack_report", [](const py::dict& d) { return pyb(pg::pack_report(report_of(d))); });
-    g.def("unpack_report", [](const py::bytes& b) { return report_py(pg::unpack_report(bytes_of(b))); });
     g.def("level", [](const In<double>& x) {
-        const auto v = vec(x);
-        const auto m = pg::level(v);
+        const auto l = pg::level(vec(x));
         py::dict d;
-        d["rms_dbfs"] = m.rms_dbfs;
-        d["peak_dbfs"] = m.peak_dbfs;
-        d["clip_permille"] = m.clip_permille;
+        d["rms_dbfs"] = l.rms_dbfs;
+        d["peak_dbfs"] = l.peak_dbfs;
+        d["clip_permille"] = l.clip_permille;
         return d;
     });
-    g.def("measure", [](const py::dict& r, const py::list& payloads, const py::dict& lvl) {
-        const auto h = heard_of(r);
-        std::vector<Bytes> pl;
-        for (auto p : payloads) pl.push_back(bytes_of(p));
-        const auto l = report_of(lvl);  // with the GIL: it reads a Python dict
-        arq::ping::Report m;
+    auto q = m.def_submodule("probe", "data2g.arq.probe");
+    q.def("n_samples", [] { return pr::n_samples(); });
+    q.def("tones", [] { return pr::tones(); });
+    q.def("holes", [] { return pr::holes(); });
+    q.def("waveform", [](const std::string& path, double level) { return pr::waveform(path, level); });
+    q.def("measure", [](const In<double>& y, const py::dict& lvl) {
+        const auto v = vec(y);
+        const auto l = level_of(lvl);
+        pr::Report m;
         {
             py::gil_scoped_release nogil;
-            m = pg::measure(*h.ofdm, pl, l);
+            m = pr::measure(v, l);
         }
         return report_py(m);
     });
-    g.def("verdict", [](const py::dict& far, const std::string& path, const std::string& band) {
-        return pg::verdict(report_of(far), path, band);
-    }, py::arg("far"), py::arg("tx_path"), py::arg("band") = "f55");
-    g.def("level_verdict", [](const py::dict& full, const py::dict& step, const std::string& path, const std::string& band) {
-        return pg::level_verdict(report_of(full), report_of(step), path, band);
-    }, py::arg("full"), py::arg("step"), py::arg("tx_path"), py::arg("band") = "f55");
-    g.def("fmt", [](const py::dict& d) { return pg::fmt(report_of(d)); });
+    q.def("pack_report", [](const py::dict& d) { return pyb(pr::pack_report(report_of(d))); });
+    q.def("unpack_report", [](const py::bytes& b) {
+        try {
+            return report_py(pr::unpack_report(bytes_of(b)));
+        } catch (const std::invalid_argument& e) {
+            throw py::value_error(e.what());
+        }
+    });
+    q.def("fmt", [](const py::dict& d) { return pr::fmt(report_of(d)); });
+    q.def("best_step", [](const py::dict& d) { return pr::best_step(report_of(d)); });
+    q.def("verdict", [](const py::dict& d, const std::string& path) { return pr::verdict(report_of(d), path); });
 }
 
 void bind_arq_phy(py::module_& m) {

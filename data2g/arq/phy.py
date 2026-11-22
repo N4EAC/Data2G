@@ -130,7 +130,7 @@ def full_scale(x: np.ndarray) -> np.ndarray:
 def tx_audio(burst, tx_path: str | None = None, level: float | None = None) -> np.ndarray:
     """A link.TxBurst -> unit-RMS audio (a CPM burst filtered for its cap:
     cpm.TX_FILTERS), times burst.level (an FM ping: its top modes' level,
-    arq.ping) or `level`. Codewords scramble by burst position alone
+    arq.ping) or `level`, then the sounding probe if burst.probe (arq.probe). Codewords scramble by burst position alone
     (codes.scramble_seed: no key on air); a resend in another slot still
     combines (codes.flip). A nod (burst.nod): its keyed sequence. `tx_path`:
     FM's (modem.modulate's; default modem.TX_PATH)."""
@@ -150,7 +150,12 @@ def tx_audio(burst, tx_path: str | None = None, level: float | None = None) -> n
     bits = np.stack([codes.encode(spec, s.payload, s.rv, mask_value(s.mask_id), i) for i, s in enumerate(burst.slots)])
     x = modem.modulate_bits(codes.spread(bits, spec.bits_per_cu, codes.spread_group(spec)), spec, tx_path)
     g = getattr(burst, "level", 1.0) if level is None else level
-    return x if g == 1.0 else x * g
+    x = x if g == 1.0 else x * g
+    if getattr(burst, "probe", False):
+        from . import probe
+
+        x = np.concatenate([x, probe.waveform(tx_path, g)])
+    return x
 
 
 def measure(r: dict) -> dict:
