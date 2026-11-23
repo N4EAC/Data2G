@@ -200,8 +200,10 @@ VARIED_DB = 2.0
 REPORT_BYTES = 21
 
 
-def _db(x: float) -> float:
-    return float(10 * np.log10(max(x, 1e-30)))
+def _db(s: float, n: float = 1.0) -> float:
+    """s / n in dB, each floored: a stretch of exact zeros (a digital squelch,
+    our own transmission's gap in the history) is 0 dB, not 0/0."""
+    return float(10 * np.log10(max(float(s), 1e-30) / max(float(n), 1e-30)))
 
 
 def summary(a: dict, audio_level: dict) -> dict:
@@ -223,12 +225,12 @@ def summary(a: dict, audio_level: dict) -> dict:
     top = (f >= w_hi - (w_hi - w_lo) / 3) & (f <= w_hi)
     thirds = np.array_split(np.where(nb)[0], 3)
     return dict(lo_hz=float(f[a_]) if ok[i] else 0.0, hi_hz=float(f[b_]) if ok[i] else 0.0,
-                snr_nb=_db(sd["sig"][nb].sum() / sd["noise"][nb].sum()),
-                snr_top=_db(sd["sig"][top].sum() / sd["noise"][top].sum()),
-                snr_tilt=_db(sd["sig"][thirds[0]].sum() / sd["noise"][thirds[0]].sum())
-                - _db(sd["sig"][thirds[2]].sum() / sd["noise"][thirds[2]].sum()),
-                noise_tilt=_db(sd["noise"][thirds[2]].mean() / sd["noise"][thirds[0]].mean()),
-                snr=[_db(s["sig"].sum() / s["noise"].sum()) for s in a["steps"]],
+                snr_nb=_db(sd["sig"][nb].sum(), sd["noise"][nb].sum()),
+                snr_top=_db(sd["sig"][top].sum(), sd["noise"][top].sum()),
+                snr_tilt=_db(sd["sig"][thirds[0]].sum(), sd["noise"][thirds[0]].sum())
+                - _db(sd["sig"][thirds[2]].sum(), sd["noise"][thirds[2]].sum()),
+                noise_tilt=_db(sd["noise"][thirds[2]].mean(), sd["noise"][thirds[0]].mean()),
+                snr=[_db(s["sig"].sum(), s["noise"].sum()) for s in a["steps"]],
                 sinad=[sinad_db(s) for s in a["steps"]], **audio_level)
 
 
