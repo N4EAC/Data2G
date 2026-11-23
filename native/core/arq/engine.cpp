@@ -997,7 +997,12 @@ void Engine::preview() {
             if (preview_.done == kc) continue;  // the header's copy, not data
             const auto x = receiver_.audio(at, modem::PREVIEW_SAMPLES);
             if (x.empty()) continue;
-            const auto y = modem::preview_frame(x, l.cfo, *l.spec, n_f);
+            std::vector<modem::cd> y;
+            try {
+                y = modem::preview_frame(x, l.cfo, *l.spec, n_f);
+            } catch (const modem::SyncError&) {  // a frame the preview cannot read: skipped, never the engine thread
+                continue;
+            }
             out.iq.insert(out.iq.end(), y.begin(), y.end());
             added = true;
         }
