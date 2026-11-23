@@ -266,3 +266,23 @@ def test_a_steady_carrier_in_the_passband_does_not_stop_the_burst():
             r = receive_any(y, lead=8000, cpm_grids=("c16r25",))
             assert r is not None and r["spec"].name == "fsk16r25-r1/2", (hz, seed)
             assert PHY.ModemRx(r, {}).decode(0, mask, 0, None) == payload, (hz, seed)
+
+
+def test_a_carrier_does_not_read_as_signal_in_snr_est():
+    """measure() took each row's strongest tone as signal: a carrier that
+    wins its tone read 2-8 dB high (12-24 dB in 50 Hz), and the gear
+    shifter climbed. Scaled to the quiet tones' floor, Es scaled back up
+    by the share kept, it reads within about 1 dB (a low read costs
+    sessions too)."""
+    from data2g.arq import phy as PHY
+    from data2g.receiver import receive_any
+
+    def est(seed, **kw):
+        y, *_ = _carrier_burst(seed, **kw)
+        return PHY.measure(receive_any(y, lead=8000, cpm_grids=("c16r25",)))["snr_est"]
+
+    for seed in range(2):
+        clean = est(seed, inr_db=None)
+        for hz, inr, low in ((1573.4, 12.0, -1.0), (1330.0, 18.0, -1.5)):  # before: +2.0..+2.5, +5.4..+6.0
+            d = est(seed, carrier_hz=hz, inr_db=inr) - clean
+            assert low < d < 0.5, (seed, hz, inr, d)

@@ -344,6 +344,10 @@ def test_per_tone_floors(native, reference, case):
         for fn in ("llrs", "symbol_ll"):
             np.testing.assert_allclose(getattr(native.cpm, fn)(g.name, rows), ref(reference, fn)(g, rows), rtol=1e-9,
                                        atol=1e-9)
+        m, m_ref = native.cpm.measure(g.name, rows, len(rows)), ref(reference, "measure")(g, rows, len(rows))
+        for k in ("snr_est", "spread_est", "frames"):
+            assert m[k] == pytest.approx(m_ref[k], rel=1e-9, abs=1e-12), k
+        np.testing.assert_allclose(m["snr"], m_ref["snr"], rtol=RTOL, atol=1e-12)
     for copies in (1, 2):
         a, b = native.cpm.read_header(g.name, y, s0, f, copies), ref(reference, "read_header")(g, y, s0, f, copies)
         assert a[:3] == (b[0].name, *b[1:3])

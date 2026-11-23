@@ -840,14 +840,31 @@ def measure(g: Grid, E: np.ndarray, n_sym: int) -> dict:
     OFDM: SNR in the 2500 Hz reference, Doppler spread (spread(), from the
     winning tone's energy over time), and `snr`, per symbol, from the
     winning tone's energy over the noise bins (phy.measure makes the
-    effective-MI features of it). Native cpm::measure."""
+    effective-MI features of it). With a carrier (tone_floors), snr_est
+    reads the tones scaled down to the quietest quarter's floor, Es back up
+    by the share kept: fsk16r25 -8 dB reads +0.1 dB at a carrier 12 dB in
+    50 Hz, -0.5 at 18, -3 at 24, where the carrier read as signal read
+    +2.3, +5.8, +8. Native cpm::measure."""
     from .config import FRAME_SAMPLES, SNR_REF_BW_HZ
 
-    top = E.max(axis=1)
     n0 = max(np.median(np.sort(E, axis=1)[:, :-1]) / np.log(2), 1e-300)
+    top = E.max(axis=1)
     snr = np.maximum(top / n0 - 1, 1e-6)
-    es = max(float(np.mean(top) - n0), 1e-12)
-    return dict(snr_est=10 * np.log10(es / n0 * g.rate / SNR_REF_BW_HZ), spread_est=spread(g, top, n0), delay_est_ms=0.0,
+    es_n0 = max(float(np.mean(top) - n0), 1e-12) / n0
+    if tone_floors(E, n0) is not None:
+        # a carrier: for snr_est only, its tone and the ones it leaks into (under
+        # tone_floors' bar, but they raise the tones' median) each scaled to the
+        # quietest quarter's floor; the signal, ~1/m of every tone's rows, keeps
+        # `kept` of its energy, so Es is scaled back up by that. The per-symbol
+        # snr and the spread stay as read: scaled rows looked like fading and the
+        # gear shifter left c32r62 (-37%, awgn -12, carrier 12 dB)
+        med = np.median(E, axis=0)
+        q = np.quantile(med, 0.25)
+        r = q / np.maximum(med, q)
+        Ew = E * r
+        n0w = max(np.median(np.sort(Ew, axis=1)[:, :-1]) / np.log(2), 1e-300)
+        es_n0 = max(float(np.mean(Ew.max(axis=1)) - n0w) / float(np.mean(r)), 1e-12) / n0w
+    return dict(snr_est=10 * np.log10(es_n0 * g.rate / SNR_REF_BW_HZ), spread_est=spread(g, top, n0), delay_est_ms=0.0,
                 headroom=0.0, frames=max(1.0, n_sym * g.T / FRAME_SAMPLES), snr=snr)
 
 
