@@ -139,6 +139,7 @@ def test_a_lock_before_the_buffer_is_a_miss(monkeypatch):
     assert cpm.find(g, x) is None
 
 
+@pytest.mark.hf_only("seed-picked draws at an HF-calibrated SNR on HF channels; FM picks its own on fmchannel")
 def test_cpm_control_padding_is_known_when_it_fails(monkeypatch):
     """CPM's control is a polar codeword: its payload enters the code
     reversed (codes.polar_order), so a short control's padding sits on the
@@ -192,6 +193,7 @@ def test_spread_tracks_doppler_through_symbol_jitter():
     assert cpm.spread(g, np.ones(10), n0) == cpm.UNMEASURED_SPREAD_HZ  # too short
 
 
+@pytest.mark.hf_only("CPM: FM has none")
 def test_coarse_track_is_a_fresh_transform_of_the_stream(pure):  # (native's: test_native_cpm's test_coarse_track)
     """A receiver's CoarseTrack, fed 20 ms at a time from a buffer trimmed
     behind it: its rows are coarse_rows of the stream at each phase's
