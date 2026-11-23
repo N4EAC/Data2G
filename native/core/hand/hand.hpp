@@ -21,20 +21,26 @@ inline constexpr double RATE = FM ? 100.0 : 6.25, LEN_S = N_SYM / RATE;
 inline constexpr int N_CHANNELS = FM ? 64 : 40;
 inline constexpr double PITCH = FM ? 0.0 : 60.0, CENTER = FM ? 1550.0 : 1500.0;
 inline constexpr double SEARCH_S = FM ? 0.25 : 0.6, SEARCH_HZ = FM ? 0.0 : 5.0, LATE_S = FM ? 0.2 : 0.5;
-inline constexpr double SLOT_S = FM ? 1.5 : 0.0, PTT_MAX_S = FM ? 0.3 : 0.0;
+// FM's slot, ms. SLOT_FIXED_MS is spoken for: the Hand, both neighbours SEARCH_S off, 40 ms of carrier after
+// the audio. The rest is the next station's carrier coming up before its Hand.
+inline constexpr int SLOT_FIXED_MS = 1200, SLOT_MS_MAX = 5000;
+static_assert(!FM || SLOT_FIXED_MS >= 1000 * (LEN_S + 2 * SEARCH_S));
 inline constexpr int TOP = 3;
 // round(SEARCH_S * FS), round(LEN_S * FS): both exact at FS a multiple of 400
 static_assert(config::FS % 400 == 0, "SEARCH_SAMPLES / LEN_SAMPLES need FS a multiple of 400");
 inline constexpr std::int64_t SEARCH_SAMPLES = FM ? config::FS / 4 : config::FS * 3 / 5;
 inline constexpr std::int64_t LEN_SAMPLES = FM ? config::FS * N_SYM / 100 : config::FS * N_SYM * 4 / 25;
-inline constexpr std::int64_t SLOT_SAMPLES = FM ? config::FS * 3 / 2 : 0;
-static_assert(!FM || SLOT_S >= LEN_S + PTT_MAX_S + 2 * SEARCH_S);
 inline constexpr std::int64_t WINDOW_SAMPLES = 2 * SEARCH_SAMPLES + LEN_SAMPLES;
 static_assert(config::FS != 8000 || (SEARCH_SAMPLES == 4800 && LEN_SAMPLES == 84480));
 
 double channel_freq(int c);  // from the centre out: even below 1500 Hz, odd above; FM: every channel's
 int channels_within(double width_hz);  // how many (a prefix) lie wholly within +-width_hz/2; FM: all
-inline constexpr std::int64_t slot_offset(int c) { return c * SLOT_SAMPLES; }  // channel c's start after channel 0's
+// FM: 1500, or DATA2G_HAND_SLOT_MS (read once; every station of a round must run the same). HF: 0.
+// Throws std::invalid_argument outside SLOT_FIXED_MS..SLOT_MS_MAX.
+int slot_ms();
+inline std::int64_t slot_samples() { return config::FS * slot_ms() / 1000; }
+inline std::int64_t ptt_max_samples() { return FM ? config::FS * (slot_ms() - SLOT_FIXED_MS) / 1000 : 0; }  // the longest PTT delay a Hand goes with
+inline std::int64_t slot_offset(int c) { return c * slot_samples(); }  // channel c's start after channel 0's
 inline unsigned crc_init(int tag, int c) { return (static_cast<unsigned>(tag) << 8) | static_cast<unsigned>(c); }
 std::vector<std::uint8_t> payload_bits(std::uint64_t p);  // 63 bits, MSB first
 std::uint64_t payload_int(std::span<const std::uint8_t> bits);

@@ -17,7 +17,8 @@ int main() {
         check::equal(hand::channel_freq(0), 1550.0, "channel 0");
         check::equal(hand::channel_freq(63), 1550.0, "channel 63");
         check::equal(hand::channels_within(500.0), 64, "every slot at any width");
-        check::equal(hand::slot_offset(3), std::int64_t{3} * config::FS * 3 / 2, "slot 3");
+        check::equal(hand::slot_offset(3), std::int64_t{3} * config::FS * hand::slot_ms() / 1000, "slot 3");
+        check::is_true(hand::slot_ms() >= hand::SLOT_FIXED_MS && hand::ptt_max_samples() >= 0, "the slot holds its fixed part");
     } else {
         check::equal(hand::channel_freq(0), 1470.0, "channel 0: from the centre out, even below");
         check::equal(hand::channel_freq(1), 1530.0, "channel 1");

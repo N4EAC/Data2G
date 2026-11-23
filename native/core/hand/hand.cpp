@@ -4,8 +4,11 @@
 #include <array>
 #include <cmath>
 #include <complex>
+#include <cstdlib>
 #include <limits>
 #include <numbers>
+#include <stdexcept>
+#include <string>
 #include <tuple>
 
 #include "codes/codes.hpp"
@@ -249,6 +252,19 @@ double channel_freq(int c) {
     return CENTER + (c % 2 ? off : -off);
 }
 
+int slot_ms() {
+    static const int ms = [] {
+        if (!FM) return 0;
+        const char* v = std::getenv("DATA2G_HAND_SLOT_MS");
+        char* end = nullptr;
+        const long s = v ? std::strtol(v, &end, 10) : 1500;
+        if ((v && (end == v || *end)) || s < SLOT_FIXED_MS || s > SLOT_MS_MAX)
+            throw std::invalid_argument("DATA2G_HAND_SLOT_MS: " + std::to_string(SLOT_FIXED_MS) + " to " + std::to_string(SLOT_MS_MAX));
+        return static_cast<int>(s);
+    }();
+    return ms;
+}
+
 int channels_within(double width_hz) {
     if (FM) return N_CHANNELS;
     int n = 0;
@@ -346,8 +362,8 @@ std::vector<Decoded> decode_window(std::span<const double> y, int tag, std::span
         std::span<const double> yc = y;
         std::int64_t at = nominal + slot_offset(c);
         if (FM) {  // a slot's own stretch of the round's capture
-            const std::int64_t lo = std::clamp<std::int64_t>(at - SLOT_SAMPLES, 0, n);
-            const std::int64_t hi = std::clamp<std::int64_t>(at + 2 * SLOT_SAMPLES, 0, n);
+            const std::int64_t lo = std::clamp<std::int64_t>(at - slot_samples(), 0, n);
+            const std::int64_t hi = std::clamp<std::int64_t>(at + 2 * slot_samples(), 0, n);
             if (hi <= lo) continue;
             yc = y.subspan(static_cast<std::size_t>(lo), static_cast<std::size_t>(hi - lo));
             at -= lo;

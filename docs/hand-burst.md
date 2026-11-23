@@ -215,7 +215,8 @@ On HF the answerers key together, each in its own 60 Hz, and net control's recei
 
 - **The Hand:** the same 63 bits, CRC, polar code and Costas blocks, at 100 Bd: 0.66 s, tones 1200 to 1900 Hz. Every channel uses the same tones. No cfo shift is applied and none is searched.
 - **Slots:** channel c starts c x 1.5 s (`hand.SLOT_S`) after channel 0's slot. There are 64 channels, at any bandwidth.
-- **The slot's budget:** 0.66 s of Hand, up to 0.3 s of carrier before it (`PTT_MAX_S`: the next station keys up inside this slot) and 0.25 s of timing error on each side (`SEARCH_S`), 1.46 s in all.
+- **The slot's budget:** 1.2 s is spoken for: 0.66 s of Hand, 0.25 s of timing error on each side (`SEARCH_S`) and 40 ms of carrier after the audio. The rest, 0.3 s, is the most carrier a station may put before its Hand (`PTT_MAX_S`: the next station keys up inside this slot).
+- **Slow radios:** `DATA2G_HAND_SLOT_MS` in the environment sets the slot, 1200 to 5000 ms (1500 unset). All of the extra goes to the PTT delay: at 2500 a station may run `--ptt-on-delay-ms` up to 1300. It is a test switch. Every station of a round must run the same value, or slot c is off by c times the difference; it is not sent on the air. It does not help a radio whose real key-up is longer than its `--ptt-on-delay-ms`: that still loses the Hand's first symbols.
 - **The CRC still binds the channel:** a Hand that lands in a neighbour's slot fails there.
 
 **Host commands are unchanged** (docs/arq.md §9). What differs on FM:

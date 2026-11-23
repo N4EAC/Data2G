@@ -1,4 +1,6 @@
 """FM's Hand: channels are time slots (data2g/hand.py, docs/hand-burst.md "FM")."""
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -51,6 +53,7 @@ def test_slot_budget():
     audio, and both neighbours at the search's edge; a Hand late enough to be
     sent still lands inside net control's search."""
     assert hand.SLOT_S >= hand.LEN_S + hand.PTT_MAX_S + 2 * hand.SEARCH_S
+    assert hand.PTT_MAX_SAMPLES == round(hand.PTT_MAX_S * FS) and hand.SLOT_SAMPLES == round(hand.SLOT_S * FS)
     assert hand.LATE_S < hand.SEARCH_S
     assert hand.grid(hand.channel_freq(0)).f0 == 1200.0 and hand.M * hand.RATE == 800.0
 
@@ -93,6 +96,24 @@ def test_send_waits_for_its_slot_and_holds_the_radio():
     while e.n < up:
         assert not e.step(np.zeros(FS // 10))[1]
     assert e.step(np.zeros(FS // 10))[1] and e.take_hand_events() == ["HAND SENT 4"]
+
+
+def _slot_env(ms: str, profile: str = "fm") -> subprocess.CompletedProcess:
+    code = "from data2g import hand; print(hand.SLOT_SAMPLES * 1000 // hand.FS, hand.PTT_MAX_SAMPLES * 1000 // hand.FS)"
+    env = {**os.environ, "DATA2G_PROFILE": profile, "DATA2G_HAND_SLOT_MS": ms}
+    return subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
+                          cwd=Path(__file__).parent.parent)
+
+
+def test_the_slot_is_set_from_the_environment():
+    """DATA2G_HAND_SLOT_MS: a longer slot for slow radios, all of it the PTT
+    delay's allowance. Under 1200 ms there is no room for the Hand and its
+    search; HF has no slots and ignores it."""
+    assert _slot_env("2500").stdout.split() == ["2500", "1300"]
+    assert _slot_env("1200").stdout.split() == ["1200", "0"]
+    for bad in ("1199", "5001", "long"):
+        assert _slot_env(bad).returncode != 0
+    assert _slot_env("2500", "hf").stdout.split() == ["0", "0"]
 
 
 @fm_only

@@ -342,6 +342,7 @@ Engine::Engine(std::string call, EngineConfig cfg, EngineHooks hooks)
       receiver_(accept_, all_grids()),
       ptt_delay_(static_cast<std::int64_t>(cfg_.ptt_delay_s * config::FS)) {
     if (!cfg_.record_dir.empty()) rec_.emplace(cfg_.record_dir, call_, cfg_.record_async);
+    hand::slot_ms();  // a bad DATA2G_HAND_SLOT_MS throws here, not in a round
     // CPM bursts decode as they arrive (cpm::Stream): refine, then each data slot's pass. The same results as
     // after the burst; DATA2G_CPM_STREAM=0 (read here) turns it off.
     if (const char* v = std::getenv("DATA2G_CPM_STREAM"); !v || std::string_view(v) == "1")
@@ -1134,7 +1135,7 @@ void Engine::hand_send(int ref, int tag, double d_s, int channel, std::uint64_t 
     overhear_end();  // my own Hand takes precedence over a bystander's window
     if (channel < 0 || channel >= hand::N_CHANNELS || tag < 0 || tag > 255) throw std::invalid_argument("bad channel or tag");
     if (!(d_s > 0 && d_s < HAND_ARM_EXPIRE_S)) throw std::invalid_argument("bad delay");
-    if (hand::FM && static_cast<double>(ptt_delay_) > hand::PTT_MAX_S * config::FS)
+    if (hand::FM && ptt_delay_ > hand::ptt_max_samples())
         throw std::invalid_argument("PTT delay over the slot's budget");  // my carrier would cover the slot before
     payload &= (std::uint64_t{1} << hand::PAYLOAD) - 1;  // 16 hex digits, the top bit ignored (docs/arq.md §9)
     const auto first = static_cast<std::int64_t>(std::nearbyint((it->second.end + d_s - tx_latency_) * config::FS)) - ptt_delay_

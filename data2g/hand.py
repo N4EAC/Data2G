@@ -43,6 +43,7 @@ Native: native/core/hand (tests/test_native_hand.py checks parity; the
 interleaver and Costas order are frozen by tools/gen_native_tables.py).
 """
 
+import os
 from functools import lru_cache
 
 import numpy as np
@@ -66,9 +67,15 @@ LEN_S = N_SYM / RATE  # 10.56 s (FM: 0.66 s)
 
 N_CHANNELS, PITCH, CENTER = (64, 0.0, 1550.0) if FM else (40, 60.0, 1500.0)  # HF: channel c -> CENTER -+ (30 + c // 2 * 60), even below
 SEARCH_S, SEARCH_HZ, TOP = (0.25, 0.0, 3) if FM else (0.6, 5.0, 3)
-# FM's slot: the carrier is up PTT_MAX_S before the Hand and both neighbours may be
-# SEARCH_S off, so SLOT_S >= LEN_S + PTT_MAX_S + 2 * SEARCH_S. Unmeasured on air.
-SLOT_S, PTT_MAX_S = (1.5, 0.3) if FM else (0.0, 0.0)
+# FM's slot. SLOT_FIXED_MS of it is spoken for: the Hand, both neighbours SEARCH_S
+# off, 40 ms of carrier after the audio. The rest is the next station's carrier
+# coming up before its Hand (PTT_MAX_S). DATA2G_HAND_SLOT_MS lengthens the slot for
+# slow radios; every station of a round must run the same. Unmeasured on air.
+SLOT_FIXED_MS, SLOT_MS_MAX = 1200, 5000
+SLOT_MS = int(os.environ.get("DATA2G_HAND_SLOT_MS", 1500)) if FM else 0
+if FM and not SLOT_FIXED_MS <= SLOT_MS <= SLOT_MS_MAX:
+    raise ValueError(f"DATA2G_HAND_SLOT_MS={SLOT_MS}: {SLOT_FIXED_MS} to {SLOT_MS_MAX}")
+SLOT_S, PTT_MAX_S = (SLOT_MS / 1000, (SLOT_MS - SLOT_FIXED_MS) / 1000) if FM else (0.0, 0.0)
 # A round's grids. ROUND_FULL ships. ROUND_CHEAP is what --hand-decoder cheap
 # picks on a station that needs the round for about half the CPU: one fewer
 # candidate (the third is a near-duplicate of the first two), a T/4 search
@@ -83,8 +90,9 @@ LATE_S = 0.2 if FM else 0.5  # a scheduled Hand this late past its slot still go
 SEARCH_SAMPLES = int(round(SEARCH_S * FS))
 LEN_SAMPLES = int(round(LEN_S * FS))
 WINDOW_SAMPLES = 2 * SEARCH_SAMPLES + LEN_SAMPLES  # net control's capture, +-0.6 s around the slot
-SLOT_SAMPLES = int(round(SLOT_S * FS))
-assert not FM or SLOT_S >= LEN_S + PTT_MAX_S + 2 * SEARCH_S
+SLOT_SAMPLES = FS * SLOT_MS // 1000
+PTT_MAX_SAMPLES = FS * (SLOT_MS - SLOT_FIXED_MS) // 1000 if FM else 0
+assert not FM or SLOT_FIXED_MS >= 1000 * (LEN_S + 2 * SEARCH_S)
 
 
 def slot_offset(c: int) -> int:

@@ -184,7 +184,7 @@ def test_hand_round_between_two_stations(hand_round):
         b_ev.extend(b.take_hand_events())
         return any(x.startswith("HAND END") for x in a_ev)
 
-    link(a, b, 12, 40, a_heard)  # the round runs on the engine clock
+    link(a, b, 12, 40 + hand.slot_offset(20) / FS, a_heard)  # the round runs on the engine clock
     end = time.monotonic() + 20  # the decode happens on its own thread, in real time
     while not a_heard() and time.monotonic() < end:
         time.sleep(0.05)

@@ -380,7 +380,7 @@ class Engine:
             raise ValueError("bad channel or tag")
         if not 0 <= payload < 2 ** 64 or not 0 < d_s < HAND_ARM_EXPIRE_S:
             raise ValueError("bad payload or delay")
-        if hand.SLOT_S and self.ptt_delay > hand.PTT_MAX_S * FS:
+        if hand.FM and self.ptt_delay > hand.PTT_MAX_SAMPLES:
             raise ValueError("PTT delay over the slot's budget")  # my carrier would cover the slot before
         payload &= (1 << hand.PAYLOAD) - 1  # 16 hex digits, the top bit ignored (docs/arq.md §9)
         end, cfo, _ = self.hand_refs[ref]
