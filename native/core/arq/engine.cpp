@@ -21,7 +21,7 @@ namespace data2g::arq {
 namespace {
 
 constexpr const char* LOG = "data2g.engine";
-constexpr int INFO = 20, WARNING = 30;
+constexpr int DEBUG = 10, INFO = 20, WARNING = 30;
 
 std::string upper(std::string s) {
     for (auto& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -1048,8 +1048,8 @@ void Engine::hear(std::vector<receiver::Receiver::Item>& items, double t) {
             continue;
         }
         if (auto* h = std::get_if<receiver::HeaderEvent>(&it)) {
-            if (log_enabled(LOG, INFO))
-                log_write(LOG, INFO, format("RX header %s x%d: %s lock, score %.2f, start %lld, cfo %.2f",
+            if (log_enabled(LOG, DEBUG))
+                log_write(LOG, DEBUG, format("RX header %s x%d: %s lock, score %.2f, start %lld, cfo %.2f",
                                             spec_name(h->header).c_str(), h->header.n_cw(), lock_kind(h->header),
                                             h->header.score(), static_cast<long long>(h->header.start()), h->header.cfo()));
             session_->on_header(spec_name(h->header), h->header.n_cw(), t);
@@ -1445,7 +1445,7 @@ void Engine::hear_burst(receiver::BurstEvent& ev, double t) {
         energy(span->start, span->end, span->mode, t, std::nullopt, meas ? std::optional(meas->snr_est) : std::nullopt);
     timing.mark("soft bits");
     std::string lock_json;
-    if (log_enabled(LOG, INFO) || rec_) {
+    if (log_enabled(LOG, DEBUG) || rec_) {
         const auto& h = ev.header;
         std::string got;
         if (r && r->ofdm) {
@@ -1462,8 +1462,8 @@ void Engine::hear_burst(receiver::BurstEvent& ev, double t) {
                                o.score, static_cast<long long>(o.preamble_start), static_cast<long long>(o.p0), o.shift,
                                o.steps.empty() ? 0.0 : o.steps.back(), static_cast<long long>(slips), o.cfo);
         }
-        if (log_enabled(LOG, INFO))
-            log_write(LOG, INFO, format("RX lock %s x%d: %s lock, score %.2f, start %lld, cfo %.2f%s%s%s",
+        if (log_enabled(LOG, DEBUG))
+            log_write(LOG, DEBUG, format("RX lock %s x%d: %s lock, score %.2f, start %lld, cfo %.2f%s%s%s",
                                         spec_name(h).c_str(), h.n_cw(), lock_kind(h), h.score(),
                                         static_cast<long long>(h.start()), h.cfo(), inc ? ", decoded early" : "",
                                         got.c_str(), meas ? format(", snr %.1f", meas->snr_est).c_str() : ""));
