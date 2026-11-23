@@ -562,6 +562,14 @@ def main():
         if args.check:
             if have != want:
                 stale.append(name)
+                # the first lines that differ: a value that regenerates differently on another
+                # machine (an FFT's last bits) shows here, where a CI log can be read
+                import difflib
+
+                diff = difflib.unified_diff((have or b"").decode().splitlines(), (want or b"").decode().splitlines(),
+                                            f"committed/{name}", f"generated/{name}", n=0, lineterm="")
+                for line in list(diff)[:12]:
+                    print(line[:300], file=sys.stderr)
         elif want is None:
             path.unlink(missing_ok=True)
         else:
