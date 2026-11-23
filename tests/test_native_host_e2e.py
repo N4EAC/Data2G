@@ -15,12 +15,16 @@ import time
 import numpy as np
 import pytest
 
+from data2g import config
+
 import native_subs
 
 from data2g import host, tnc
 from data2g.arq.modes import BW_NAME
 
-BINARY = native_subs.MODULE_DIR.parent / ("data2g-host.exe" if os.name == "nt" else "data2g-host")  # this profile's build
+# this profile's build; another profile's programs carry its name (data2g-host-fm)
+SUFFIX = "" if config.PROFILE == "hf" else f"-{config.PROFILE}"
+BINARY = native_subs.MODULE_DIR.parent / (f"data2g-host{SUFFIX}" + (".exe" if os.name == "nt" else ""))
 BAD = re.compile(r"overflow|underrun|behind the card|dropped|CRITICAL|Traceback")
 
 
@@ -364,7 +368,7 @@ def test_cli_rig_flags(request, tmp_path):
 @pytest.mark.parametrize("app,sig", [("data2g-host", "SIGINT"), ("data2g-host", "SIGHUP"), ("data2g-gui", "SIGINT")])
 def test_signal_while_keyed_unkeys(tmp_path, request, app, sig):
     """A signal mid-burst (^C, a closed terminal) still ends with PTT off: Hamlib's dummy rig, keyed by a CONNECT."""
-    binary = BINARY.with_name(app)
+    binary = BINARY.with_name(app + SUFFIX)
     if not binary.exists():
         if app == "data2g-host" and request.config.getoption("--native"):  # the GUI is optional (no Qt Widgets)
             pytest.fail(f"--native: {binary} not built (tools/build_native.sh)")

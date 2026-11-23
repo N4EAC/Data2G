@@ -12,6 +12,7 @@
 
 #include <utility>
 
+#include "generated/config.hpp"
 #include "rig/config.hpp"
 
 namespace data2g::app {
@@ -43,8 +44,14 @@ const RigString RIG_STRINGS[] = {
 // Keys older versions saved: read once, dropped on save.
 const char* const OLD_KEYS[] = {"host", "kiss_address", "rigctld_host", "rigctld_port"};
 
+// One settings file per profile: an HF and an FM station are different radios.
+QString config_name() {
+    return config::PROFILE == "hf" ? QStringLiteral("data2g.conf")
+                                   : QStringLiteral("data2g-%1.conf").arg(QString::fromUtf8(config::PROFILE.data(), config::PROFILE.size()));
+}
+
 QString default_config() {
-    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/Data2G/data2g.conf");
+    return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + QStringLiteral("/Data2G/") + config_name();
 }
 QString g_config;  // open_config's choice
 
@@ -52,7 +59,7 @@ QString g_config;  // open_config's choice
 // copy in its own folder with its own settings (#274). Empty: no such file.
 QString beside_program() {
     if (!QCoreApplication::instance()) return {};
-    const QString path = QCoreApplication::applicationDirPath() + QStringLiteral("/data2g.conf");
+    const QString path = QCoreApplication::applicationDirPath() + QStringLiteral("/") + config_name();
     return QFile::exists(path) ? path : QString();
 }
 
@@ -81,7 +88,7 @@ std::unique_ptr<QSettings> open_config(int argc, char** argv) {
     if (path.isEmpty()) path = beside_program();
     if (path.isEmpty()) {
         path = default_config();
-        if (!QFile::exists(path)) migrate_old(path);
+        if (!QFile::exists(path) && config::PROFILE == "hf") migrate_old(path);  // the old store was HF's
     }
     g_config = path;
     return settings_store();

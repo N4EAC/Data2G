@@ -357,12 +357,35 @@ endif()
 # Last, so it sees the apps however they were added. The GUI target is
 # expected to be called data2g-gui.
 set(DATA2G_PACKAGING_DIR "${CMAKE_CURRENT_SOURCE_DIR}/packaging")
+# Another profile's user-facing programs carry its name (data2g-host-fm, data2g-gui-fm,
+# data2g-web-fm), so one package can hold both profiles' (tools/package_app.sh).
+if(DATA2G_PROFILE STREQUAL "hf")
+  set(DATA2G_EXE_SUFFIX "")
+  set(DATA2G_PRODUCT "Data2G")
+  set(DATA2G_DESCRIPTION "Data2G HF data modem")
+  set(DATA2G_BUNDLE_ID "org.cleverdomain.data2g")
+else()
+  set(DATA2G_EXE_SUFFIX "-${DATA2G_PROFILE}")
+  string(TOUPPER "${DATA2G_PROFILE}" _profile_uc)
+  set(DATA2G_PRODUCT "Data2G ${_profile_uc}")
+  set(DATA2G_DESCRIPTION "Data2G ${_profile_uc} data modem")
+  set(DATA2G_BUNDLE_ID "org.cleverdomain.data2g.${DATA2G_PROFILE}")
+  foreach(app data2g-host data2g-gui data2g-web)
+    if(TARGET ${app})
+      set_target_properties(${app} PROPERTIES OUTPUT_NAME ${app}${DATA2G_EXE_SUFFIX})
+    endif()
+  endforeach()
+endif()
 foreach(app data2g-host data2g-gui data2g-web data2g-monitor)
   if(NOT TARGET ${app})
     continue()
   endif()
   if(WIN32)
-    set(DATA2G_RC_NAME ${app})
+    if(app STREQUAL "data2g-monitor")
+      set(DATA2G_RC_NAME ${app})
+    else()
+      set(DATA2G_RC_NAME ${app}${DATA2G_EXE_SUFFIX})
+    endif()
     configure_file(packaging/data2g.rc.in ${CMAKE_BINARY_DIR}/${app}.rc @ONLY)
     target_sources(${app} PRIVATE ${CMAKE_BINARY_DIR}/${app}.rc)
   endif()
@@ -373,8 +396,8 @@ if(TARGET data2g-gui AND APPLE)
   set_target_properties(data2g-gui PROPERTIES
     MACOSX_BUNDLE ON
     MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/cmake/MacOSXBundleInfo.plist.in
-    MACOSX_BUNDLE_GUI_IDENTIFIER org.cleverdomain.data2g
-    MACOSX_BUNDLE_BUNDLE_NAME Data2G
+    MACOSX_BUNDLE_GUI_IDENTIFIER ${DATA2G_BUNDLE_ID}
+    MACOSX_BUNDLE_BUNDLE_NAME "${DATA2G_PRODUCT}"
     MACOSX_BUNDLE_ICON_FILE data2g.icns
     MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})

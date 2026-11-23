@@ -271,6 +271,8 @@ On the headless host, a sound card or radio flag on the command line (`--input-d
 
 These notes apply to the FM build of Data2G.
 
+- **Where it is.** The same download holds both. Start **Data2G FM** from its own shortcut (Windows), app (macOS) or desktop entry (Linux; from the AppImage, `Data2G.AppImage fm`). Its programs are `data2g-fm`, `data2g-host-fm` and `data2g-web-fm`. It keeps its own settings, in `Data2G/data2g-fm.conf` beside the HF profile's `data2g.conf`. Both use the same default ports, which client applications expect, so to run HF and FM at once, change the ports of one of them (and in the client that uses it).
+
 - **TX path.** Set **TX path** to **flat** for a radio's 9600 or data port (no pre-emphasis), and to **mic** for a microphone or speaker-mic input. A ping says when this looks wrong.
 - **Ping.** Ping another station before a session (`PING call` on the host's command port). One exchange measures both directions, and reports how much audio band the path carries (NARROW or WIDE) and whether your transmit level suits your radio. Follow its advice on the level.
 - **Bandwidth.** Many radios' audio paths stop near 3.4 kHz. WIDE needs a flat path at both ends, such as 9600 ports or a receiver's IF output. If a ping says "NARROW only", use NARROW.

@@ -60,7 +60,7 @@ const char* HELP =
     "  -h, --help            show this help message and exit\n"
     "  --config FILE         settings saved by data2g-gui/data2g-web, under these flags\n"
     "                        (default: data2g.conf beside the program if there is\n"
-    "                        one, else the config dir's Data2G/data2g.conf)\n"
+    "                        one, else the config dir's Data2G/data2g.conf; FM: data2g-fm.conf)\n"
     "  TCPIP HOST PORT       how RMS Trimode starts VARA: --listen HOST --command-port PORT\n"
     "  --mycall MYCALL\n"
     "  --listen ADDRESS      the VARA and KISS ports' address (default 127.0.0.1)\n"
