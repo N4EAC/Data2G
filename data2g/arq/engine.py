@@ -147,13 +147,31 @@ class Recorder:
         self.log.write(json.dumps(dict(kind=kind, **kw), default=_jsonable) + "\n")
 
     def rx(self, t: float, audio: np.ndarray, header: dict, r: dict | None, meas: dict | None,
-           noise: dict | None = None) -> str:
+           noise: dict | None = None, early: bool = False) -> str:
         name = f"rx_{self.n:05d}.npz"
         self.n += 1
         np.savez_compressed(self.dir / name, audio=audio.astype(np.float32))
         self.event("rx", t=t, file=name, submode=header["spec"].name, n_cw=header["n_cw"],
-                   score=header["score"], lost=r is None, meas=meas, noise=noise)
+                   score=header["score"], lost=r is None, meas=meas, noise=noise, lock=lock_record(header, r, early))
         return name
+
+
+def lock_kind(header: dict) -> str:
+    """How a burst was locked: the preamble search, the header copy mid-burst, or CPM's."""
+    return "cpm" if header.get("family") == "cpm" else "copy" if "copy" in header else "preamble"
+
+
+def lock_record(header: dict, r: dict | None, early: bool) -> str | dict:
+    """The recording's `lock` (native's Recorder): a burst received from the wrong lock reads as
+    noise (2026-11-23, FM: two 256l bursts locked ~5 ms early). A received OFDM burst: the lock
+    and where the receiver put it; otherwise the lock's kind alone."""
+    if r is None or r.get("family") == "cpm" or "p0" not in r:
+        return lock_kind(header)
+    return dict(kind=lock_kind(header), score=float(header["score"]), start=int(header["start"]),
+                cfo=float(header.get("cfo", 0.0)), early=early, rx_score=float(r["score"]),
+                preamble=int(r["preamble_start"]), p0=int(r["p0"]), shift=int(r["shift"]),
+                steps=float(r["steps"][-1]) if len(r["steps"]) else 0.0, slips=int(np.sum(r["slips"])),
+                rx_cfo=float(r["cfo"]))
 
 
 def _jsonable(v):
@@ -928,7 +946,8 @@ class Engine:
                 # heard (decoded or not): the peer's, most likely
                 self._energy(*span, t, floor_db=meas["snr_est"] if meas else None)
             if self.rec:
-                self.rec.rx(t, ev["audio"], h, r, meas, self.noise.snapshot())
+                early = self._inc_rx is not None and self._inc_rx[0] == h["start"]
+                self.rec.rx(t, ev["audio"], h, r, meas, self.noise.snapshot(), early)
             if r is None:
                 log.info("RX %s x%d: header heard (score %.2f), burst lost", h["spec"].name, h["n_cw"], h["score"])
                 if self.kiss is not None and self.session.state in (S.IDLE, S.LISTEN, S.CLOSED):
