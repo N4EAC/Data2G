@@ -244,11 +244,13 @@ std::tuple<std::int64_t, double, Mat<double>> nail(const cpm::Grid& g, Scratch& 
 }  // namespace
 
 double channel_freq(int c) {
+    if (FM) return CENTER;
     const double off = PITCH / 2 + (c / 2) * PITCH;
     return CENTER + (c % 2 ? off : -off);
 }
 
 int channels_within(double width_hz) {
+    if (FM) return N_CHANNELS;
     int n = 0;
     for (int c = 0; c < N_CHANNELS; ++c) n += std::abs(channel_freq(c) - CENTER) + M * RATE / 2 <= width_hz / 2;
     return n;
@@ -317,7 +319,7 @@ std::vector<double> modulate(int tag, std::span<const std::uint8_t> payload, int
 
 std::vector<double> tx_audio(int tag, std::uint64_t payload, int channel, double cfo) {
     auto x = modulate(tag, payload_bits(payload), channel);
-    if (cfo != 0.0) {  // hfchannel.freq_shift, the phase wrapped to one turn first
+    if (cfo != 0.0 && !FM) {  // hfchannel.freq_shift, the phase wrapped to one turn first
         const auto z = dsp::hilbert(x);
         for (std::size_t n = 0; n < x.size(); ++n) {
             const double c = cfo * static_cast<double>(n) / config::FS;
@@ -336,16 +338,28 @@ std::vector<Decoded> decode_window(std::span<const double> y, int tag, std::span
     std::vector<Decoded> out;
     if (channels.empty() || y.empty()) return out;
     Scratch s;
-    prepare(s, y, nominal, grid(channels.front()).T);  // every channel's symbol is the same length
+    const int T = grid(channels.front()).T;  // every channel's symbol is the same length
+    if (!FM) prepare(s, y, nominal, T);
+    const auto n = static_cast<std::int64_t>(y.size());
     for (int c : channels) {
         const auto& g = grid(c);
-        const auto cands = search(g, s, y, nominal, round);
+        std::span<const double> yc = y;
+        std::int64_t at = nominal + slot_offset(c);
+        if (FM) {  // a slot's own stretch of the round's capture
+            const std::int64_t lo = std::clamp<std::int64_t>(at - SLOT_SAMPLES, 0, n);
+            const std::int64_t hi = std::clamp<std::int64_t>(at + 2 * SLOT_SAMPLES, 0, n);
+            if (hi <= lo) continue;
+            yc = y.subspan(static_cast<std::size_t>(lo), static_cast<std::size_t>(hi - lo));
+            at -= lo;
+            prepare(s, yc, at, T);
+        }
+        const auto cands = search(g, s, yc, at, round);
         // hand.receive, one candidate at a time instead of all three and then a
         // batched decode: nailing is 2/3 of the work per channel and a burst on
         // the first candidate makes the other two nails dead weight. Same LLRs
         // either way (the decoder's rows are independent).
         for (const auto& cd : cands) {
-            const auto [start, cfo, En] = nail(g, s, y, cd.start, cd.cfo, round);
+            const auto [start, cfo, En] = nail(g, s, yc, cd.start, cd.cfo, round);
             const auto l = cpm::llrs(g, En);
             Mat<float> llr(1, E);
             for (int j = 0; j < E; ++j)
@@ -362,7 +376,7 @@ std::vector<Decoded> decode_window(std::span<const double> y, int tag, std::span
                 else t = static_cast<int>(std::find(terms.begin(), terms.end(), diff) - terms.begin());
                 if (t < 0 || t > 255) continue;
                 out.push_back({c, payload_int(u), cpm::measure(g, En, N_DATA).snr_est,
-                               1000.0 * static_cast<double>(start - nominal) / config::FS, t});
+                               1000.0 * static_cast<double>(start - at) / config::FS, t});
                 done = true;
             }
             if (done) break;  // one Hand per channel: the other candidates are the same burst

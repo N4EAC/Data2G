@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <iterator>
 #include <stdexcept>
 #include <utility>
 
@@ -940,7 +941,8 @@ Engine::Done Engine::process(Block& b) {
                 hl.buf.clear();
                 hl.anchor = a;
                 hl.lo = a + hl.d - hand::SEARCH_SAMPLES;
-                hl.hi = a + hl.d + hand::SEARCH_SAMPLES + hand::LEN_SAMPLES;
+                hl.hi = a + hl.d + hand::SEARCH_SAMPLES + hand::LEN_SAMPLES
+                        + hand::slot_offset(*std::max_element(hl.channels.begin(), hl.channels.end()));
                 hand_hold_ = static_cast<double>(hl.hi) / config::FS;
             }
             if (!tx_kiss_) {  // a Hand or broadcast burst is not the session's: no reply timer, no tx_end_
@@ -1132,8 +1134,11 @@ void Engine::hand_send(int ref, int tag, double d_s, int channel, std::uint64_t 
     overhear_end();  // my own Hand takes precedence over a bystander's window
     if (channel < 0 || channel >= hand::N_CHANNELS || tag < 0 || tag > 255) throw std::invalid_argument("bad channel or tag");
     if (!(d_s > 0 && d_s < HAND_ARM_EXPIRE_S)) throw std::invalid_argument("bad delay");
+    if (hand::FM && static_cast<double>(ptt_delay_) > hand::PTT_MAX_S * config::FS)
+        throw std::invalid_argument("PTT delay over the slot's budget");  // my carrier would cover the slot before
     payload &= (std::uint64_t{1} << hand::PAYLOAD) - 1;  // 16 hex digits, the top bit ignored (docs/arq.md §9)
-    const auto first = static_cast<std::int64_t>(std::nearbyint((it->second.end + d_s - tx_latency_) * config::FS)) - ptt_delay_;
+    const auto first = static_cast<std::int64_t>(std::nearbyint((it->second.end + d_s - tx_latency_) * config::FS)) - ptt_delay_
+                       + hand::slot_offset(channel);
     if (first < n_) throw std::invalid_argument("the slot has passed");
     std::vector<double> audio(static_cast<std::size_t>(ptt_delay_), 0.0);
     const auto x = tone_scale(hand::tx_audio(tag, payload, channel, it->second.cfo));
@@ -1170,8 +1175,9 @@ void Engine::hand_overhear(int ref, double d_s, const std::vector<int>& channels
     std::vector<int> uniq;
     for (const int c : channels)
         if (std::find(uniq.begin(), uniq.end(), c) == uniq.end()) uniq.push_back(c);
+    const std::int64_t span = hand::slot_offset(*std::max_element(uniq.begin(), uniq.end()));
     hand_listen_ = HandListen{.d = d, .tag = -1, .ack = -1, .channels = std::move(uniq), .armed = n_, .open = true, .passive = true,
-                              .lo = a + d - hand::SEARCH_SAMPLES, .hi = a + d + hand::SEARCH_SAMPLES + hand::LEN_SAMPLES,
+                              .lo = a + d - hand::SEARCH_SAMPLES, .hi = a + d + hand::SEARCH_SAMPLES + hand::LEN_SAMPLES + span,
                               .anchor = a};
     auto& hl = *hand_listen_;
     const std::int64_t first = std::max(hl.lo, old), last = std::min(n_, hl.hi);
@@ -1274,9 +1280,13 @@ void Engine::hand_close() {
     const hand::Round round = hand_round == "cheap" ? hand::ROUND_CHEAP : hand::ROUND_FULL;  // fixed at the window's close
     hand_thread_ = std::thread([this, w = std::move(done), round] {
         std::vector<std::string> lines;
-        if (w.anchor + w.d - w.first >= 0)  // the slot lies before the capture: no decodes (a search past the head reads zeros)
+        const std::int64_t nominal = w.anchor + w.d - w.first;
+        std::vector<int> channels;  // a slot that lies before the capture: no decode (a search past the head reads zeros)
+        std::copy_if(w.channels.begin(), w.channels.end(), std::back_inserter(channels),
+                     [&](int c) { return nominal + hand::slot_offset(c) >= 0; });
+        if (!channels.empty())
             try {
-                for (const auto& r : hand::decode_window(w.buf, w.tag, w.channels, w.anchor + w.d - w.first, round))
+                for (const auto& r : hand::decode_window(w.buf, w.tag, channels, nominal, round))
                     lines.push_back(format("HAND %d %016llx %.1f %.0f", r.c, static_cast<unsigned long long>(r.payload), r.snr, r.dt_ms)
                                     + (w.tag < 0 ? " " + std::to_string(r.tag) : ""));
             } catch (const std::exception& e) {
