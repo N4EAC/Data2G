@@ -13,7 +13,7 @@ from data2g.arq import phy as PHY
 from data2g.arq import session as S
 from data2g.arq.burst import Slot, TxBurst, ctl_mask, data_mask
 from data2g.arq.modes import MODES, ctl_spec
-from data2g.config import FS
+from data2g.config import FM_TX_PEAK, FS, PROFILE
 from test_engine import BLOCK, link
 
 
@@ -144,3 +144,22 @@ def test_cw_id_after_a_cq_frame():
     run(sent[1][0] + E.CW_PLAN_S + 20)
     assert [m for _, m in sent][2:] == [sent[0][1], "cw"]
     assert E.CW_PLAN_S - 1 < sent[3][0] - sent[1][0] < E.CW_PLAN_S + 2
+
+
+def _cw_id_peak(engine):
+    engine.cw_id = "only"
+    engine.send_cq("W1AW", 2)
+    peak = 0.0
+    while engine.now < E.CW_PLAN_S + 30:
+        out, ptt = engine.step(np.zeros(BLOCK))
+        if ptt and engine.tx_submode == "cw":
+            peak = max(peak, float(np.abs(out).max()))
+    return peak
+
+
+def test_cw_id_level():
+    """HF: the bursts' peak, full scale. FM: a burst's RMS at the sound card
+    (phy.full_scale), where a ping set the radio's deviation; it went out
+    11 dB over that."""
+    want = 1.0 if PROFILE == "hf" else 2 ** 0.5 / FM_TX_PEAK
+    assert _cw_id_peak(E.Engine("W1AW", seed=1)) == pytest.approx(want, rel=1e-3)

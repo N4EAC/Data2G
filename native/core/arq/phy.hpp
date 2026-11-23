@@ -76,6 +76,9 @@ std::vector<double> tx_audio(const TxBurst& burst, std::string_view tx_path = {}
 // A burst's unit-RMS audio for the sound card (phy.py full_scale): HF, its envelope peak at
 // full scale (PEP limited); FM, one fixed scale (config::FM_TX_PEAK) so modes keep their levels.
 std::vector<double> full_scale(std::vector<double> x);
+// A constant-envelope signal built at peak 1.0 (a CW ID, a Hand) for the sound card
+// (phy.py tone_scale): HF as built; FM, a burst's RMS.
+std::vector<double> tone_scale(std::vector<double> x);
 
 // A received burst: modem::receive's (OFDM) or cpm.receive's.
 struct Heard {

@@ -130,6 +130,14 @@ def full_scale(x: np.ndarray) -> np.ndarray:
     return x / np.max(dsp.envelope(x))
 
 
+def tone_scale(x: np.ndarray) -> np.ndarray:
+    """A constant-envelope signal built at peak 1.0 (a CW ID, a Hand) for the
+    sound card. HF: as built, the bursts' peak. FM: a burst's RMS
+    (full_scale), 11 dB under that: the level a ping set the radio's
+    deviation by."""
+    return x * (2 ** 0.5 / FM_TX_PEAK) if PROFILE == "fm" else x
+
+
 def tx_audio(burst, tx_path: str | None = None, level: float | None = None) -> np.ndarray:
     """A link.TxBurst -> unit-RMS audio (a CPM burst filtered for its cap:
     cpm.TX_FILTERS), times burst.level (an FM ping: its top modes' level,
