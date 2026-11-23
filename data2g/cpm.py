@@ -744,8 +744,8 @@ def refine(g: Grid, x: np.ndarray, s0: int, cfo: float, spec: CpmSpec, n_data: i
     E0 = _energies(g, x, s0, n, cfo)
     tot = E0.sum()
     # the metric's weight fixed at the lock's placement (each candidate's own: 0.2 dB worse, c8r50 AWGN)
-    w = float(tone_metric(g, E0).sum() / tot) if tot > 0 else 0.0
     gain, off = _tone_gain(E0) if tot > 0 else (0.0, None)  # per-tone floors: the tones' own gains and offsets
+    w = float((E0 * gain).sum() / tot) if tot > 0 and off is None else 0.0
     T, N = g.T, n * g.T
 
     def ll(z):  # the likelihood of n symbols of mixed samples, as _energies(...) * w would score them
