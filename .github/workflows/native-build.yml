@@ -73,7 +73,7 @@ jobs:
               -DFETCHCONTENT_BASE_DIR="$PWD/native/.deps"
             cmake --build native/build --parallel
             ctest --test-dir native/build --output-on-failure --timeout 600
-            # the FM profile, packaged beside HF's
+            # the FM profile, packaged beside the HF one (no apostrophes: this script is single-quoted)
             cmake -S native -B native/build-fm -G Ninja \
               -DCMAKE_BUILD_TYPE=RelWithDebInfo -DDATA2G_BUILD_PYMODULE=OFF -DDATA2G_PROFILE=fm \
               -DDATA2G_BUILD_HOST=ON -DDATA2G_BUILD_QTAUDIO=ON -DDATA2G_BUILD_RIG=ON \
