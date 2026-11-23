@@ -268,6 +268,7 @@ def test_a_steady_carrier_in_the_passband_does_not_stop_the_burst():
             assert PHY.ModemRx(r, {}).decode(0, mask, 0, None) == payload, (hz, seed)
 
 
+@pytest.mark.hf_only("CPM: FM has none")
 def test_a_carrier_does_not_read_as_signal_in_snr_est():
     """measure() took each row's strongest tone as signal: a carrier that
     wins its tone read 2-8 dB high (12-24 dB in 50 Hz), and the gear
