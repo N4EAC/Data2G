@@ -521,7 +521,9 @@ def modem_hpp() -> str:
     # the flat path's TX tilt per sync band (modem.tx_tilt_fir; FM only: HF has no TX path)
     tilt = [b for b in modem.SYNC_BANDS if config.PROFILE == "fm"]
     for b in tilt:
-        out.append(array(f"TX_TILT_{b}", [float(v) for v in modem.tx_tilt_fir(b)], "double"))
+        # 12 significant figures: firwin2's FFT differs in the last bits from one CPU to another
+        # (the CI check failed on runners whose SIMD paths differ), far under the tilt's tolerance
+        out.append(array(f"TX_TILT_{b}", [float(f"{v:.12g}") for v in modem.tx_tilt_fir(b)], "double"))
     rows = ", ".join(f'{{"{b}", TX_TILT_{b}}}' for b in tilt)
     out.append(f"inline constexpr std::array<std::pair<std::string_view, std::span<const double>>, {len(tilt)}> "
                f"TX_TILT = {{{{{rows}}}}};\n")

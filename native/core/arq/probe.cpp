@@ -5,6 +5,7 @@
 #include <complex>
 #include <cstdint>
 #include <cstdio>
+#include <numbers>
 #include <numeric>
 #include <stdexcept>
 
@@ -91,7 +92,7 @@ std::vector<double> one_period(const std::vector<int>& tn, bool tilt) {
     std::vector<cd> X(static_cast<std::size_t>(P), cd{});
     const auto g = tilt ? tilt_gain(tn) : std::vector<double>(tn.size(), 1.0);
     for (std::size_t i = 0; i < tn.size(); ++i) {
-        const cd v = std::polar(g[i], 2.0 * M_PI * hash01(tn[i], 104729));
+        const cd v = std::polar(g[i], 2.0 * std::numbers::pi * hash01(tn[i], 104729));
         X[static_cast<std::size_t>(tn[i])] = v;
         X[static_cast<std::size_t>(P - tn[i])] = std::conj(v);  // Hermitian: np.fft.irfft
     }
@@ -153,10 +154,10 @@ std::vector<std::vector<cd>> periods(std::span<const double> y) {
         num += w * k * std::arg(c);
         den += w * static_cast<double>(k) * k;
     }
-    const double tau = -num / std::max(2.0 * M_PI / P * den, 1e-30);
+    const double tau = -num / std::max(2.0 * std::numbers::pi / P * den, 1e-30);
     for (int r = 0; r < n; ++r)
         for (int k = 0; k <= P / 2; ++k)
-            F[static_cast<std::size_t>(r)][static_cast<std::size_t>(k)] *= std::polar(1.0, 2.0 * M_PI * k * tau * r / P);
+            F[static_cast<std::size_t>(r)][static_cast<std::size_t>(k)] *= std::polar(1.0, 2.0 * std::numbers::pi * k * tau * r / P);
     return F;
 }
 
