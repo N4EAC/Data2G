@@ -193,6 +193,7 @@ def test_spread_tracks_doppler_through_symbol_jitter():
     assert cpm.spread(g, np.ones(10), n0) == cpm.UNMEASURED_SPREAD_HZ  # too short
 
 
+@pytest.mark.hf_only("CPM: FM has none")
 def test_coarse_track_is_a_fresh_transform_of_the_stream(pure):  # (native's: test_native_cpm's test_coarse_track)
     """A receiver's CoarseTrack, fed 20 ms at a time from a buffer trimmed
     behind it: its rows are coarse_rows of the stream at each phase's

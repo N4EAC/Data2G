@@ -21,6 +21,7 @@ from data2g.arq import link as L
 from data2g.arq import phy as PHY
 from data2g.arq import modes as M
 from data2g.arq.burst import Slot, TxBurst, ctl_mask
+from data2g.arq.policy import ROBUST_CONNECT
 
 from test_arq import FakeRx, RandomPolicy, payload
 from test_native_arq_link import _burst, logged
@@ -79,7 +80,7 @@ class BootstrapPolicy(L.Policy):
         return codes.rv_cycle(M.MODES[mode])
 
     def recommend(self, station):
-        rec = M.encode("fsk16r25-r1/2")
+        rec = M.encode(ROBUST_CONNECT)
         return rec, 1, rec
 
 
@@ -98,7 +99,7 @@ def bootstrap_control(cls, mode, dup, announcements, direction):
     return _burst(burst), hypotheses
 
 
-@pytest.mark.parametrize("mode", ["ack-4f", "fsk16r25-r1/2"])
+@pytest.mark.parametrize("mode", ["ack-4f", pytest.param("fsk16r25-r1/2", marks=pytest.mark.hf_only("CPM: FM has none"))])
 @pytest.mark.parametrize("dup", [False, True])
 @pytest.mark.parametrize("announcements", [False, True])
 @pytest.mark.parametrize("direction", [0, 1])
@@ -107,7 +108,7 @@ def test_first_control_can_be_primed(mode, dup, announcements, direction):
     bootstrap_control(L.Station, mode, dup, announcements, direction)
 
 
-@pytest.mark.parametrize("mode", ["ack-4f", "fsk16r25-r1/2"])
+@pytest.mark.parametrize("mode", ["ack-4f", pytest.param("fsk16r25-r1/2", marks=pytest.mark.hf_only("CPM: FM has none"))])
 @pytest.mark.parametrize("dup", [False, True])
 @pytest.mark.parametrize("announcements", [False, True])
 @pytest.mark.parametrize("direction", [0, 1])
@@ -141,11 +142,13 @@ def reply_to_data(cls, dup):
     return _burst(reply), hypotheses
 
 
+@pytest.mark.hf_only("its bursts are CPM (one control slot): FM has none")
 @pytest.mark.parametrize("dup", [False, True])
 def test_reply_to_data_can_be_primed(dup):
     reply_to_data(L.Station, dup)
 
 
+@pytest.mark.hf_only("its bursts are CPM (one control slot): FM has none")
 @pytest.mark.parametrize("dup", [False, True])
 def test_cpp_reply_to_data_primes_identically(native, pure, dup):
     assert reply_to_data(native.arq.Station, dup) == reply_to_data(L.Station, dup)

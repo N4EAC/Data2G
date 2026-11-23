@@ -179,7 +179,10 @@ def test_snr_noise_ignores_what_repeats_in_every_pilot():
     from data2g.waveform import ofdm
 
     rng = np.random.default_rng(5)
-    for band, extra in (("w", lambda bb: 0.1 * np.exp(-2j * np.pi * bb * 26 / FS)),  # -20 dB at 26 samples
+    # past the support (n0 reads it) and inside its SNR_SLACK widening (n0_snr drops it): 26 samples
+    # at HF's 8 kHz; at FM's 16 kHz band w's support reaches 26 and the window is 34-38
+    d = 36 if FS == 16000 else 26
+    for band, extra in (("w", lambda bb: 0.1 * np.exp(-2j * np.pi * bb * d / FS)),  # -20 dB at d samples
                         ("n4", lambda bb: 0.1 * np.exp(2j * np.pi * rng.uniform(size=len(bb))))):
         bb = ofdm.band(band).bb.astype(float)
         n_p, n0 = 40, 1e-3  # 30 dB

@@ -364,6 +364,7 @@ def test_robust_mode_follows_measured_spread():
     assert hold >= max(burst_seconds(G.MODES[m], 1) for m in G.ROBUST_MODES)
 
 
+@pytest.mark.hf_only("an HF channel (mpp) against the HF predictor's training rows")
 def test_live_gap_is_the_training_rows_gap():
     """The shifter's gap input live (GearShifter.gap) against the one its
     training rows get (scripts/session_data.py: t0 - snap["t"], from the

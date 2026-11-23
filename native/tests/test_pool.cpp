@@ -117,6 +117,7 @@ std::vector<std::string> run(const std::vector<double>& y_fail, const std::vecto
         for (std::size_t i = 0; i < y->size(); i += config::FS / 50) {
             const auto n = std::min<std::size_t>(config::FS / 50, y->size() - i);
             for (const auto& e : rx.feed(std::span(*y).subspan(i, n))) {
+                if (std::holds_alternative<receiver::PartialEvent>(e)) continue;  // decoding while it arrives: no new lock
                 const auto& p = std::holds_alternative<receiver::HeaderEvent>(e) ? std::get<0>(e).header : std::get<1>(e).header;
                 const double v[] = {static_cast<double>(p.start()), p.score(), p.cfo(), static_cast<double>(e.index())};
                 ev += bits(std::vector<double>(v, v + 4));
