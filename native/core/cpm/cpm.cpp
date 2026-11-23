@@ -956,10 +956,30 @@ Measure measure(const Grid& g, const Mat<double>& E, int n_sym) {
     Measure out;
     out.snr.resize(top.size());
     for (std::size_t i = 0; i < top.size(); ++i) out.snr[i] = std::max(top[i] / n0 - 1, 1e-6);
-    const double mtop = np_mean(top);
-    const double es = std::max(mtop - n0, 1e-12);
+    double es_n0 = std::max(np_mean(top) - n0, 1e-12) / n0;
+    // a carrier: for snr_est only, every tone scaled down to the quietest quarter's floor and Es back up
+    // by the share kept (cpm.measure); the per-symbol snr and the spread stay as read
+    if (!tone_floors(E, n0).empty()) {
+        std::vector<double> med(E.cols), col(E.rows);
+        for (std::size_t k = 0; k < E.cols; ++k) {
+            for (std::size_t r = 0; r < E.rows; ++r) col[r] = E[r][k];
+            med[k] = np_median(col);
+        }
+        std::vector<double> s = med;  // np.quantile(med, 0.25), linear
+        std::sort(s.begin(), s.end());
+        const double pos = 0.25 * static_cast<double>(s.size() - 1);
+        const std::size_t lo = static_cast<std::size_t>(pos);
+        const double q = lo + 1 < s.size() ? s[lo] + (pos - static_cast<double>(lo)) * (s[lo + 1] - s[lo]) : s[lo];
+        std::vector<double> sc(E.cols);
+        for (std::size_t k = 0; k < E.cols; ++k) sc[k] = q / std::max(med[k], q);
+        Mat<double> Ew(E.rows, E.cols);
+        for (std::size_t r = 0; r < E.rows; ++r)
+            for (std::size_t k = 0; k < E.cols; ++k) Ew[r][k] = E[r][k] * sc[k];
+        const double n0w = std::max(median_rest(Ew) / std::numbers::ln2, 1e-300);
+        es_n0 = std::max((np_mean(row_max(Ew)) - n0w) / np_mean(sc), 1e-12) / n0w;
+    }
     out.spread_est = spread(g, top, n0);
-    out.snr_est = 10 * std::log10(es / n0 * g.rate / config::SNR_REF_BW_HZ);
+    out.snr_est = 10 * std::log10(es_n0 * g.rate / config::SNR_REF_BW_HZ);
     out.frames = std::max(1.0, static_cast<double>(n_sym * g.T) / config::FRAME_SAMPLES);
     return out;
 }
