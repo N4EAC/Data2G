@@ -1229,7 +1229,7 @@ def data_channel(h_pilot: np.ndarray, support: tuple[int, int], band: str = "w",
         est["h"] = np.concatenate([p[1] for p in parts])
         est["mse"] = np.concatenate([p[2] for p in parts])
         est["n0_k"] = np.concatenate([p[3] for p in parts])
-        for k in ("n0", "p_sig", "spread_hz"):
+        for k in ("n0", "n0_snr", "p_sig", "spread_hz"):
             est[k] = float(np.mean([p[0][k] for p in parts]))
         return est
     est = equalizer.estimate(h_pilot, support, bb=ofdm.band(band).bb, n0_pre=n0_pre, n0_pre_k=n0_pre_k)
