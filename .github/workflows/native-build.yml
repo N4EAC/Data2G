@@ -73,6 +73,14 @@ jobs:
               -DFETCHCONTENT_BASE_DIR="$PWD/native/.deps"
             cmake --build native/build --parallel
             ctest --test-dir native/build --output-on-failure --timeout 600
+            # the FM profile (built and tested, not packaged yet)
+            cmake -S native -B native/build-fm -G Ninja \
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo -DDATA2G_BUILD_PYMODULE=OFF -DDATA2G_PROFILE=fm \
+              -DDATA2G_BUILD_HOST=ON -DDATA2G_BUILD_QTAUDIO=ON -DDATA2G_BUILD_RIG=ON \
+              -DDATA2G_AUDIO_BACKEND=miniaudio -DDATA2G_BUILD_GUI=ON \
+              -DFETCHCONTENT_BASE_DIR="$PWD/native/.deps"
+            cmake --build native/build-fm --parallel
+            ctest --test-dir native/build-fm --output-on-failure --timeout 600
             tools/package_app.sh native/build dist
             dist/data2g/data2g host --help > /dev/null
             dist/data2g/data2g web --help > /dev/null
@@ -283,6 +291,38 @@ jobs:
       # acceptance test. --native fails, not skips, on a missing module.
       - name: Python suite against the C++ core
         if: matrix.osx_arch == ''
+        run: pytest tests -q --native -rs
+      # --- the FM profile (VHF/UHF) ------------------------------------------
+      # Its own tree (native/build-fm, where tests/native_subs looks for it), same
+      # options; built and tested on every platform, not packaged yet.
+      - name: Configure (FM)
+        shell: bash
+        env:
+          OSX_ARCH: ${{ matrix.osx_arch }}
+        run: |
+          cmake -S native -B native/build-fm -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo -DDATA2G_PROFILE=fm \
+            ${OSX_ARCH:+-DCMAKE_OSX_ARCHITECTURES=$OSX_ARCH} \
+            ${OSX_ARCH:+-DDATA2G_BUILD_PYMODULE=OFF} \
+            -DDATA2G_BUILD_HOST=ON -DDATA2G_BUILD_QTAUDIO=ON -DDATA2G_BUILD_RIG=ON \
+            -DDATA2G_AUDIO_BACKEND=miniaudio \
+            -DDATA2G_BUILD_GUI=ON \
+            -DFETCHCONTENT_BASE_DIR="$PWD/native/.deps" \
+            -DPython3_EXECUTABLE="$DATA2G_PYTHON" \
+            -Dpybind11_DIR="$("$DATA2G_PYTHON" -c 'import pybind11; print(pybind11.get_cmake_dir())')"
+      - name: Build (FM)
+        run: cmake --build native/build-fm --parallel
+      - name: The FM host starts
+        shell: bash
+        run: |
+          exe=native/build-fm/data2g-host; [ -f "$exe.exe" ] && exe="$exe.exe"
+          "$exe" --help > /dev/null && echo "FM data2g-host starts"
+      - name: C++ tests (FM)
+        run: ctest --test-dir native/build-fm --output-on-failure --timeout 600
+      - name: Python suite against the C++ core (FM)
+        if: matrix.osx_arch == ''
+        env:
+          DATA2G_PROFILE: fm
         run: pytest tests -q --native -rs
       # --- packaging -------------------------------------------------------
       - name: Stage a runnable app
