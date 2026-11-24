@@ -181,6 +181,13 @@ SPECS = {s.name: s for g in GRIDS.values() for s in (
     CpmSpec(f"{_grid_name(g)}-r1/3", g.name, 0, "gf", 320, DATA_N),
     CpmSpec(f"{_grid_name(g)}-r1/2", g.name, 1, "gf", 480, DATA_N),
 )}
+# c32r62's third data mode (2026-11-23, scripts/fast_fading_study.py: the grid's
+# tones carry 0.78-0.97 of their 5 bits on every fading preset from 0 dB up,
+# and r1/2 was its top). Header index 4: the word's index field is mode index
+# + 2 x duplicated, so 2 and 3 are r1/3's and r1/2's duplicated-control words;
+# 4 (6 duplicated) is free, and every older word reads as before. Last in
+# SPECS: arq.modes' recommendation codes go by SPECS' order.
+SPECS["fsk32r62-r2/3"] = CpmSpec("fsk32r62-r2/3", "c32r62", 4, "gf", 640, DATA_N)
 CTL = {g: CpmSpec(f"{_grid_name(GRIDS[g])}-ctl", g, -1, "polar", CTL_K, CTL_N) for g in GRIDS}
 
 
@@ -208,6 +215,20 @@ MID_THRESHOLD = {"c16r25": 0.14, "c8r50": 0.20, "c32r62": 0.07}
 LOCK_LLR = {"c16r25": (24.0, 22.0), "c8r50": (24.0, 22.0), "c32r62": (24.0, 22.0)}
 MID_LLR = {"c16r25": 24.0, "c8r50": 24.0, "c32r62": 24.0}
 HDR_MARGIN = (8.0, 4.0)  # the read word's LLR over the runner-up's: one copy, both
+# DATA2G_CPM_SPILL="lock:1,ctl:1,data:1,dd:1" (studies): the weight of spill() in tone_metric's N0,
+# per consumer: lock (tone_llr: every lock gate, header scores, refine, nods), ctl (llrs: the control
+# codeword's square-law bit LLRs), data (symbol_ll: a data codeword's first pass), dd (dd_metric's
+# square-law probabilities of the rows not yet known). Unnamed consumers keep 1.
+SPILL = {"lock": 1.0, "ctl": 1.0, "data": 1.0, "dd": 1.0}
+SPILL.update({k: float(v) for k, v in (e.split(":") for e in os.environ.get("DATA2G_CPM_SPILL", "").split(",") if e)})
+# DATA2G_CPM_LEAK="ctl,data,dd" (studies): those consumers on leak_metric, not the spill-inflated square law.
+LEAK = frozenset(filter(None, os.environ.get("DATA2G_CPM_LEAK", "").split(",")))
+LEAK_K = float(os.environ.get("DATA2G_CPM_LEAK_K") or 0.5)  # leak_metric's k
+# "ctlsq" in DATA2G_CPM_LEAK: a control codeword whose rows' spill() is at least this stays on the square law
+# (leak_metric with "ctl"), not COH_CTL's coherent metric: the channel no longer holds from one symbol to the
+# next (fsk16r25 on 30 Hz: control decoded 5-38% coherent, 80-93% on leak_metric; its
+# control rows read 0.16-0.24 there, every other grid and preset under 0.145; scripts/spill_study.py)
+CTL_SQ = float(os.environ.get("DATA2G_CPM_CTL_SQ") or 0.15)
 LLR_EPS = 0.02  # tone_llr's outlier share: a row whose tone the model rejects costs at most -ln(EPS)
 WAIT_LLR = {"c16r25": 0.0, "c8r50": 0.0, "c32r62": 0.0}  # a front waits for its second copy from this LLR
 # An early lock (front + header copy 1) is looked at again once its mid block
@@ -299,7 +320,8 @@ def hdr_len(g: Grid) -> int:
 
 def header_word(index: int, n_data: int, dup: bool) -> int:
     """16 bits as the OFDM header's: index (4) | n field (6) | CRC-6; index
-    = mode index + 2 x duplicated control, n field = data codewords + 1."""
+    = mode index + 2 x duplicated control (mode indices 0, 1, 4: SPECS), n
+    field = data codewords + 1."""
     from .modem import crc6
 
     v = ((index + 2 * dup) << 6) | n_data
@@ -570,7 +592,7 @@ def detect(g: Grid, x: np.ndarray, reach_hz: float = 150.0, fine=True, front_onl
     return score, s0, cfo
 
 
-def tone_metric(g: Grid, E: np.ndarray) -> np.ndarray:
+def tone_metric(g: Grid, E: np.ndarray, use: str = "lock") -> np.ndarray:
     """(n_sym, m) tone energies of one codeword -> (n_sym, m) log P(E | tone
     sent) up to a per-symbol constant. Noncoherent square-law metric, exact
     for Rayleigh fading: E_m g, g = Es / (N0 (N0 + Es)), Es and N0 the
@@ -579,10 +601,39 @@ def tone_metric(g: Grid, E: np.ndarray) -> np.ndarray:
     n0 = np.median(np.sort(E, axis=1)[:, :-1]) / np.log(2)  # exponential: median = N0 ln 2
     n0 = max(n0, 1e-12 * np.mean(top) + 1e-300)  # noise-free tests
     es = max(np.mean(top) - n0, 1e-3 * n0)
-    n0 += spill(E, n0, es) * es
+    if use in LEAK:
+        return leak_metric(E, n0, es, LEAK_K)
+    n0 += SPILL[use] * spill(E, n0, es) * es
     # es / (n0 (n0 + es)) without its underflow: a codeword past the audio's
     # end (zero-padded: a header claiming more than arrived) reads as erasures
     return E * (es / (n0 + es) / n0)
+
+
+def leak_metric(E: np.ndarray, n0: float, es: float, k: float) -> np.ndarray:
+    """tone_metric with the Doppler spill as part of the signal, not as noise:
+    under tone t the bins t - 1 and t + 1 hold a = spill() of Es over the
+    noise (independent exponentials: the leak comes of the channel's change
+    over the symbol, the tone of its mean), so log P(E | t) up to a row
+    constant is E_t (1/N - 1/(N + Es)) + (E_t-1 + E_t+1) (1/N - 1/(N + a Es))
+    - ln(1 + a Es / N) per neighbour inside the grid: energy beside a tone
+    counts for it, and two adjacent tones are told apart on the scale of the
+    spill, far ones on the noise's. N = N0 + k a Es: what the model leaves out
+    (bins further off, the neighbouring symbols' tones through a delayed
+    path) is the signal's own too; with k = 0 the confidence grows with SNR
+    as #244's did (fsk32r62-r2/3, hilat-d: 100% decoded at PEP cell 2 dB,
+    30% at 18). a = 0 (AWGN, slow fading): the square law exactly.
+    scripts/spill_study.py (2026-11-23)."""
+    a = spill(E, n0, es)
+    n0 = n0 + k * a * es
+    return es / (n0 + es) / n0 * E + _leak_sides(E, n0, a * es)
+
+
+def _leak_sides(E: np.ndarray, n0: float, leak: float) -> np.ndarray:
+    """leak_metric's neighbour terms: per tone, its two neighbours' energies as bins of mean n0 + leak under it."""
+    P = np.pad(E, ((0, 0), (1, 1)))
+    inside = np.ones(E.shape[1] + 2)
+    inside[[0, -1]] = 0.0
+    return leak / (n0 + leak) / n0 * (P[:, :-2] + P[:, 2:]) - np.log1p(leak / n0) * (inside[:-2] + inside[2:])
 
 
 def spill(E: np.ndarray, n0: float, es: float) -> float:
@@ -603,7 +654,7 @@ def llrs(g: Grid, E: np.ndarray) -> np.ndarray:
     """(n_sym, m) tone energies of one codeword -> (n_sym * bits,) coded-bit
     LLRs (positive: 0) in mapping order (data2g.codes.combine / decode_many's),
     marginals of tone_metric: the control codeword's."""
-    return bit_llrs(g, tone_metric(g, E))
+    return bit_llrs(g, tone_metric(g, E, "ctl"))
 
 
 def bit_llrs(g: Grid, metric: np.ndarray) -> np.ndarray:
@@ -620,7 +671,7 @@ def symbol_ll(g: Grid, E: np.ndarray) -> np.ndarray:
     """(n_sym, m) tone energies of one codeword -> (n_sym * m,) symbol
     log-likelihoods in mapping order, symbol-major, value v's on tone
     gray(v) (to_tones): a GF(M) codeword's soft values (data2g.codes)."""
-    return tone_metric(g, E)[:, _gray(g.m)].reshape(-1)
+    return tone_metric(g, E, "data")[:, _gray(g.m)].reshape(-1)
 
 
 
@@ -1041,8 +1092,20 @@ def receive(x: np.ndarray, lock: dict) -> dict:
              header_end=lock.get("header_end"))
     if COH_CTL:  # the control slots on the coherent metric (sync and header rows known, the rest square-law decided)
         for s in range(r["n_ctl_slots"]):
-            soft_[s] = dd_soft(r, dd_metric(r, {}, s), s)
+            if not ctl_square(g, E, s):
+                soft_[s] = dd_soft(r, dd_metric(r, {}, s), s)
     return r
+
+
+def ctl_square(g: Grid, E: np.ndarray, slot: int) -> bool:
+    """Control slot `slot` of the stream energies E stays on the square law (CTL_SQ)."""
+    if "ctlsq" not in LEAK:
+        return False
+    n = CTL[g.name].n_sym
+    Es = E[slot * n:(slot + 1) * n]
+    n0 = _n0(Es)
+    es = max(float(np.mean(Es.max(axis=1))) - n0, 1e-3 * n0)
+    return spill(Es, n0, es) >= CTL_SQ
 
 
 # --- coherent detection --------------------------------------------------------------
@@ -1209,7 +1272,7 @@ def dd_metric(r: dict, post: dict, slot: int) -> np.ndarray:
     a, b = max(0, rows[slot][0] - COH_W), min(lay.n, rows[slot][-1] + 1 + COH_W)
     Z = r["Z"][a:b]
     E = _sq(Z)
-    G = tone_metric(g, E)
+    G = tone_metric(g, E, "dd")
     P = np.exp(G - G.max(axis=1, keepdims=True))
     P /= P.sum(axis=1, keepdims=True)
     h = header_symbols(g.name, header_word(spec.index, n_data, dup))
@@ -1228,7 +1291,15 @@ def dd_metric(r: dict, post: dict, slot: int) -> np.ndarray:
         q = np.exp(lp - lp.max(axis=1, keepdims=True))
         q /= q.sum(axis=1, keepdims=True)
         P[rr[keep][:, None] - a, gray[None]] = q  # value v on tone gray(v)
-    return coh_metric(Z, P, COH_W, _n0(E))[rows[slot] - a]
+    n0 = _n0(E)
+    if "coh" in LEAK:
+        # leak_metric's model under the coherent one: coh_metric falls back to the square law at the raw N0
+        # where its channel estimate is poor (fast fading: where the spill is), #244's confidence again
+        es = max(float(np.mean(E.max(axis=1))) - n0, 1e-3 * n0)
+        leak = spill(E, n0, es) * es
+        n0 += LEAK_K * leak
+        return (coh_metric(Z, P, COH_W, n0) + _leak_sides(E, n0, leak))[rows[slot] - a]
+    return coh_metric(Z, P, COH_W, n0)[rows[slot] - a]
 
 
 def dd_soft(r: dict, metric: np.ndarray, slot: int) -> np.ndarray:
