@@ -32,7 +32,14 @@ soft combining): a CpmSpec quacks like a config.SubmodeSpec there. Burst:
   mid block and both copies (find_mid). A short burst's second copy sits
   after its data, so each word is read at its own rows.
 
-Native: native/core/cpm (grids and specs compiled in, tables::CPM_*).
+Wide-bin grids (WIDE_GRIDS: Grid.L sub-windows a symbol, tones still
+`rate` apart; the energies are the sub-windows' summed): toolbox entries,
+found by name only, never searched, offered or recommended by default,
+square-law throughout, Python only. `Grid.rate` is the tone spacing
+everywhere; the symbol rate is `Grid.baud` (the same for the on-air grids).
+
+Native: native/core/cpm (grids and specs compiled in, tables::CPM_*; the
+on-air grids only).
 Parity: tests/test_native_cpm.py; under `pytest --native`
 tests/native_subs/cpm.py substitutes by name, private _energies, _shares
 and _peak_ratio included.
@@ -69,10 +76,27 @@ class Grid:
     center: float = 1500.0
     bp: float = 50.0  # nominal margin beyond the outer tones, Hz: the width the caps judge (TX_FILTERS: the TX's)
     clip_db: float = 0.0  # clip-and-filter headroom
+    # Wide bins, long symbols (WIDE_GRIDS): a symbol is L sub-windows of 1 / rate, so the tones stay `rate` apart
+    # while the symbol rate is rate / L; the receiver sums the sub-windows' energies, less the first `guard`
+    L: int = 1
+    guard: int = 0
+    hdr: int = 0  # header symbols (0: HDR_S of them)
+
+    @property
+    def nsub(self) -> int:  # samples per sub-window (L = 1: per symbol)
+        return int(round(FS / self.rate))
 
     @property
     def T(self) -> int:  # samples per symbol
-        return int(round(FS / self.rate))
+        return self.L * self.nsub
+
+    @property
+    def baud(self) -> float:  # symbols/s
+        return self.rate / self.L
+
+    @property
+    def k(self) -> int:  # sub-windows a tone energy sums
+        return self.L - self.guard
 
     @property
     def bits(self) -> int:
@@ -87,11 +111,42 @@ class Grid:
         return self.m * self.rate + 2 * self.bp
 
 
-GRIDS = {g.name: g for g in [
+class _Toolbox(dict):
+    """The on-air entries, which are all that iteration, len and `in` see
+    (the receiver's search, the shifter's modes, the native tables); a
+    lookup by name finds the toolbox entries too (WIDE_*)."""
+
+    def __init__(self, items, extra):
+        super().__init__(items)
+        self.extra = extra
+
+    def __missing__(self, key):
+        return self.extra[key]
+
+
+# Wide bins, long symbols (2026-11-23, scripts/fast_fading_study.py, scripts/wide_fsk_study.py): tones `rate`
+# apart, symbols L / rate long, a tone's energy the sum over its L sub-windows' (a noncoherent sum: the tone may
+# turn or fade within the symbol, and a bin is L times wider than the symbol rate needs). Toolbox grids: receivable
+# by name (find, receive, a Receiver given them in cpm_grids), not searched by default, not in arq.modes.MODES
+# unless DATA2G_CPM_WIDE=1 (studies), never recommended on the wire, the square law only (no coherent paths, no
+# DD), Python only (native has neither the sub-window sum nor these tables).
+WIDE_GRIDS = {g.name: g for g in [
+    # c32r62's 2000 Hz at its symbol rate with half the tones, each bin twice as wide: mutual information 0.8-0.99
+    # of 250 bps on 2 / 4 ms to 30 Hz / 7 ms alike (the sum; dropping the first sub-window gained at 10 dB and up
+    # only, and lost under 0 dB)
+    Grid("c16w125", 16, 125.0, bp=150.0, L=2),
+    # c8r50's tones at c16r25's symbol rate: 0.9-1.0 of 75 bps there (c16r25's 25 Hz bins: half of its 100 at
+    # 30 Hz). 4 tones 100 Hz apart held more (85-99 of 100) but need a GF(4) code family; this reuses GF(8)'s
+    Grid("c8w50", 8, 50.0, L=2, hdr=12),
+]}
+# DATA2G_CPM_ONAIR=c8w50 (studies): these wide grids as on-air ones, after today's: searched by every receiver,
+# their modes in arq.modes.MODES and the recommendation codes after today's six (data2g.arq.policy's robust rules).
+ON_AIR_WIDE = tuple(n for n in os.environ.get("DATA2G_CPM_ONAIR", "").split(",") if n)
+GRIDS = _Toolbox({g.name: g for g in [
     Grid("c16r25", 16, 25.0),  # 400 Hz of tones: a 500 Hz segment
     Grid("c8r50", 8, 50.0),  # the same
     Grid("c32r62", 32, 62.5, bp=150.0),  # 2000 Hz of tones, 2300 Hz wide (the 2400 Hz cap)
-]}
+] + [WIDE_GRIDS[n] for n in ON_AIR_WIDE]}, WIDE_GRIDS)
 
 
 @dataclass(frozen=True)
@@ -126,6 +181,8 @@ TX_FILTERS = {
     "c16r25": (TxFilter(75.0, 0.2, 6), TxFilter(150.0, 0.1, 6), TxFilter(150.0, 0.1, 6)),
     "c8r50": (TxFilter(75.0, 0.2, 6), TxFilter(150.0, 0.1, 6), TxFilter(150.0, 0.1, 6)),
     "c32r62": (TxFilter(200.0, 0.1, 6),) * 3,
+    "c16w125": (TxFilter(200.0, 0.1, 6),) * 3,  # c32r62's segment
+    "c8w50": (TxFilter(75.0, 0.2, 6), TxFilter(150.0, 0.1, 6), TxFilter(150.0, 0.1, 6)),  # c8r50's tones
 }
 
 
@@ -147,6 +204,7 @@ class CpmSpec:
     frames_per_cw: int = 0
     clip_headroom_db: float | None = None
     family: str = field(default="cpm", compare=False)
+    gf: str = ""  # the spec whose frozen GF(M) code this one uses (data2g.codes.gf_code); "": its own
 
     @property
     def band(self) -> str:
@@ -174,14 +232,22 @@ class CpmSpec:
 
 
 def _grid_name(g: Grid) -> str:
-    return f"fsk{g.m}r{int(g.rate)}"
+    return f"fsk{g.m}{'r' if g.L == 1 else 'w'}{int(g.rate)}"
 
 
-SPECS = {s.name: s for g in GRIDS.values() for s in (
+_GF_OF = {16: "fsk16r25", 8: "fsk8r50"}  # a wide grid's data codes: the on-air grid's of as many tones
+WIDE_SPECS = {s.name: s for g in WIDE_GRIDS.values() for s in (
+    CpmSpec(f"{_grid_name(g)}-r1/3", g.name, 0, "gf", 320, DATA_N, gf=f"{_GF_OF[g.m]}-r1/3"),
+    CpmSpec(f"{_grid_name(g)}-r1/2", g.name, 1, "gf", 480, DATA_N, gf=f"{_GF_OF[g.m]}-r1/2"),
+)}
+WIDE_CTL = {g.name: CpmSpec(f"{_grid_name(g)}-ctl", g.name, -1, "polar", CTL_K, CTL_N) for g in WIDE_GRIDS.values()}
+WIDE_ON = os.environ.get("DATA2G_CPM_WIDE", "") == "1"  # studies: the wide modes in arq.modes.MODES
+SPECS = _Toolbox({s.name: s for g in GRIDS.values() if g.L == 1 for s in (
     CpmSpec(f"{_grid_name(g)}-r1/3", g.name, 0, "gf", 320, DATA_N),
     CpmSpec(f"{_grid_name(g)}-r1/2", g.name, 1, "gf", 480, DATA_N),
-)}
-CTL = {g: CpmSpec(f"{_grid_name(GRIDS[g])}-ctl", g, -1, "polar", CTL_K, CTL_N) for g in GRIDS}
+)} | {n: s for n, s in WIDE_SPECS.items() if s.grid in ON_AIR_WIDE}, WIDE_SPECS)
+CTL = _Toolbox({g: WIDE_CTL[g] if g in WIDE_CTL else CpmSpec(f"{_grid_name(GRIDS[g])}-ctl", g, -1, "polar", CTL_K, CTL_N)
+                for g in GRIDS}, WIDE_CTL)
 
 
 # Locks (cpm-acq-gap, 2026-10-26; scripts/cpm_floor_study.py's stage arms,
@@ -203,13 +269,16 @@ CTL = {g: CpmSpec(f"{_grid_name(GRIDS[g])}-ctl", g, -1, "polar", CTL_K, CTL_N) f
 # locks on noise, OFDM and other grids (old: 2 on other grids), 4 on two
 # stations' own-grid traffic (old: 25). The margins: a strong front once
 # carried a faded copy's wrong word (0.1-1 apart) past the floor.
-SYNC_THRESHOLD = {"c16r25": 0.07, "c8r50": 0.12, "c32r62": 0.05}
-MID_THRESHOLD = {"c16r25": 0.14, "c8r50": 0.20, "c32r62": 0.07}
-LOCK_LLR = {"c16r25": (24.0, 22.0), "c8r50": (24.0, 22.0), "c32r62": (24.0, 22.0)}
-MID_LLR = {"c16r25": 24.0, "c8r50": 24.0, "c32r62": 24.0}
+SYNC_THRESHOLD = {"c16r25": 0.07, "c8r50": 0.12, "c32r62": 0.05, "c16w125": 0.07, "c8w50": 0.11}
+MID_THRESHOLD = {"c16r25": 0.14, "c8r50": 0.20, "c32r62": 0.07, "c16w125": 0.11, "c8w50": 0.20}
+LOCK_LLR = {"c16r25": (24.0, 22.0), "c8r50": (24.0, 22.0), "c32r62": (24.0, 22.0), "c16w125": (24.0, 22.0),
+            "c8w50": (24.0, 22.0)}
+MID_LLR = {"c16r25": 24.0, "c8r50": 24.0, "c32r62": 24.0, "c16w125": 24.0, "c8w50": 24.0}
+# (the wide grids, scripts/wide_fsk_study.py cal, 600 noise hops: coarse medians front 0.073 / 0.112, mid 0.081 /
+# 0.142, the mid floors 1.4x as the others'; largest header scores 14-17 as the on-air grids', so their gates)
 HDR_MARGIN = (8.0, 4.0)  # the read word's LLR over the runner-up's: one copy, both
 LLR_EPS = 0.02  # tone_llr's outlier share: a row whose tone the model rejects costs at most -ln(EPS)
-WAIT_LLR = {"c16r25": 0.0, "c8r50": 0.0, "c32r62": 0.0}  # a front waits for its second copy from this LLR
+WAIT_LLR = {"c16r25": 0.0, "c8r50": 0.0, "c32r62": 0.0, "c16w125": 0.0, "c8w50": 0.0}  # a front waits for its second copy from this LLR
 # An early lock (front + header copy 1) is looked at again once its mid block
 # and second header copy are in: confirm() under this, the burst is not
 # there (the streaming Receiver lets it go). The lock was never checked
@@ -228,7 +297,7 @@ CONFIRM_LLR = -2.0
 
 
 def grid_specs(grid: str) -> list:
-    return [s for s in SPECS.values() if s.grid == grid]
+    return [s for s in {**SPECS, **WIDE_SPECS}.values() if s.grid == grid]
 
 
 # --- sync patterns -------------------------------------------------------------------
@@ -268,7 +337,12 @@ def costas(m: int) -> tuple:
 # This front is searched instead (scripts/c8r50_front_search.py, protocol
 # 13's header words): each tone 3 times, every other placement and whole-bin
 # shift at most 5 of 24 on itself, 6 with a header after it.
-FRONTS = {"c8r50": (2, 1, 1, 3, 7, 7, 3, 6, 6, 4, 3, 6, 0, 5, 4, 0, 7, 0, 2, 1, 2, 5, 4, 5)}
+# The wide grids' (scripts/wide_fsk_study.py front): c16w125's Costas array is 0.26 s of its 16 ms symbols and
+# c8w50's 6 symbols; 28 and 16 symbols, tones used evenly, at most 2 coincidences with themselves at any other
+# time shift and whole-bin shift within +-150 Hz.
+FRONTS = {"c8r50": (2, 1, 1, 3, 7, 7, 3, 6, 6, 4, 3, 6, 0, 5, 4, 0, 7, 0, 2, 1, 2, 5, 4, 5),
+          "c16w125": (9, 3, 5, 9, 2, 8, 13, 4, 0, 5, 2, 15, 8, 11, 10, 6, 7, 3, 14, 10, 12, 0, 1, 11, 6, 4, 1, 7),
+          "c8w50": (4, 3, 3, 6, 7, 7, 1, 0, 5, 0, 5, 1, 2, 6, 4, 2)}
 
 
 def preamble_pattern(g: Grid) -> np.ndarray:
@@ -279,7 +353,7 @@ def preamble_pattern(g: Grid) -> np.ndarray:
 def mid_block(g: Grid) -> np.ndarray:
     """The mid sync block, ~BLOCK_S: the largest Welch Costas array that
     fits, its tones spread over the band (scaling keeps the Costas property)."""
-    target = max(4, round(BLOCK_S * g.rate))
+    target = max(4, round(BLOCK_S * g.baud))
     p = max(q for q in range(3, min(target, g.m) + 2) if _prime(q))
     c = _welch(p) * (g.m // (p - 1))
     if np.array_equal(c, costas(g.m)):
@@ -294,7 +368,7 @@ def mid_block(g: Grid) -> np.ndarray:
 # --- header --------------------------------------------------------------------------
 
 def hdr_len(g: Grid) -> int:
-    return max(6, round(HDR_S * g.rate))
+    return g.hdr or max(6, round(HDR_S * g.baud))
 
 
 def header_word(index: int, n_data: int, dup: bool) -> int:
@@ -311,7 +385,7 @@ def header_symbols(grid: str, word: int) -> np.ndarray:
     """A word's header tones: pseudo-random per (grid, word). Decoding is
     ML over the grid's few valid words, so a random M-ary code is strong."""
     g = GRIDS[grid]
-    return np.random.default_rng([g.m, int(g.rate * 100), word]).integers(0, g.m, hdr_len(g))
+    return np.random.default_rng([g.m, int(g.rate * 100), word] + [g.L] * (g.L > 1)).integers(0, g.m, hdr_len(g))
 
 
 @lru_cache(maxsize=None)
@@ -343,7 +417,7 @@ def layout(grid: str, n_sym: int) -> Layout:
     """Sync blocks, header copies and the codewords' `n_sym` symbols."""
     g = GRIDS[grid]
     H = hdr_len(g)
-    D = max(1, round(SPACING_S * g.rate))
+    D = max(1, round(SPACING_S * g.baud))
     segs = [min(D, n_sym - i) for i in range(0, max(n_sym, 1), D)]
     rows, tones_, hdr, data, r = [], [], [], [], 0
     for i, d in enumerate(segs):
@@ -434,6 +508,26 @@ def _sq(Z: np.ndarray) -> np.ndarray:
     return Z.real ** 2 + Z.imag ** 2
 
 
+def _tone_energy(g: Grid, z: np.ndarray, n_sym: int, n_bins: int) -> np.ndarray:
+    """(n_sym, n_bins) energies of n_sym symbols of samples mixed so that bin
+    0 is at DC: one FFT a symbol, or (a wide grid) one per sub-window, the
+    kept sub-windows' energies summed. The bins are `rate` apart either way."""
+    if g.L == 1:
+        return _sq(np.fft.fft(z.reshape(n_sym, g.T), axis=1)[:, :n_bins])
+    return _sq(np.fft.fft(z.reshape(n_sym, g.L, g.nsub), axis=2)[:, g.guard:, :n_bins]).sum(axis=1)
+
+
+@lru_cache(maxsize=None)
+def _noise_median(k: int) -> float:
+    """The median of a noise bin's energy over N0: one sub-window's is
+    exponential (ln 2), k summed gamma(k)."""
+    if k == 1:
+        return float(np.log(2))
+    from scipy.stats import gamma
+
+    return float(gamma.median(k))
+
+
 def _energies(g: Grid, x: np.ndarray, start: int, n_sym: int, cfo: float, extra: int = 0) -> np.ndarray:
     """(n_sym, m + 2 extra) tone energies of symbols from `start`, CFO removed."""
     T = g.T
@@ -444,8 +538,7 @@ def _energies(g: Grid, x: np.ndarray, start: int, n_sym: int, cfo: float, extra:
         seg = np.pad(seg, (0, n_sym * T - len(seg)))
     t = (start + np.arange(len(seg))) / FS
     z = seg * np.exp(-2j * np.pi * (g.f0 - extra * g.rate + cfo) * t)  # lowest bin at DC
-    Z = np.fft.fft(z.reshape(n_sym, T), axis=1)
-    return _sq(Z[:, :g.m + 2 * extra])
+    return _tone_energy(g, z, n_sym, g.m + 2 * extra)
 
 
 def _shares(E: np.ndarray) -> np.ndarray:
@@ -455,7 +548,7 @@ def _shares(E: np.ndarray) -> np.ndarray:
     return E / (E.sum(axis=1, keepdims=True) + 1e-30)
 
 
-def coarse_rows(g: Grid, x: np.ndarray, extra: int) -> np.ndarray:
+def coarse_rows(g: Grid, x: np.ndarray, extra: int, raw: bool = False) -> np.ndarray:
     """detect's coarse energies of x's whole symbols: (n, 4, m + 2 extra),
     [k, q] symbol k's tones from extra bins below the grid at CFO fraction
     q / 4, as shares. One rfft per symbol zero-padded to 4T, bins R / 4
@@ -466,10 +559,22 @@ def coarse_rows(g: Grid, x: np.ndarray, extra: int) -> np.ndarray:
     n = len(x) // T
     if n == 0:
         return np.zeros((0, 4, g.m + 2 * extra))
-    F = np.fft.rfft(x[:n * T].reshape(n, T), n=4 * T, axis=1)
-    P = F.real ** 2 + F.imag ** 2
+    if g.L == 1:
+        F = np.fft.rfft(x[:n * T].reshape(n, T), n=4 * T, axis=1)
+        P = F.real ** 2 + F.imag ** 2
+    else:  # a wide grid: each kept sub-window's, summed (bins R / 4 apart as well)
+        F = np.fft.rfft(x[:n * T].reshape(n, g.L, g.nsub)[:, g.guard:], n=4 * g.nsub, axis=2)
+        P = (F.real ** 2 + F.imag ** 2).sum(axis=1)
     bins = 4 * (round(g.f0 / g.rate) - extra + np.arange(g.m + 2 * extra))
-    return np.stack([_shares(P[:, bins + q]) for q in range(4)], axis=1)
+    E = np.stack([_shares(P[:, bins + q]) for q in range(4)], axis=1)
+    # raw: the energies before the shares too (CoarseTrack: a wide grid's rows are sums of them)
+    return (E, np.stack([P[:, bins + q] for q in range(4)], axis=1)) if raw else E
+
+
+def shares_rows(g: Grid, h: Grid) -> bool:
+    """Wide grid g's coarse rows are sums of on-air grid h's: the same tones,
+    g's sub-window h's symbol (c8w50 on c8r50)."""
+    return g.L > 1 and h.L == 1 and (g.m, g.rate, g.f0) == (h.m, h.rate, h.f0)
 
 
 class CoarseTrack:
@@ -479,10 +584,30 @@ class CoarseTrack:
     2-4 hops of audio already transformed). Detection as detect's on x,
     its placements on the stream's grid instead of the window's."""
 
-    def __init__(self, g: Grid, reach_hz: float = 150.0):
+    def __init__(self, g: Grid, reach_hz: float = 150.0, source: "CoarseTrack | None" = None):
+        """`source`: the track of a grid g shares rows with (shares_rows), fed
+        the same audio first: g's rows are sums of its symbols' energies, no
+        transforms of its own (a start the source does not hold: g's own)."""
         self.g, self.extra = g, int(np.ceil(reach_hz / g.rate))
         self.s: list[int | None] = [None] * 4  # per phase: the stream sample of its first row
         self.E = [np.zeros((0, 4, g.m + 2 * self.extra)) for _ in range(4)]
+        self.source = source
+        self.P = None  # per phase, the rows' energies before the shares: kept once a track sources this one
+        if source is not None:
+            assert shares_rows(g, source.g) and source.extra == self.extra
+            source.P = [np.zeros((0, 4, g.m + 2 * self.extra)) for _ in range(4)]
+
+    def _sourced(self, nxt: int, n: int):
+        """n rows from stream sample nxt out of the source's energies, or None."""
+        src, Tp, g = self.source, self.source.g.T, self.g
+        for ph in range(4):
+            s = src.s[ph]
+            if s is not None and s <= nxt and (nxt - s) % Tp == 0:
+                i = (nxt - s) // Tp
+                if i + g.L * n <= len(src.P[ph]) and len(src.P[ph]) == len(src.E[ph]):
+                    R = src.P[ph][i:i + g.L * n].reshape(n, g.L, 4, -1)[:, g.guard:].sum(axis=1)
+                    return R / (R.sum(axis=-1, keepdims=True) + 1e-30)
+        return None
 
     def feed(self, buf: np.ndarray, off: int):
         """`buf` holds stream samples off.. (a receiver's buffer): rows for its
@@ -493,10 +618,19 @@ class CoarseTrack:
             if s is None or s < off:
                 first = off + (ph * T // 4 - off) % T
                 E = E[(first - s) // T:] if s is not None else E  # the rows still in buf
+                if self.P is not None and s is not None:
+                    self.P[ph] = self.P[ph][(first - s) // T:]
                 s = first
             nxt = s + len(E) * T
             if end - nxt >= T:
-                E = np.concatenate([E, coarse_rows(self.g, buf[nxt - off:], self.extra)])
+                if self.P is not None:
+                    new, raw = coarse_rows(self.g, buf[nxt - off:], self.extra, raw=True)
+                    self.P[ph] = np.concatenate([self.P[ph], raw])
+                else:
+                    new = self._sourced(nxt, (end - nxt) // T) if self.source is not None else None
+                    if new is None:
+                        new = coarse_rows(self.g, buf[nxt - off:], self.extra)
+                E = np.concatenate([E, new])
             self.s[ph], self.E[ph] = s, E
 
     def rows(self, a: int, b: int) -> list:
@@ -574,12 +708,15 @@ def tone_metric(g: Grid, E: np.ndarray) -> np.ndarray:
     """(n_sym, m) tone energies of one codeword -> (n_sym, m) log P(E | tone
     sent) up to a per-symbol constant. Noncoherent square-law metric, exact
     for Rayleigh fading: E_m g, g = Es / (N0 (N0 + Es)), Es and N0 the
-    codeword's, N0 plus the Doppler spill (spill())."""
+    codeword's, N0 plus the Doppler spill (spill()). A wide grid's energies
+    sum g.k sub-windows: Es and N0 are a sub-window's (the same linear metric,
+    exact where the fading is independent from one sub-window to the next)."""
     top = E.max(axis=1)
-    n0 = np.median(np.sort(E, axis=1)[:, :-1]) / np.log(2)  # exponential: median = N0 ln 2
+    k = g.k
+    n0 = np.median(np.sort(E, axis=1)[:, :-1]) / _noise_median(k)  # exponential: median = N0 ln 2
     n0 = max(n0, 1e-12 * np.mean(top) + 1e-300)  # noise-free tests
-    es = max(np.mean(top) - n0, 1e-3 * n0)
-    n0 += spill(E, n0, es) * es
+    es = max(np.mean(top) / k - n0, 1e-3 * n0)
+    n0 += spill(E, k * n0, k * es) * es
     # es / (n0 (n0 + es)) without its underflow: a codeword past the audio's
     # end (zero-padded: a header claiming more than arrived) reads as erasures
     return E * (es / (n0 + es) / n0)
@@ -706,7 +843,7 @@ def refine(g: Grid, x: np.ndarray, s0: int, cfo: float, spec: CpmSpec, n_data: i
     T, N = g.T, n * g.T
 
     def ll(z):  # the likelihood of n symbols of mixed samples, as _energies(...) * w would score them
-        G = _sq(np.fft.fft(z.reshape(n, T), axis=1)[:, :g.m]) * w
+        G = _tone_energy(g, z, n, g.m) * w
         return G[kr, known[kr]].sum() + np.logaddexp.reduce(G[ur], axis=1).sum()
     best, bv = (s0, cfo), None
     for st, sf in ((max(1, g.T // 16), g.rate / 16), (max(1, g.T // 64), g.rate / 64)):
@@ -788,7 +925,7 @@ def spread(g: Grid, top: np.ndarray, n0: float) -> float:
     y = np.log(c[:m])
     mx, my = np.mean(x), np.mean(y)
     b = -np.sum((x - mx) * (y - my)) / np.sum((x - mx) ** 2)
-    return float(min(np.sqrt(max(b, 0.0)) * g.rate / np.pi, SPREAD_MAX_HZ))
+    return float(min(np.sqrt(max(b, 0.0)) * g.baud / np.pi, SPREAD_MAX_HZ))
 
 
 def measure(g: Grid, E: np.ndarray, n_sym: int) -> dict:
@@ -799,8 +936,8 @@ def measure(g: Grid, E: np.ndarray, n_sym: int) -> dict:
     effective-MI features of it). Native cpm::measure."""
     from .config import FRAME_SAMPLES, SNR_REF_BW_HZ
 
-    top = E.max(axis=1)
-    n0 = max(np.median(np.sort(E, axis=1)[:, :-1]) / np.log(2), 1e-300)
+    top = E.max(axis=1) / g.k  # a wide grid: per sub-window (spread's noise variance is then approximate)
+    n0 = max(np.median(np.sort(E, axis=1)[:, :-1]) / _noise_median(g.k), 1e-300)
     snr = np.maximum(top / n0 - 1, 1e-6)
     es = max(float(np.mean(top) - n0), 1e-12)
     return dict(snr_est=10 * np.log10(es / n0 * g.rate / SNR_REF_BW_HZ), spread_est=spread(g, top, n0), delay_est_ms=0.0,
@@ -1035,11 +1172,13 @@ def receive(x: np.ndarray, lock: dict) -> dict:
     g = GRIDS[lock["band"]]
     s0, cfo = refine(g, x, lock["start"], lock["cfo"], lock["spec"], lock["n_data"], lock["dup"])
     soft_, E = soft(g, lock["spec"], x, s0, cfo, lock["n_data"], lock["dup"])
-    Z = bins(g, x, s0, layout(g.name, stream_symbols(g.name, lock["n_data"], lock["dup"])).n, cfo)
     r = dict(family="cpm", spec=lock["spec"], band=g.name, n_cw=len(soft_), n_ctl_slots=1 + lock["dup"],
-             dup=lock["dup"], soft=soft_, E=E, Z=Z, cfo=lock["cfo"], preamble_start=lock["start"],
+             dup=lock["dup"], soft=soft_, E=E, cfo=lock["cfo"], preamble_start=lock["start"],
              header_end=lock.get("header_end"))
-    if COH_CTL:  # the control slots on the coherent metric (sync and header rows known, the rest square-law decided)
+    if not coherent(g):  # the square law alone (no Z: arq.phy's DD stays off)
+        return r
+    r["Z"] = bins(g, x, s0, layout(g.name, stream_symbols(g.name, lock["n_data"], lock["dup"])).n, cfo)
+    if COH_CTL and g.name not in COH_CTL_OFF:  # the control slots on the coherent metric (sync and header rows known, the rest square-law decided)
         for s in range(r["n_ctl_slots"]):
             soft_[s] = dd_soft(r, dd_metric(r, {}, s), s)
     return r
@@ -1057,6 +1196,27 @@ def receive(x: np.ndarray, lock: dict) -> dict:
 
 COH_W = 8  # coh_metric's channel window for data (+- rows, the row left out): best of 1-64 on fading
 COH_HDR_W = 4  # the header's (front + copy: ~22 rows)
+# The wide grids: rows are sub-windows (each starts at the same carrier phase too: a tone turns whole cycles in
+# 1 / rate), so the channel is tracked across a symbol's sub-windows as across symbols, and a channel that turns
+# within the symbol falls back to the sub-windows' energy sum by the metric's own model. A row's estimate leaves
+# out its whole symbol. Windows in sub-window rows, +- (data, header): c16w125 64 ms, c8w50 160 / 80 ms, about
+# their on-air neighbours' in time (c32r62 128 / 64 ms, c8r50 160 / 80). scripts/wide_fsk_study.py cohw, genie
+# lock, 80 trials near the square law's 10% points, decoded data at W 4 / 8 / 16 / 32 (square law): c16w125 awgn
+# 1.00 1.00 0.96 0.70 (0.00), hilat-m 0.93 0.90 0.78 0.75 (0.62), mpp / nvis-d / hilat-d flat; c8w50 flat at
+# 0.99-1.00, its control best at 8-16 (awgn 0.62 0.75 0.81 0.65, square law 0.00).
+WIDE_COH_W = {"c16w125": (8, 8), "c8w50": (8, 4)}
+COH_CTL_OFF: set = set()  # grids whose control codeword stays on the square law
+
+
+def coherent(g: Grid) -> bool:
+    """The coherent paths (lock, control, DD) read grid g: every on-air grid;
+    a wide grid unless it drops sub-windows (the rows must be evenly spaced)."""
+    return g.L == 1 or g.guard == 0
+
+
+def _coh_w(g: Grid, hdr: bool = False) -> int:
+    """coh_metric's window for g, in its rows."""
+    return (COH_HDR_W if hdr else COH_W) if g.L == 1 else WIDE_COH_W[g.name][hdr]
 # Lock gates on coh_read_header's scale (one copy, both), grids calibrated:
 # 6000 noise windows' maxima (26.2, 33.3); (32, 36) gave 1 false lock in 8 h
 # on noise and on own-grid traffic, (34, 38) none in 16 h of either
@@ -1072,7 +1232,10 @@ COH_HDR_W = 4  # the header's (front + copy: ~22 rows)
 # coh_lock_cal.py, 6000 windows a grid; runs/cohcal).
 # Per grid: (score one copy, both, margin one copy, both).
 COH_LOCK = ({"c16r25": (34.0, 38.0, HDR_MARGIN[0], HDR_MARGIN[1]), "c8r50": (36.0, 40.0, 14.0, HDR_MARGIN[1]),
-             "c32r62": (36.0, 42.0, HDR_MARGIN[0], HDR_MARGIN[1])}
+             "c32r62": (36.0, 42.0, HDR_MARGIN[0], HDR_MARGIN[1]),
+             # the wide grids: 3000 noise hops' maxima (22.7, 28.6) and (22.8, 28.9) (wide_fsk_study.py cohcal);
+             # no traffic false-lock runs yet
+             "c16w125": (30.0, 34.0, HDR_MARGIN[0], HDR_MARGIN[1]), "c8w50": (30.0, 34.0, HDR_MARGIN[0], HDR_MARGIN[1])}
             if os.environ.get("DATA2G_CPM_COH_LOCK", "1") == "1" else {})
 # The coherent reading runs only where the noncoherent score reaches this (one
 # copy, both): run at every detect placement it doubled listening CPU on the
@@ -1091,22 +1254,30 @@ COH_CTL = os.environ.get("DATA2G_CPM_COH_CTL", "1") == "1"
 
 
 def bins(g: Grid, x: np.ndarray, start: int, n_sym: int, cfo: float) -> np.ndarray:
-    """(n_sym, m) complex tone bins from `start`, CFO removed: _energies before the square."""
+    """(n_sym, m) complex tone bins from `start`, CFO removed: _energies
+    before the square. A wide grid: (n_sym, L, m), each sub-window's."""
     T = g.T
     idx = start + np.arange(n_sym * T)
     seg = np.where((idx >= 0) & (idx < len(x)), x[np.clip(idx, 0, len(x) - 1)], 0.0)
     z = seg * np.exp(-2j * np.pi * (g.f0 + cfo) * idx / FS)
+    if g.L > 1:
+        return np.fft.fft(z.reshape(n_sym, g.L, g.nsub), axis=2)[:, :, :g.m]
     return np.fft.fft(z.reshape(n_sym, T), axis=1)[:, :g.m]
 
 
-def coh_metric(Z: np.ndarray, P: np.ndarray, W: int, n0: float) -> np.ndarray:
+def coh_metric(Z: np.ndarray, P: np.ndarray, W: int, n0: float, L: int = 1) -> np.ndarray:
     """(n, m) complex bins of consecutive rows and P (n, m) the probability
     of each tone sent (one-hot where known) -> (n, m) tone log-likelihoods,
     coherent: Z_k = h_i + CN(0, N0 + s2) on the sent tone, noise alone
     elsewhere, h_i = sum over rows j != i within +-W of sum_k P_j(k) Z_j[k],
     s2 its error (the residual's mean less N0). The residual timing's
     per-tone phase ramp and the residual CFO come out first, from the
-    decided tones' consecutive pairs weighted by their probabilities."""
+    decided tones' consecutive pairs weighted by their probabilities.
+    L > 1 (a wide grid): Z's rows are sub-windows, L a symbol, P a row per
+    symbol; h_i leaves out row i's whole symbol (its tone is the unknown),
+    and a symbol's rows' log-likelihoods are summed: (n / L, m)."""
+    if L > 1:
+        P = np.repeat(P, L, axis=0)
     n, m = Z.shape
     r = np.arange(n)
     t = P.argmax(axis=1)
@@ -1123,22 +1294,27 @@ def coh_metric(Z: np.ndarray, P: np.ndarray, W: int, n0: float) -> np.ndarray:
     Z = Z * np.exp(2j * np.pi * delta * np.arange(m))[None] * np.exp(-1j * nu * r)[:, None]
     a = (P * Z).sum(axis=1)
     k = np.ones(2 * W + 1)
-    k[W] = 0.0
-    h = np.convolve(a, k, "same") / np.maximum(np.convolve(np.ones(n), k, "same"), 1)
+    if L == 1:
+        k[W] = 0.0
+        h = np.convolve(a, k, "same") / np.maximum(np.convolve(np.ones(n), k, "same"), 1)
+    else:
+        own = np.repeat(a.reshape(-1, L).sum(axis=1), L)
+        h = (np.convolve(a, k, "same") - own) / np.maximum(np.convolve(np.ones(n), k, "same") - L, 1)
     v = max(float(np.mean((P * _sq(Z - h[:, None])).sum(axis=1))), n0 * (1 + 1e-3))
-    return _sq(Z) / n0 - _sq(Z - h[:, None]) / v
+    M = _sq(Z) / n0 - _sq(Z - h[:, None]) / v
+    return M if L == 1 else M.reshape(-1, L, m).sum(axis=1)
 
 
-def _n0(E: np.ndarray) -> float:
-    """tone_metric's noise level: all but each row's strongest tone, exponential."""
-    return max(float(np.median(np.sort(E, axis=1)[:, :-1])) / np.log(2), 1e-30)
+def _n0(E: np.ndarray, k: int = 1) -> float:
+    """tone_metric's noise level: all but each row's strongest tone, exponential (k sub-windows summed: gamma)."""
+    return max(float(np.median(np.sort(E, axis=1)[:, :-1])) / _noise_median(k), 1e-30)
 
 
 def _coh_run_llr(g: Grid, Z: np.ndarray, t: np.ndarray, n0: float) -> np.ndarray:
     """Per-row tone_llr of known tones t over a run of consecutive rows, on coh_metric."""
-    P = np.zeros(Z.shape)
+    P = np.zeros((len(t), g.m))
     P[np.arange(len(t)), t] = 1.0
-    L = coh_metric(Z, P, COH_HDR_W, n0)
+    L = coh_metric(Z.reshape(-1, g.m), P, _coh_w(g, True), n0, g.L)
     L = L - np.logaddexp.reduce(L, axis=1, keepdims=True) + np.log(g.m)
     L = np.logaddexp(np.log1p(-LLR_EPS) + L, np.log(LLR_EPS))
     return L[np.arange(len(t)), t]
@@ -1151,7 +1327,7 @@ def coh_read_header(g: Grid, x: np.ndarray, s0: int, cfo: float, copies: int = H
     words, rows = valid_words(g.name), header_rows(g.name, copies)
     n = max(r[-1] for r in rows) + 1
     Z = bins(g, x, s0, n, cfo)
-    n0 = _n0(_sq(Z))
+    n0 = _n0(_sq(Z).reshape(-1, g.m))
     f, mb, H = preamble_pattern(g), mid_block(g), hdr_len(g)
     F = len(f)
     scores, front = [], 0.0
@@ -1206,9 +1382,11 @@ def dd_metric(r: dict, post: dict, slot: int) -> np.ndarray:
     n_data, dup = r["n_cw"] - r["n_ctl_slots"], r["dup"]
     lay = layout(g.name, stream_symbols(g.name, n_data, dup))
     rows = slot_rows(g, n_data, dup)
-    a, b = max(0, rows[slot][0] - COH_W), min(lay.n, rows[slot][-1] + 1 + COH_W)
+    W = _coh_w(g)
+    ws = -(-W // g.L)  # the window in symbols
+    a, b = max(0, rows[slot][0] - ws), min(lay.n, rows[slot][-1] + 1 + ws)
     Z = r["Z"][a:b]
-    E = _sq(Z)
+    E = _sq(Z) if g.L == 1 else _sq(Z).sum(axis=1)
     G = tone_metric(g, E)
     P = np.exp(G - G.max(axis=1, keepdims=True))
     P /= P.sum(axis=1, keepdims=True)
@@ -1228,7 +1406,7 @@ def dd_metric(r: dict, post: dict, slot: int) -> np.ndarray:
         q = np.exp(lp - lp.max(axis=1, keepdims=True))
         q /= q.sum(axis=1, keepdims=True)
         P[rr[keep][:, None] - a, gray[None]] = q  # value v on tone gray(v)
-    return coh_metric(Z, P, COH_W, _n0(E))[rows[slot] - a]
+    return coh_metric(Z.reshape(-1, g.m), P, W, _n0(E, g.k) if g.L > 1 else _n0(E), g.L)[rows[slot] - a]
 
 
 def dd_soft(r: dict, metric: np.ndarray, slot: int) -> np.ndarray:

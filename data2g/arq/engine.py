@@ -39,7 +39,7 @@ from . import nod as N
 from . import phy as PHY
 from . import session as S
 from .modes import MODES, burst_seconds
-from .policy import CONNECT, ROBUST_CONNECT, GearShifter
+from .policy import CONNECT, ROBUST_CONNECT, ROBUST_CONNECTS, GearShifter
 
 log = logging.getLogger("data2g.engine")
 
@@ -81,8 +81,8 @@ ID_INTERVAL_S = 600.0
 # Scanners hold a frequency on PENDING. The header carries no frame type,
 # so ID, CQ and other stations' connects in those modes raise it too
 # (docs/pending-header.md: a protocol change that would not).
-PENDING_MODES = {"off": frozenset(), "fsk": frozenset({ROBUST_CONNECT}), "ofdm": frozenset(CONNECT.values()),
-                 "all": frozenset({ROBUST_CONNECT, *CONNECT.values()})}
+PENDING_MODES = {"off": frozenset(), "fsk": frozenset(ROBUST_CONNECTS), "ofdm": frozenset(CONNECT.values()),
+                 "all": frozenset({*ROBUST_CONNECTS, *CONNECT.values()})}
 PENDING_SLACK_S = 3.0
 ID_GUARD_S = S.REPLY_START_S
 # CW ID (docs/arq.md §7b), Engine.cw_id: "off", ID frames only; "add", a CW
