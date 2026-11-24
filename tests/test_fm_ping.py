@@ -148,3 +148,15 @@ def test_probe_survives_sample_clock_offset(up, down):
     y = y + np.random.default_rng(0).normal(0, 0.01, len(y))
     m = PR.summary(PR.analyse(y), PG.level(0.1 * y))
     assert m["snr"][PR.REF] - m["snr"][4] > 10, m["snr"]
+
+
+@pytest.mark.parametrize("heard", [0.0, 0.5])
+def test_exact_zeros_in_the_window_still_report(heard):
+    """A digital squelch, a dropped block or the history's gap over our own
+    transmission puts exact zeros in the probe's window: 0 dB there, a
+    report that packs (0/0 stopped the host)."""
+    y = PR.waveform("flat", 1.0) + np.random.default_rng(0).normal(0, 0.01, PR.n_samples())
+    y[int(heard * len(y)):] = 0.0
+    m = PR.summary(PR.analyse(y), PG.level(0.1 * y))
+    assert np.isfinite([m[k] for k in ("snr_nb", "snr_top", "snr_tilt", "noise_tilt")] + m["snr"] + m["sinad"]).all(), m
+    assert m["snr"][-1] == 0.0 and len(PR.pack_report(m)) == PR.REPORT_BYTES

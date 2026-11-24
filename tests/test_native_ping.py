@@ -65,3 +65,11 @@ def test_measure(native, pure, radio, path, hot):
     np.testing.assert_allclose(got["snr"], want["snr"], atol=1e-6)
     np.testing.assert_allclose(got["sinad"], want["sinad"], atol=1e-6)
     assert native.probe.pack_report(got) == PR.pack_report(want)
+
+
+@pytest.mark.parametrize("heard", [0.0, 0.5])
+def test_measure_exact_zeros(native, pure, heard):
+    y = PR.waveform("flat", 1.0) + np.random.default_rng(0).normal(0, 0.01, PR.n_samples())
+    y[int(heard * len(y)):] = 0.0
+    lvl = PG.level(0.1 * y)
+    assert native.probe.pack_report(native.probe.measure(y, lvl)) == PR.pack_report(PR.summary(PR.analyse(y), lvl))

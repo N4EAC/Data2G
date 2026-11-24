@@ -1136,7 +1136,7 @@ void Engine::hand_send(int ref, int tag, double d_s, int channel, std::uint64_t 
     const auto first = static_cast<std::int64_t>(std::nearbyint((it->second.end + d_s - tx_latency_) * config::FS)) - ptt_delay_;
     if (first < n_) throw std::invalid_argument("the slot has passed");
     std::vector<double> audio(static_cast<std::size_t>(ptt_delay_), 0.0);
-    const auto x = hand::tx_audio(tag, payload, channel, it->second.cfo);
+    const auto x = tone_scale(hand::tx_audio(tag, payload, channel, it->second.cfo));
     audio.insert(audio.end(), x.begin(), x.end());
     hand_tx_ = HandTx{first, std::move(audio), channel};
 }
@@ -1572,7 +1572,7 @@ void Engine::start_tx(const std::vector<TxBurstPtr>& bursts, double t, const TxB
     std::vector<std::size_t> lens;
     for (const auto& b : bursts) {
         if (b->submode == "cw") {  // built at the bursts' peak; not the tx_audio seam's (a Python phy.tx_audio)
-            const auto x = cwid::audio(b->cw_text, b->cw_wpm);
+            const auto x = tone_scale(cwid::audio(b->cw_text, b->cw_wpm));
             tx.audio.insert(tx.audio.end(), x.begin(), x.end());
             lens.push_back(x.size());
             continue;

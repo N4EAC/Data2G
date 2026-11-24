@@ -385,7 +385,7 @@ class Engine:
         target = int(round((end + d_s - self.tx_latency_s) * FS)) - self.ptt_delay
         if target < self.n:
             raise ValueError("the slot has passed")
-        audio = np.concatenate([np.zeros(self.ptt_delay), hand.tx_audio(tag, payload, channel, cfo)])
+        audio = np.concatenate([np.zeros(self.ptt_delay), PHY.tone_scale(hand.tx_audio(tag, payload, channel, cfo))])
         self._hand_tx = [target, audio, channel]
 
     def hand_listen(self, d_s: float, tag: int, ack: int, channels: list[int]):
@@ -1119,7 +1119,7 @@ class Engine:
         # A CW ID is built at that peak.
         xs = [cwid.audio(b.text, b.wpm) if isinstance(b, cwid.CwBurst) else PHY.tx_audio(b) for b in bursts]
         audio = np.concatenate([np.zeros(self.ptt_delay)] + [
-            x if isinstance(b, cwid.CwBurst) else PHY.full_scale(x) for b, x in zip(bursts, xs)])
+            PHY.tone_scale(x) if isinstance(b, cwid.CwBurst) else PHY.full_scale(x) for b, x in zip(bursts, xs)])
         self._cw_plan(bursts, [len(x) for x in xs], t)
         self.tx = [main, audio, 0]
         if self.rec:

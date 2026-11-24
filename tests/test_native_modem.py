@@ -206,8 +206,10 @@ def test_windowed_data_channel_matches(native, py):
     est = py.data_channel(hp, (-3, 20), "w48", 0.1, None, None, n_air)
     nest = native.modem.data_channel(hp, (-3, 20), "w48", 0.1, None, None, n_air)
     assert est["n0_k"].shape == (n_air, 1, nc) and nest["n0_k"].shape == est["n0_k"].shape
-    for k in ("h", "mse", "n0_k", "n0", "gain", "clip_ratio"):
+    for k in ("h", "mse", "n0_k", "n0", "n0_snr", "p_sig", "spread_hz", "gain", "clip_ratio"):
         close(nest[k], est[k], 1e-8)
+    whole = py.data_channel(hp[:config.EST_WINDOW + 2], (-3, 20), "w48", 0.1, None, None, n_air)
+    assert est["n0_snr"] != whole["n0_snr"]  # every window's, not the first's
 
 
 @pytest.mark.parametrize("name,n_cw,snr,preset", RX_CASES)

@@ -147,6 +147,14 @@ std::uint32_t mask_value(const MaskId& m) {
     return v ? v : 1;
 }
 
+std::vector<double> tone_scale(std::vector<double> x) {
+    if constexpr (config::PROFILE == "fm") {
+        const double g = std::sqrt(2.0) / config::FM_TX_PEAK;
+        for (double& v : x) v *= g;
+    }
+    return x;
+}
+
 std::vector<double> full_scale(std::vector<double> x) {
     if constexpr (config::PROFILE == "fm") {
         for (double& v : x) v = std::clamp(v / config::FM_TX_PEAK, -1.0, 1.0);

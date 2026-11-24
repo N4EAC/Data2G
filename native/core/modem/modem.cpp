@@ -1065,7 +1065,7 @@ DataEstimate data_channel(const Mat<cd>& h_pilot, equalizer::Support support, st
     DataEstimate est;
     std::vector<cd> h;
     std::vector<double> mse, n0_k;
-    double n0 = 0, p_sig = 0, spread = 0;
+    double n0 = 0, n0_snr = 0, p_sig = 0, spread = 0;
     int parts = 0;
     for (int a = 0; a < n_air; a += W) {
         const int lo = std::max(0, a - 1), hi = std::min(n_air, a + W + 1), count = std::min(W, n_air - a);
@@ -1078,7 +1078,7 @@ DataEstimate data_channel(const Mat<cd>& h_pilot, equalizer::Support support, st
                    e.mse.data.begin() + static_cast<std::ptrdiff_t>(r1));
         for (int f = 0; f < count; ++f)
             for (size_t k = 0; k < nc; ++k) n0_k.push_back(e.n0_k.empty() ? e.n0 : e.n0_k[k]);
-        n0 += e.n0, p_sig += e.p_sig, spread += e.spread_hz, ++parts;
+        n0 += e.n0, n0_snr += e.n0_snr, p_sig += e.p_sig, spread += e.spread_hz, ++parts;
         if (a == 0) est = std::move(e);  // the rest of the fields: the first window's (Python's dict(parts[0]))
     }
     est.h = Mat<cd>(h.size() / nc, nc);
@@ -1086,7 +1086,7 @@ DataEstimate data_channel(const Mat<cd>& h_pilot, equalizer::Support support, st
     est.mse = Mat<double>(mse.size() / nc, nc);
     est.mse.data = std::move(mse);
     est.n0_k = std::move(n0_k);
-    est.n0 = n0 / parts, est.p_sig = p_sig / parts, est.spread_hz = spread / parts;
+    est.n0 = n0 / parts, est.n0_snr = n0_snr / parts, est.p_sig = p_sig / parts, est.spread_hz = spread / parts;
     est.n_f = n_air;
     return est;
 }

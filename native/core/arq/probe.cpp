@@ -37,7 +37,8 @@ std::pair<double, double> band_hz(const std::string& name) {
     return {static_cast<double>(f.front()), static_cast<double>(f.back())};
 }
 
-double db(double x) { return 10.0 * std::log10(std::max(x, 1e-30)); }
+// probe.py _db: each floored, so a stretch of exact zeros is 0 dB, not 0/0
+double db(double s, double n = 1.0) { return 10.0 * std::log10(std::max(s, 1e-30) / std::max(n, 1e-30)); }
 
 std::string f1(double v) {
     char b[32];
@@ -229,7 +230,7 @@ Report measure(std::span<const double> y, const ping::Level& lvl) {
     int r = SETTLE + SOUND_MEAS;
     for (std::size_t i = 0; i < STEPS_DB.size(); ++i) {
         const Stretch s = stretch(F, r + SETTLE - GUARD, MEAS, L.stair_tones, L.stair_holes);
-        m.snr[i] = db(sum(s.sig) / sum(s.noise));
+        m.snr[i] = db(sum(s.sig), sum(s.noise));
         m.sinad[i] = sinad_db(s);
         r += SETTLE + MEAS;
     }
@@ -237,7 +238,7 @@ Report measure(std::span<const double> y, const ping::Level& lvl) {
     std::vector<double> f(nt), snr(nt);
     for (std::size_t i = 0; i < nt; ++i) {
         f[i] = L.tones[i] * bin_hz();
-        snr[i] = 10.0 * std::log10(std::max(sd.sig[i], 1e-30) / std::max(sd.noise[i], 1e-30));
+        snr[i] = db(sd.sig[i], sd.noise[i]);
     }
     const auto [lo, hi] = band_hz(STAIR_BAND);
     std::vector<std::size_t> nb;
@@ -268,16 +269,16 @@ Report measure(std::span<const double> y, const ping::Level& lvl) {
     for (std::size_t i = 0; i < nt; ++i)
         if (f[i] >= w_hi - (w_hi - w_lo) / 3 && f[i] <= w_hi) ts += sd.sig[i], tn += sd.noise[i];
     for (auto i : nb) ns += sd.sig[i], nn += sd.noise[i];
-    m.snr_nb = db(ns / nn);
-    m.snr_top = db(ts / tn);
+    m.snr_nb = db(ns, nn);
+    m.snr_top = db(ts, tn);
     // np.array_split(nb, 3): the first len % 3 parts one longer
     const std::size_t n3 = nb.size() / 3, r3 = nb.size() % 3;
     const std::size_t len0 = n3 + (r3 > 0), len2 = n3, start2 = nb.size() - len2;
     double s0 = 0, n0 = 0, s2 = 0, n2 = 0;
     for (std::size_t k = 0; k < len0; ++k) s0 += sd.sig[nb[k]], n0 += sd.noise[nb[k]];
     for (std::size_t k = start2; k < nb.size(); ++k) s2 += sd.sig[nb[k]], n2 += sd.noise[nb[k]];
-    m.snr_tilt = db(s0 / n0) - db(s2 / n2);
-    m.noise_tilt = db((n2 / static_cast<double>(len2)) / (n0 / static_cast<double>(len0)));
+    m.snr_tilt = db(s0, n0) - db(s2, n2);
+    m.noise_tilt = db(n2 / static_cast<double>(len2), n0 / static_cast<double>(len0));
     m.rms_dbfs = lvl.rms_dbfs;
     m.peak_dbfs = lvl.peak_dbfs;
     m.clip_permille = lvl.clip_permille;

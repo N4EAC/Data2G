@@ -49,3 +49,18 @@ def test_through_the_fm_channel(name, radio):
     y = fmchannel.apply_channel(x, 36.0, "static", radio, seed=3, drive_dev_hz=drive)
     b = _decoded(y, spec)
     assert b.payloads == sent and all(b.crc_ok)
+
+
+@pytest.mark.skipif(config.EST_WINDOW == 0, reason="per-window channel estimates only (config.EST_WINDOW)")
+def test_snr_est_reads_the_whole_bursts_noise():
+    """A burst of several estimate windows whose noise rises 10 dB after the
+    first: snr_est's noise is every window's, as the decoder's is (it was the
+    first window's alone, 6 dB optimistic here)."""
+    spec = SUBMODES["f55-qpsk-r21"]
+    rng = np.random.default_rng(1)
+    assert modem.frames_on_air(spec, 6) > 3 * config.EST_WINDOW
+    x = modem.modulate([rng.bytes(codes.payload_bytes(spec)) for _ in range(6)], spec)
+    noise = rng.normal(0, 0.05, len(x))
+    noise[len(x) * 2 // 5:] *= 10 ** 0.5
+    est = modem.receive(x + noise)["est"]
+    assert abs(10 * np.log10(est["n0_snr"] / est["n0"])) < 1.0
