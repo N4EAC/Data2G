@@ -187,7 +187,13 @@ SPECS = {s.name: s for g in GRIDS.values() for s in (
 # + 2 x duplicated, so 2 and 3 are r1/3's and r1/2's duplicated-control words;
 # 4 (6 duplicated) is free, and every older word reads as before. Last in
 # SPECS: arq.modes' recommendation codes go by SPECS' order.
-SPECS["fsk32r62-r2/3"] = CpmSpec("fsk32r62-r2/3", "c32r62", 4, "gf", 640, DATA_N)
+# DATA2G_CPM_R23=1 (studies): offered. Unset: not a mode (today's six, their
+# header words, and the native tables generated from them); the outcome
+# model has no row for it either way (scripts/cnp_outcome.py --add).
+R23_SPEC = CpmSpec("fsk32r62-r2/3", "c32r62", 4, "gf", 640, DATA_N)
+R23 = os.environ.get("DATA2G_CPM_R23", "0") not in ("0", "off", "")
+if R23:
+    SPECS[R23_SPEC.name] = R23_SPEC
 CTL = {g: CpmSpec(f"{_grid_name(GRIDS[g])}-ctl", g, -1, "polar", CTL_K, CTL_N) for g in GRIDS}
 
 
@@ -592,48 +598,110 @@ def detect(g: Grid, x: np.ndarray, reach_hz: float = 150.0, fine=True, front_onl
     return score, s0, cfo
 
 
+# One N0 for every tone lets a steady carrier in the passband (QRM: a
+# broadcast carrier, a birdie, another mode's idle tone) win its tone in
+# every symbol: the square law reads it as signal, and coh_metric, which
+# looks for a constant phasor, more so. A tone carries signal in ~1/m of a
+# codeword's rows, so its median energy over the rows is its own floor.
+# tone_floors() gives it to tone_metric and coh_metric once it stands
+# FLOOR_SIGMAS standard errors (a median of n exponentials: 1.44 / sqrt(n),
+# relative) over the tones' median floor; with no such tone both are as
+# before. On noise alone a tone passes in under 1 of 1000 calls at 6 (8, 16
+# and 32 tones; 22, 90 and 240 rows: a header read, a control, a data
+# codeword); at 5, up to 6 of 1000.
+FLOOR_SIGMAS = 6.0
+
+
+def tone_floors(E: np.ndarray, n0: float) -> np.ndarray | None:
+    """(n, m) tone energies and the common N0 -> (m,) per-tone noise floors,
+    or None where no tone's median stands out (FLOOR_SIGMAS): N0, times the
+    tone's median over the tones' median where it does."""
+    med = np.median(E, axis=0)
+    ref = np.median(med)
+    out = med > ref * (1 + FLOOR_SIGMAS * 1.44 / np.sqrt(len(E)))
+    if not out.any():
+        return None
+    return np.where(out, n0 * (med / ref), n0)
+
+
+def _tone_gain(E: np.ndarray, use: str = "lock") -> tuple:
+    """tone_metric's (gain, offset): E * gain - offset. One N0: the square
+    law's Es / (N0 (N0 + Es)) and None; per-tone floors (tone_floors): (m,)
+    gains Es / (N_m (N_m + Es)) and offsets ln(1 + Es / N_m), which are a
+    per-symbol constant only when the floors are equal. `use`: SPILL's."""
+    top = E.max(axis=1)
+    n0 = np.median(np.sort(E, axis=1)[:, :-1]) / np.log(2)  # exponential: median = N0 ln 2
+    n0 = max(n0, 1e-12 * np.mean(top) + 1e-300)  # noise-free tests
+    nb = tone_floors(E, n0)
+    if nb is not None:
+        Ew = E * (n0 / nb)  # whitened, for Es and the spill: the carrier's tone is not the strongest by itself
+        es = max(np.mean(Ew.max(axis=1)) - n0, 1e-3 * n0)
+        nb = nb + SPILL[use] * spill(Ew, n0, es) * es
+        return es / (nb + es) / nb, np.log1p(es / nb)
+    es = max(np.mean(top) - n0, 1e-3 * n0)
+    n0 += SPILL[use] * spill(E, n0, es) * es
+    # es / (n0 (n0 + es)) without its underflow: a codeword past the audio's
+    # end (zero-padded: a header claiming more than arrived) reads as erasures
+    return es / (n0 + es) / n0, None
+
+
 def tone_metric(g: Grid, E: np.ndarray, use: str = "lock") -> np.ndarray:
     """(n_sym, m) tone energies of one codeword -> (n_sym, m) log P(E | tone
     sent) up to a per-symbol constant. Noncoherent square-law metric, exact
     for Rayleigh fading: E_m g, g = Es / (N0 (N0 + Es)), Es and N0 the
-    codeword's, N0 plus the Doppler spill (spill())."""
-    top = E.max(axis=1)
-    n0 = np.median(np.sort(E, axis=1)[:, :-1]) / np.log(2)  # exponential: median = N0 ln 2
-    n0 = max(n0, 1e-12 * np.mean(top) + 1e-300)  # noise-free tests
-    es = max(np.mean(top) - n0, 1e-3 * n0)
+    codeword's, N0 plus the Doppler spill (spill()); a tone whose own floor
+    stands out of N0 (tone_floors: a carrier) is scored against that floor.
+    `use`: the consumer (SPILL's weight; LEAK's on leak_metric)."""
     if use in LEAK:
-        return leak_metric(E, n0, es, LEAK_K)
-    n0 += SPILL[use] * spill(E, n0, es) * es
-    # es / (n0 (n0 + es)) without its underflow: a codeword past the audio's
-    # end (zero-padded: a header claiming more than arrived) reads as erasures
-    return E * (es / (n0 + es) / n0)
+        return leak_metric(E, LEAK_K)
+    gain, off = _tone_gain(E, use)
+    return E * gain if off is None else E * gain - off
 
 
-def leak_metric(E: np.ndarray, n0: float, es: float, k: float) -> np.ndarray:
+def _spill_level(E: np.ndarray) -> tuple:
+    """(N0, per-tone floors or None, Es, spill()): Es and the spill on the
+    energies whitened by the floors where a tone has its own, as _tone_gain's."""
+    top = E.max(axis=1)
+    n0 = np.median(np.sort(E, axis=1)[:, :-1]) / np.log(2)
+    n0 = max(n0, 1e-12 * np.mean(top) + 1e-300)
+    nb = tone_floors(E, n0)
+    Ew = E if nb is None else E * (n0 / nb)
+    es = max(np.mean(Ew.max(axis=1)) - n0, 1e-3 * n0)
+    return n0, nb, es, spill(Ew, n0, es)
+
+
+def leak_metric(E: np.ndarray, k: float) -> np.ndarray:
     """tone_metric with the Doppler spill as part of the signal, not as noise:
-    under tone t the bins t - 1 and t + 1 hold a = spill() of Es over the
+    under tone t the bins t - 1 and t + 1 hold a = spill() of Es over their
     noise (independent exponentials: the leak comes of the channel's change
-    over the symbol, the tone of its mean), so log P(E | t) up to a row
-    constant is E_t (1/N - 1/(N + Es)) + (E_t-1 + E_t+1) (1/N - 1/(N + a Es))
-    - ln(1 + a Es / N) per neighbour inside the grid: energy beside a tone
-    counts for it, and two adjacent tones are told apart on the scale of the
-    spill, far ones on the noise's. N = N0 + k a Es: what the model leaves out
-    (bins further off, the neighbouring symbols' tones through a delayed
-    path) is the signal's own too; with k = 0 the confidence grows with SNR
-    as #244's did (fsk32r62-r2/3, hilat-d: 100% decoded at PEP cell 2 dB,
-    30% at 18). a = 0 (AWGN, slow fading): the square law exactly.
-    scripts/spill_study.py (2026-11-23)."""
-    a = spill(E, n0, es)
-    n0 = n0 + k * a * es
-    return es / (n0 + es) / n0 * E + _leak_sides(E, n0, a * es)
+    over the symbol, the tone of its mean), so with N_m tone m's noise
 
+        log P(E | t) = E_t (1/N_t - 1/(N_t + Es)) - ln(1 + Es / N_t)
+                       + sum over t' = t - 1, t + 1 inside the grid of
+                         E_t' (1/N_t' - 1/(N_t' + a Es)) - ln(1 + a Es / N_t')
 
-def _leak_sides(E: np.ndarray, n0: float, leak: float) -> np.ndarray:
-    """leak_metric's neighbour terms: per tone, its two neighbours' energies as bins of mean n0 + leak under it."""
-    P = np.pad(E, ((0, 0), (1, 1)))
-    inside = np.ones(E.shape[1] + 2)
-    inside[[0, -1]] = 0.0
-    return leak / (n0 + leak) / n0 * (P[:, :-2] + P[:, 2:]) - np.log1p(leak / n0) * (inside[:-2] + inside[2:])
+    up to a row constant: energy beside a tone counts for it, and two
+    adjacent tones are told apart on the scale of the spill, far ones on the
+    noise's. N_m = tone m's floor + k a Es: what the model leaves out (bins
+    further off, the neighbouring symbols' tones through a delayed path) is
+    the signal's own too; with k = 0 the confidence grows with SNR as #244's
+    did (fsk32r62-r2/3, hilat-d: 100% decoded at PEP cell 2 dB, 30% at 18).
+    a = 0 (AWGN, slow fading): the square law exactly, _tone_gain's.
+
+    The floors are tone_floors' (a carrier): each term is on its own bin's
+    floor, so a carrier's tone gains little as the sent tone (as _tone_gain
+    has it) and as little as a neighbour's leak: its energy is the
+    carrier's under either tone beside it, not evidence for them. Es and a
+    come from the whitened energies, as _tone_gain's, so a carrier's
+    neighbours do not read as spill. scripts/spill_study.py (2026-11-23)."""
+    n0, nb, es, a = _spill_level(E)
+    N = (n0 if nb is None else nb) + k * a * es
+    leak = a * es
+    side = np.pad(E * (leak / (N + leak) / N) - np.log1p(leak / N), ((0, 0), (1, 1)))  # outside the grid: no term
+    own = E * (es / (N + es) / N)
+    if nb is not None:  # the sent tone's offset is a row constant only when the floors are equal
+        own = own - np.log1p(es / N)
+    return own + side[:, :-2] + side[:, 2:]
 
 
 def spill(E: np.ndarray, n0: float, es: float) -> float:
@@ -753,11 +821,13 @@ def refine(g: Grid, x: np.ndarray, s0: int, cfo: float, spec: CpmSpec, n_data: i
     E0 = _energies(g, x, s0, n, cfo)
     tot = E0.sum()
     # the metric's weight fixed at the lock's placement (each candidate's own: 0.2 dB worse, c8r50 AWGN)
-    w = float(tone_metric(g, E0).sum() / tot) if tot > 0 else 0.0
+    gain, off = _tone_gain(E0) if tot > 0 else (0.0, None)  # per-tone floors: the tones' own gains and offsets
+    w = float((E0 * gain).sum() / tot) if tot > 0 and off is None else 0.0
     T, N = g.T, n * g.T
 
     def ll(z):  # the likelihood of n symbols of mixed samples, as _energies(...) * w would score them
-        G = _sq(np.fft.fft(z.reshape(n, T), axis=1)[:, :g.m]) * w
+        G = _sq(np.fft.fft(z.reshape(n, T), axis=1)[:, :g.m])
+        G = G * w if off is None else G * gain - off
         return G[kr, known[kr]].sum() + np.logaddexp.reduce(G[ur], axis=1).sum()
     best, bv = (s0, cfo), None
     for st, sf in ((max(1, g.T // 16), g.rate / 16), (max(1, g.T // 64), g.rate / 64)):
@@ -847,14 +917,31 @@ def measure(g: Grid, E: np.ndarray, n_sym: int) -> dict:
     OFDM: SNR in the 2500 Hz reference, Doppler spread (spread(), from the
     winning tone's energy over time), and `snr`, per symbol, from the
     winning tone's energy over the noise bins (phy.measure makes the
-    effective-MI features of it). Native cpm::measure."""
+    effective-MI features of it). With a carrier (tone_floors), snr_est
+    reads the tones scaled down to the quietest quarter's floor, Es back up
+    by the share kept: fsk16r25 -8 dB reads +0.1 dB at a carrier 12 dB in
+    50 Hz, -0.5 at 18, -3 at 24, where the carrier read as signal read
+    +2.3, +5.8, +8. Native cpm::measure."""
     from .config import FRAME_SAMPLES, SNR_REF_BW_HZ
 
-    top = E.max(axis=1)
     n0 = max(np.median(np.sort(E, axis=1)[:, :-1]) / np.log(2), 1e-300)
+    top = E.max(axis=1)
     snr = np.maximum(top / n0 - 1, 1e-6)
-    es = max(float(np.mean(top) - n0), 1e-12)
-    return dict(snr_est=10 * np.log10(es / n0 * g.rate / SNR_REF_BW_HZ), spread_est=spread(g, top, n0), delay_est_ms=0.0,
+    es_n0 = max(float(np.mean(top) - n0), 1e-12) / n0
+    if tone_floors(E, n0) is not None:
+        # a carrier: for snr_est only, its tone and the ones it leaks into (under
+        # tone_floors' bar, but they raise the tones' median) each scaled to the
+        # quietest quarter's floor; the signal, ~1/m of every tone's rows, keeps
+        # `kept` of its energy, so Es is scaled back up by that. The per-symbol
+        # snr and the spread stay as read: scaled rows looked like fading and the
+        # gear shifter left c32r62 (-37%, awgn -12, carrier 12 dB)
+        med = np.median(E, axis=0)
+        q = np.quantile(med, 0.25)
+        r = q / np.maximum(med, q)
+        Ew = E * r
+        n0w = max(np.median(np.sort(Ew, axis=1)[:, :-1]) / np.log(2), 1e-300)
+        es_n0 = max(float(np.mean(Ew.max(axis=1)) - n0w) / float(np.mean(r)), 1e-12) / n0w
+    return dict(snr_est=10 * np.log10(es_n0 * g.rate / SNR_REF_BW_HZ), spread_est=spread(g, top, n0), delay_est_ms=0.0,
                 headroom=0.0, frames=max(1.0, n_sym * g.T / FRAME_SAMPLES), snr=snr)
 
 
@@ -1102,10 +1189,7 @@ def ctl_square(g: Grid, E: np.ndarray, slot: int) -> bool:
     if "ctlsq" not in LEAK:
         return False
     n = CTL[g.name].n_sym
-    Es = E[slot * n:(slot + 1) * n]
-    n0 = _n0(Es)
-    es = max(float(np.mean(Es.max(axis=1))) - n0, 1e-3 * n0)
-    return spill(Es, n0, es) >= CTL_SQ
+    return _spill_level(E[slot * n:(slot + 1) * n])[3] >= CTL_SQ
 
 
 # --- coherent detection --------------------------------------------------------------
@@ -1188,8 +1272,13 @@ def coh_metric(Z: np.ndarray, P: np.ndarray, W: int, n0: float) -> np.ndarray:
     k = np.ones(2 * W + 1)
     k[W] = 0.0
     h = np.convolve(a, k, "same") / np.maximum(np.convolve(np.ones(n), k, "same"), 1)
-    v = max(float(np.mean((P * _sq(Z - h[:, None])).sum(axis=1))), n0 * (1 + 1e-3))
-    return _sq(Z) / n0 - _sq(Z - h[:, None]) / v
+    res = _sq(Z - h[:, None])
+    nb = tone_floors(_sq(Z), n0)
+    if nb is not None:  # per-tone floors: Z_k = h_i + CN(0, N_k + s2) on the sent tone, CN(0, N_k) elsewhere
+        s2 = max(float(np.mean((P * (res - nb[None])).sum(axis=1))), n0 * 1e-3)
+        return _sq(Z) / nb - res / (nb + s2) - np.log1p(s2 / nb)
+    v = max(float(np.mean((P * res).sum(axis=1))), n0 * (1 + 1e-3))
+    return _sq(Z) / n0 - res / v
 
 
 def _n0(E: np.ndarray) -> float:
@@ -1291,15 +1380,7 @@ def dd_metric(r: dict, post: dict, slot: int) -> np.ndarray:
         q = np.exp(lp - lp.max(axis=1, keepdims=True))
         q /= q.sum(axis=1, keepdims=True)
         P[rr[keep][:, None] - a, gray[None]] = q  # value v on tone gray(v)
-    n0 = _n0(E)
-    if "coh" in LEAK:
-        # leak_metric's model under the coherent one: coh_metric falls back to the square law at the raw N0
-        # where its channel estimate is poor (fast fading: where the spill is), #244's confidence again
-        es = max(float(np.mean(E.max(axis=1))) - n0, 1e-3 * n0)
-        leak = spill(E, n0, es) * es
-        n0 += LEAK_K * leak
-        return (coh_metric(Z, P, COH_W, n0) + _leak_sides(E, n0, leak))[rows[slot] - a]
-    return coh_metric(Z, P, COH_W, n0)[rows[slot] - a]
+    return coh_metric(Z, P, COH_W, _n0(E))[rows[slot] - a]
 
 
 def dd_soft(r: dict, metric: np.ndarray, slot: int) -> np.ndarray:
