@@ -297,7 +297,8 @@ HDR_MARGIN = (8.0, 4.0)  # the read word's LLR over the runner-up's: one copy, b
 SPILL = {"lock": 1.0, "ctl": 1.0, "data": 1.0, "dd": 1.0}
 SPILL.update({k: float(v) for k, v in (e.split(":") for e in os.environ.get("DATA2G_CPM_SPILL", "").split(",") if e)})
 # DATA2G_CPM_LEAK="ctl,data,dd" (studies): those consumers on leak_metric, not the spill-inflated square law.
-LEAK = frozenset(filter(None, os.environ.get("DATA2G_CPM_LEAK", "").split(",")))
+# On this branch the default is ctl,data,dd,ctlsq; "" or off: the spill-inflated square law, as shipped.
+LEAK = frozenset(filter(None, os.environ.get("DATA2G_CPM_LEAK", "ctl,data,dd,ctlsq").replace("off", "").split(",")))
 LEAK_K = float(os.environ.get("DATA2G_CPM_LEAK_K") or 0.5)  # leak_metric's k
 # "ctlsq" in DATA2G_CPM_LEAK: a control codeword whose rows' spill() is at least this stays on the square law
 # (leak_metric with "ctl"), not COH_CTL's coherent metric: the channel no longer holds from one symbol to the
@@ -682,7 +683,7 @@ class CoarseTrack:
 # true start in 60% / 29%. Placements are distinct: one within a symbol and a tone spacing of a better one is the
 # same peak. DATA2G_CPM_ACQ_SCREEN: a placement after the first goes to the fine stage (45 energy evaluations)
 # only if its pattern's tone_llr at the coarse placement (one evaluation) reaches this; "all:x": the first too.
-ACQ_K = int(os.environ.get("DATA2G_CPM_ACQ_K") or 1)
+ACQ_K = int(os.environ.get("DATA2G_CPM_ACQ_K", "").replace("off", "") or 1)
 _scr = os.environ.get("DATA2G_CPM_ACQ_SCREEN", "")
 ACQ_SCREEN_ALL = _scr.startswith("all:")
 ACQ_SCREEN = float(_scr.split(":")[-1]) if _scr else None

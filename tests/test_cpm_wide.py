@@ -10,14 +10,20 @@ from data2g import codes, cpm
 
 
 def test_toolbox_is_not_on_air():
-    assert set(cpm.GRIDS) == {"c16r25", "c8r50", "c32r62"} and len(cpm.SPECS) == 6 and len(cpm.CTL) == 3
+    # (fast-fading-integration: c8w50 is on air by default, DATA2G_CPM_ONAIR; its specs still have no code)
+    on = set(cpm.ON_AIR_WIDE)
+    assert set(cpm.GRIDS) == {"c16r25", "c8r50", "c32r62"} | on and len(cpm.CTL) == 3 + len(on)
+    assert len(cpm.SPECS) == 6 + cpm.R23 and not set(cpm.SPECS) & set(cpm.WIDE_SPECS)
     for name, g in cpm.WIDE_GRIDS.items():
-        assert name not in cpm.GRIDS and cpm.GRIDS[name] is g and g.L > 1
+        assert (name in cpm.GRIDS) == (name in on) and cpm.GRIDS[name] is g and g.L > 1
         assert g.T == g.L * g.nsub and g.baud * g.T == pytest.approx(8000)
         assert cpm.coherent(g) and not cpm.coherent(replace(g, guard=1))
     from data2g.arq.modes import MODES
 
-    assert not any(n in MODES for n in cpm.WIDE_SPECS)
+    assert {n for n in cpm.WIDE_SPECS if n in MODES} == {n for n, s in cpm.WIDE_SPECS.items() if s.grid in on}
+    from data2g.arq import policy
+
+    assert not any(s.name in cpm.WIDE_SPECS for cap in (0, 1, 2) for s in policy.allowed(cap))
 
 
 @pytest.mark.parametrize("name", list(cpm.WIDE_SPECS))

@@ -24,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .. import cpm as _cpm
 from ..config import SUBMODES
 
 DATA = Path(__file__).parent.parent / "codes_data"
@@ -249,9 +250,16 @@ class OutcomeCNP:
         return np.concatenate([q[..., 0], q[..., 1]], -1).astype(np.float64)
 
 
+# This branch: while fsk32r62-r2/3 is offered (cpm.R23), the default model is the installed one redescribed with
+# its row (outcome_predictor_r23.npz: zero-shot, no data of the mode). DATA2G_OUTCOME_R23=0 (or off): the installed
+# model, which does not know the mode (so it is never recommended).
+R23_MODEL = (_cpm.R23 and os.environ.get("DATA2G_OUTCOME_R23", "1") not in ("0", "off", "")
+             and (DATA / "outcome_predictor_r23.npz").exists())
+DEFAULT_MODEL = str(DATA / ("outcome_predictor_r23.npz" if R23_MODEL else "outcome_predictor.npz"))
+
+
 @lru_cache(maxsize=None)
-def outcome_model(path: str = os.environ.get("DATA2G_OUTCOME_MODEL") or str(DATA / "outcome_predictor.npz")
-                  ) -> OutcomeMlp | None:
+def outcome_model(path: str = os.environ.get("DATA2G_OUTCOME_MODEL") or DEFAULT_MODEL) -> OutcomeMlp | None:
     """The installed model, or DATA2G_OUTCOME_MODEL's file (studies: two
     models side by side, paired, without swapping the installed one)."""
     p = Path(path)

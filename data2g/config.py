@@ -41,7 +41,9 @@ SYMS_PER_FRAME = 6  # 1 pilot + 5 data
 # 6 nc / golden ratio coprime to 6 nc: each carrier once a frame on every band (so n10 and n4 take it), 1-2 fewer
 # or more than nc / 6 a symbol. Other densities are the sequence's other prefixes; only 1/6 keeps a frame's 5 nc
 # data cells, and only it is built.
-PILOTS = os.environ.get("DATA2G_PILOTS", "")
+# On this branch (fast-fading-integration) the default is mix; "" or off: the pilot rows, as on air today.
+PILOTS = os.environ.get("DATA2G_PILOTS", "mix")
+PILOTS = "" if PILOTS == "off" else PILOTS
 SC_LAYOUT, _, _density = PILOTS.partition(":")
 # DATA2G_PILOTS=mix (round 5): the same sequence with a stride per band (modem.SC_STRIDES): k3d2's on w and w48
 # (2 nc + 1: gold's 179 on 48 carriers leaves holes that cost hilat-m a third of its gain), gold's on n10 and n4.

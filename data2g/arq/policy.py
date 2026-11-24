@@ -97,7 +97,7 @@ LINK_HIST = 8  # the link history's window: peer bursts I expected (predictor.N_
 ENERGY_HIST = 4  # the energy inputs' window: the peer's last bursts (predictor.N_ENERGY)
 # per mode, its 10% codeword failure SNR on awgn, mpg, mpp, mpd (codes_data/mode_thresholds.json)
 _THRESHOLDS = json.load(open(P.DATA / "mode_thresholds.json"))
-MODE_THRESHOLDS = {m: tuple(v) for m, v in _THRESHOLDS["modes"].items()}
+MODE_THRESHOLDS = {m: tuple(v) for m, v in _THRESHOLDS["modes"].items() if m in MODES}  # (r2/3's row: only while offered)
 MODE_CHANNELS = tuple(_THRESHOLDS["channels"])  # native: tables::MODE_CHANNELS
 # robust per cap. n10-ack-4f everywhere was tried (usable at -4 dB: MPP 95%
 # vs ack-4f's 79%): the loss study got worse in every cell (MPP 0 dB 248 ->
@@ -126,8 +126,9 @@ ROBUST_FAST_SPREAD_HZ = 6.0
 #   replace: ROBUST_CONNECT is ROBUST_WIDE (in sessions too); alt: connect retries alternate fsk16r25 and it
 #   DATA2G_ROBUST_FAST=wide: ROBUST_FAST is ROBUST_WIDE; always: the in-session robust mode is, at any spread
 ROBUST_WIDE = "fsk8w50-r1/2"
-ROBUST_RULE = os.environ.get("DATA2G_ROBUST_RULE", "")
-ROBUST_FAST_RULE = os.environ.get("DATA2G_ROBUST_FAST", "")
+# On this branch the default is connect while c8w50 is on air (cpm.ON_AIR_WIDE); "" or off: today's rules.
+ROBUST_RULE = os.environ.get("DATA2G_ROBUST_RULE", "connect" if "c8w50" in cpm.ON_AIR_WIDE else "").replace("off", "")
+ROBUST_FAST_RULE = os.environ.get("DATA2G_ROBUST_FAST", "").replace("off", "")
 assert ROBUST_RULE in ("", "connect", "replace", "alt") and ROBUST_FAST_RULE in ("", "wide", "always")
 if ROBUST_RULE or ROBUST_FAST_RULE:
     assert ROBUST_WIDE in MODES, "the robust rules need DATA2G_CPM_ONAIR=c8w50"
@@ -137,7 +138,10 @@ if ROBUST_FAST_RULE:
     ROBUST_FAST = ROBUST_WIDE
 # connect retries' modes, in turn
 ROBUST_CONNECTS = {"alt": (ROBUST_CONNECT, ROBUST_WIDE), "connect": (ROBUST_WIDE,)}.get(ROBUST_RULE, (ROBUST_CONNECT,))
-ROBUST_MODES = tuple(dict.fromkeys((*ROBUST_CONNECTS, ROBUST_FAST)))
+# (ROBUST_CONNECT stays among them under "connect": the session's robust polls are still in it, and are answered
+# in it. Until 2026-11-24 it was left out there, so a fsk16r25 robust poll was answered in the reply mode: the
+# connect-rule loss numbers of that day, hilat-m 20 dB -12% among them, were measured with that fault.)
+ROBUST_MODES = tuple(dict.fromkeys((ROBUST_CONNECT, *ROBUST_CONNECTS, ROBUST_FAST)))
 
 # --- study toggles (Python only; native has the defaults) --------------------
 # Set any and tests/native_subs/gear.py's GEAR_STUDY_ENV keeps the shifter in Python.
@@ -194,7 +198,8 @@ assert DROP <= set(MODES), f"DATA2G_DROP_MODES: unknown {sorted(DROP - set(MODES
 
 def allowed(cap: int) -> list:
     """The modes the shifter may pick within cap `cap` (modes.allowed less DROP)."""
-    return [s for s in MODES.values() if width_hz(s) <= CAP_HZ[cap] and s.name not in DROP]
+    # (a wide grid's modes are control-only: the robust rules send them, the shifter and the host's lists do not)
+    return [s for s in MODES.values() if width_hz(s) <= CAP_HZ[cap] and s.name not in DROP and s.name not in cpm.WIDE_SPECS]
 
 
 CTL_BYTES = 12  # a data burst's typical control: core 4, new 3, rv 3, a flag or two

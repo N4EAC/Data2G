@@ -240,10 +240,10 @@ def connect_trial(args):
 def connect(a):
     import os
 
-    rule = os.environ.get("DATA2G_ROBUST_RULE", "") or ("today" if not cpm.ON_AIR_WIDE else "today+grid")
-    cells = [ln.split() for ln in open(a.plan) if ln.strip()]
-    jobs = [(c, float(s), 70000 + i, a.horizon) for c, lo, hi, step in cells
-            for s in np.arange(float(lo), float(hi) + 0.01, float(step)) for i in range(a.trials)]
+    rule = os.environ.get("ARM") or os.environ.get("DATA2G_ROBUST_RULE", "") or ("today" if not cpm.ON_AIR_WIDE else "today+grid")
+    cells = [ln.split() for ln in open(a.plan) if ln.strip()]  # chan lo hi step [attempts]
+    jobs = [(c, float(s), 70000 + i, a.horizon) for c, lo, hi, step, *n in cells
+            for s in np.arange(float(lo), float(hi) + 0.01, float(step)) for i in range(int(n[0]) if n else a.trials)]
     with Pool(a.jobs) as p, open(a.out, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["rule", "channel", "snr", "seed", "connected", "t", "bursts"])
@@ -281,6 +281,15 @@ def cpu(a):
             rx.feed(y[i:i + FS // 10])
         return 100 * (time.process_time() - t) / a.seconds
     on = ("c16r25", "c8r50", "c32r62")
+    if a.sets != ACQ_SETS:  # the acquisition settings: three and four grids, the fine stages and screens a second
+        for st in a.sets:
+            _acq(st)
+            for label, grids in (("three", on), ("four", (*on, "c8w50"))):
+                cpm.STATS.update(fine=0, screen=0, hops=0)
+                pct = run(grids)
+                print(f"{st:10s} {label:5s} {pct:6.2f}% of a core; fine stages {cpm.STATS['fine'] / a.seconds:5.1f}/s, "
+                      f"screens {cpm.STATS['screen'] / a.seconds:5.1f}/s", flush=True)
+        return
     for label, grids, share in ([(g, (g,), True) for g in (*on, "c8w50", "c16w125")]
                                 + [("three on air", on, True), ("four, c8w50 its own transforms", (*on, "c8w50"), False),
                                    ("four, c8w50 from c8r50's rows", (*on, "c8w50"), True)]):
@@ -342,6 +351,118 @@ def acqdiag(a):
             alln = np.mean([(x["n2"] >= lk[1] - d and x["n2m"] >= cpm.HDR_MARGIN[1])
                             or (x["c2"] >= ck[1] - d and x["c2m"] >= ck[3]) for x in o])
             print(f"  both-copy gates {d} lower: {got:.2f} would lock as placed; {alln:.2f} at the true start")
+
+
+def spill_one(args):
+    import outcome_data as O
+    import phy_session as PS
+    from dataclasses import replace
+    from data2g.arq import phy as PHY
+    from data2g.arq.modes import MODES
+
+    mode, chan, snr, seed = args
+    spec = MODES[mode]
+    g = cpm.GRIDS[spec.grid]
+    rng = np.random.default_rng(seed)
+    b = replace(O.burst(mode, 2, rng), cap=2)
+    ch = PS.ContinuousChannel("awgn", snr, seed, 120.0, *(CHANS[chan] or (None, None)))
+    y = ch.apply(PHY.tx_audio(b), float(rng.uniform(5, 100)))
+    r = cpm.receive(y, dict(spec=spec, n_data=1, dup=False, start=int(PS.PAD_S * FS), cfo=PS.CFO_HZ, band=g.name))
+    E = r["E"][:cpm.CTL[g.name].n_sym]
+    k = g.k
+    n0 = cpm._n0(E, k)
+    es = max(float(np.mean(E.max(axis=1))) / k - n0, 1e-3 * n0)
+    return mode, chan, snr, cpm.spill(E, k * n0, k * es)
+
+
+def spillprobe(a):
+    """spill() on the control codeword's rows, genie lock: each neighbour's share of Es (a sub-window's, wide grids)."""
+    jobs = [(m, c, s, 50000 + i) for m in a.modes for c in a.chans for s in (a.lo, a.hi) for i in range(a.trials)]
+    acc = {}
+    with Pool(a.jobs) as p:
+        for m, c, s, v in p.imap_unordered(spill_one, jobs, chunksize=4):
+            acc.setdefault((m, c, s), []).append(v)
+    for (m, c, s), v in sorted(acc.items()):
+        print(f"  {m:15s} {c:8s} {s:5.0f} dB  spill p10/50/90 {np.round(np.percentile(v, [10, 50, 90]), 3)}  "
+              f">= 0.15: {np.mean(np.array(v) >= 0.15):.2f}")
+
+
+ACQ_SETS = ["1", "2", "3", "5", "8", "3:0", "5:0", "5:2", "5:4", "8:2", "1:all:0", "5:all:0", "5:all:2"]
+
+
+def _acq(setting: str):
+    """'K', 'K:x' (screen the placements after the first at x) or 'K:all:x' -> cpm's ACQ switches."""
+    setting, _, fl = setting.partition("@")
+    cpm.ACQ_FLOOR = float(fl or 1.0)
+    f = setting.split(":")
+    cpm.ACQ_K = int(f[0])
+    cpm.ACQ_SCREEN = float(f[-1]) if len(f) > 1 else None
+    cpm.ACQ_SCREEN_ALL = "all" in f
+    if cpm.ACQ_K == 1 and cpm.ACQ_SCREEN is not None:
+        cpm.ACQ_K = 1.5  # ponytail: > 1 takes detect's list path with one placement (int(1.5) placements)
+
+
+def acq_trial(args):
+    """-> (mode, chan, snr, seed, {setting: 2 right lock / 1 wrong word / 0 none, and 'd' + setting: data decoded})."""
+    import outcome_data as O
+    import phy_session as PS
+    from dataclasses import replace
+    from data2g.arq import phy as PHY
+    from data2g.arq.modes import MODES
+    from scripts.cpm_floor_study import receive_traced
+
+    mode, chan, snr, seed, sets = args
+    rng = np.random.default_rng(seed)
+    b = replace(O.burst(mode, 2, rng), cap=2)
+    ch = PS.ContinuousChannel("awgn", snr, seed, 120.0, *(CHANS[chan] or (None, None)))
+    y = ch.apply(PHY.tx_audio(b), float(rng.uniform(5, 100)))
+    out = {}
+    for st in sets:
+        _acq(st)
+        r = receive_traced(y, mode)
+        good = r is not None and r["spec"].name == mode and r["n_cw"] == 2
+        out[st] = 0 if r is None else 1 + good
+        if good:
+            r.pop("_path", None)
+            out["d" + st] = int(PHY.ModemRx(r, {}).decode(1, b.slots[1].mask_id, 0, None) == b.slots[1].payload)
+        else:
+            out["d" + st] = 0
+    _acq("1")
+    return mode, chan, snr, seed, out
+
+
+def acqk(a):
+    """Lock and decode rates per ACQ setting, each grid's r1/3 mode at the SNR
+    where the shipped receiver lost about 30% of the bursts (a.csv: an e2e run)."""
+    rows = [r for path in a.csv for r in csv.DictReader(open(path)) if r["mode"] in a.modes and r["channel"] in a.chans]
+    jobs, genie = [], {}
+    for m in a.modes:
+        for c in a.chans:
+            by = {}
+            for r in rows:
+                if r["mode"] == m and r["channel"] == c:
+                    by.setdefault(float(r["snr"]), []).append(r)
+            if not by:
+                continue
+            s = min(by, key=lambda s: abs(1 - np.mean([float(r["base"]) for r in by[s]]) - 0.3))
+            genie[m, c] = (s, np.mean([float(r["genie"]) for r in by[s][:a.trials]]))
+            jobs += [(m, c, s, 50000 + i, a.sets) for i in range(a.trials)]
+    acc = {}
+    with Pool(a.jobs) as p:
+        for m, c, s, seed, out in p.imap_unordered(acq_trial, jobs, chunksize=2):
+            acc.setdefault((m, c), []).append(out)
+    print("data decoded (right lock) per setting; K, K:x screens the later placements at x, K:all:x the first too")
+    print(f"  {'':27s} genie  " + "  ".join(f"{st:>9s}" for st in a.sets))
+    tot = {st: [] for st in a.sets}
+    for (m, c), o in sorted(acc.items()):
+        cells = []
+        for st in a.sets:
+            d, lk = np.mean([x["d" + st] for x in o]), np.mean([x[st] == 2 for x in o])
+            tot[st] += [x["d" + st] for x in o]
+            cells.append(f"{d:.2f}({lk:.2f})")
+        print(f"  {m:15s}{c:8s}{genie[m, c][0]:5.0f} {genie[m, c][1]:.2f}  " + "  ".join(cells))
+    print(f"  {'all':33s}  " + "  ".join(f"{np.mean(tot[st]):9.3f}" for st in a.sets))
+    print("  wrong-word locks:", {st: int(sum(x[st] == 1 for o in acc.values() for x in o)) for st in a.sets})
 
 
 def crossing(xs, fail, target):
@@ -412,7 +533,7 @@ def table(a):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["front", "cal", "e2e", "table", "probe", "cohw", "cohcal", "connect", "connect-table", "cpu", "acqdiag"])
+    ap.add_argument("cmd", choices=["front", "cal", "e2e", "table", "probe", "cohw", "cohcal", "connect", "connect-table", "cpu", "acqdiag", "acqk", "spillprobe"])
     ap.add_argument("--grid", default="c16w125")
     ap.add_argument("--grids", nargs="+", default=list(cpm.WIDE_GRIDS))
     ap.add_argument("--n", type=int, default=28)
@@ -435,6 +556,7 @@ def main():
     ap.add_argument("--horizon", type=float, default=80.0, help="connect: seconds a CONNECT gets")
     ap.add_argument("--seconds", type=float, default=120.0, help="cpu: audio")
     ap.add_argument("--repeat", type=int, default=2)
+    ap.add_argument("--sets", nargs="+", default=ACQ_SETS, help="acqk, cpu: ACQ settings")
     ap.add_argument("--out", default="runs/wide_e2e.csv")
     ap.add_argument("--csv", nargs="+", default=["runs/wide_e2e.csv"])
     a = ap.parse_args()
@@ -448,7 +570,7 @@ def main():
         print(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e3, "MB peak RSS")
         return
     {"front": front, "cal": cal, "e2e": e2e, "table": table, "cohw": cohw, "cohcal": cohcal, "connect": connect,
-     "connect-table": connect_table, "cpu": cpu, "acqdiag": acqdiag}[a.cmd](a)
+     "connect-table": connect_table, "cpu": cpu, "acqdiag": acqdiag, "acqk": acqk, "spillprobe": spillprobe}[a.cmd](a)
 
 
 if __name__ == "__main__":
