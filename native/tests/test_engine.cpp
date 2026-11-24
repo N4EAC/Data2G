@@ -464,6 +464,14 @@ void worker_backlog() {
             while (processed < static_cast<int>(i - e.decode_dropped() / BLOCK) && clk::now() - t0 < std::chrono::seconds(60))
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
+        if (i > release) {
+            // after it, no faster than the worker keeps up (real audio comes at 1x): fed flat out, a slow
+            // runner's worker (macOS arm64, FM's 16 kHz) fell past the 2 s bound again and lost the 2nd burst
+            const auto t0 = clk::now();
+            const int ahead = config::FS / BLOCK;  // 1 s of blocks, under the bound
+            while (processed + ahead < static_cast<int>(i - e.decode_dropped() / BLOCK) && clk::now() - t0 < std::chrono::seconds(60))
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
         e.step(std::span<const double>(y).subspan(i * BLOCK, BLOCK));
     }
     const double dropped_s = static_cast<double>(e.decode_dropped()) / config::FS;
