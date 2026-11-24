@@ -398,9 +398,11 @@ class Engine:
             raise ValueError("bad channel or tag")
         if not 0 <= payload < 2 ** 64 or not 0 < d_s < HAND_ARM_EXPIRE_S:
             raise ValueError("bad payload or delay")
+        if hand.FM and self.ptt_delay > hand.PTT_MAX_SAMPLES:
+            raise ValueError("PTT delay over the slot's budget")  # my carrier would cover the slot before
         payload &= (1 << hand.PAYLOAD) - 1  # 16 hex digits, the top bit ignored (docs/arq.md §9)
         end, cfo, _ = self.hand_refs[ref]
-        target = int(round((end + d_s - self.tx_latency_s) * FS)) - self.ptt_delay
+        target = int(round((end + d_s - self.tx_latency_s) * FS)) - self.ptt_delay + hand.slot_offset(channel)
         if target < self.n:
             raise ValueError("the slot has passed")
         audio = np.concatenate([np.zeros(self.ptt_delay), PHY.tone_scale(hand.tx_audio(tag, payload, channel, cfo))])
@@ -448,7 +450,8 @@ class Engine:
             raise ValueError("the slot has passed")
         hl = self._hand_listen = dict(d=d, tag=None, ack=None, channels=list(dict.fromkeys(channels)), armed=self.n,
                                       open=True, passive=True, buf=[], first=0, next=0, anchor=a,
-                                      lo=a + d - hand.SEARCH_SAMPLES, hi=a + d + hand.SEARCH_SAMPLES + hand.LEN_SAMPLES)
+                                      lo=a + d - hand.SEARCH_SAMPLES,
+                                      hi=a + d + hand.SEARCH_SAMPLES + hand.LEN_SAMPLES + hand.slot_offset(max(channels)))
         first, last = max(hl["lo"], old), min(self.n, hl["hi"])
         if first < last:  # late: what the window already holds comes from the ring
             idx = np.arange(first, last) % len(self._hist)
@@ -525,7 +528,8 @@ class Engine:
         slot lies before the capture, so no decodes (a search reaching past
         the capture's head reads zeros, as hand.bins pads). A decoder exception costs the round, not the station."""
         lines = []
-        if nominal >= 0:
+        channels = [c for c in channels if nominal + hand.slot_offset(c) >= 0]
+        if channels:
             try:
                 res = hand.decode_window(y, tag, channels, nominal, rnd)
                 lines = [f"HAND {r['c']} {r['payload']:016x} {r['snr']:.1f} {r['dt_ms']:.0f}"
@@ -826,7 +830,7 @@ class Engine:
                     a = self.n + n + int(round(self.tx_latency_s * FS))  # its end on air (self.n advances at the step's end)
                     hl.update(open=True, buf=[], anchor=a,
                               lo=a + hl["d"] - hand.SEARCH_SAMPLES,
-                              hi=a + hl["d"] + hand.SEARCH_SAMPLES + hand.LEN_SAMPLES)
+                              hi=a + hl["d"] + hand.SEARCH_SAMPLES + hand.LEN_SAMPLES + hand.slot_offset(max(hl["channels"])))
                     self._hand_hold = hl["hi"] / FS
                 if not self._tx_kiss:  # a Hand or broadcast burst is not the session's: no reply timer, no _tx_end
                     self._tx_end = self.now + n / FS  # the expected-reply/missed-burst accounting's
