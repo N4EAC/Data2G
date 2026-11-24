@@ -37,6 +37,7 @@ from . import threads
 # real time (a 32 s burst in ~4 s). An explicit setting still wins.
 threads.cap_env(1)
 
+import os
 import logging  # noqa: E402
 from collections import deque  # noqa: E402
 
@@ -60,6 +61,7 @@ def _shift(lock: dict, k: int) -> dict:
     return q
 
 
+SHARE_ROWS = os.environ.get("DATA2G_CPM_SHARE", "1") == "1"  # 0 (studies): every grid its own transforms
 SILENCE_RMS = 1e-4  # below this (-80 dBFS) the receiver's input is taken as silence: no search
 
 
@@ -398,7 +400,10 @@ class Receiver:
         # searched with all the audio their header needs (not searched again)
         self.decided: dict = {}
         from . import cpm
-        self.coarse = {g.name: cpm.CoarseTrack(g) for g in self.grids}  # each grid's search rows (_find_cpm)
+        self.coarse = {}  # each grid's search rows (_find_cpm); a wide grid's from the on-air grid of its tones
+        for g in self.grids:
+            src = next((t for t in self.coarse.values() if SHARE_ROWS and cpm.shares_rows(g, t.g)), None)
+            self.coarse[g.name] = cpm.CoarseTrack(g, source=src)
         # CPM fronts whose first header copy fell short (cpm.find's candidates,
         # stream indices): read again with both copies once the second is in
         self.cpm_wait: list = []

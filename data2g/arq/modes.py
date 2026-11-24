@@ -9,7 +9,7 @@ from .. import codes, cpm, modem
 from ..config import SUBMODES
 from .frames import BANDS_CODE, MAX_CTL
 
-MODES = {**SUBMODES, **cpm.SPECS}
+MODES = {**SUBMODES, **cpm.SPECS, **(cpm.WIDE_SPECS if cpm.WIDE_ON else {})}  # WIDE_ON: studies only
 
 
 def is_cpm(spec) -> bool:

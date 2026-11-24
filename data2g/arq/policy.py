@@ -119,7 +119,25 @@ ROBUST_CONNECT = "fsk16r25-r1/2"  # session-frame retries: 500 Hz, within every 
 # before a session nothing is measured.
 ROBUST_FAST = "fsk8r50-r1/3"
 ROBUST_FAST_SPREAD_HZ = 6.0
-ROBUST_MODES = (ROBUST_CONNECT, ROBUST_FAST)
+# Studies (2026-11-23, scripts/wide_fsk_study.py; need DATA2G_CPM_ONAIR=c8w50): the wide-bin grid c8w50 as the
+# robust control grid. Its control codeword decodes where fsk16r25's stops (30 Hz / 7 ms: -12.8 dB against
+# never) and within 1 dB of it elsewhere; a control-only burst is 6.7 s against 5.0.
+#   DATA2G_ROBUST_RULE=connect: connect retries in ROBUST_WIDE, the session's robust modes as today;
+#   replace: ROBUST_CONNECT is ROBUST_WIDE (in sessions too); alt: connect retries alternate fsk16r25 and it
+#   DATA2G_ROBUST_FAST=wide: ROBUST_FAST is ROBUST_WIDE; always: the in-session robust mode is, at any spread
+ROBUST_WIDE = "fsk8w50-r1/2"
+ROBUST_RULE = os.environ.get("DATA2G_ROBUST_RULE", "")
+ROBUST_FAST_RULE = os.environ.get("DATA2G_ROBUST_FAST", "")
+assert ROBUST_RULE in ("", "connect", "replace", "alt") and ROBUST_FAST_RULE in ("", "wide", "always")
+if ROBUST_RULE or ROBUST_FAST_RULE:
+    assert ROBUST_WIDE in MODES, "the robust rules need DATA2G_CPM_ONAIR=c8w50"
+if ROBUST_RULE == "replace":
+    ROBUST_CONNECT = ROBUST_WIDE
+if ROBUST_FAST_RULE:
+    ROBUST_FAST = ROBUST_WIDE
+# connect retries' modes, in turn
+ROBUST_CONNECTS = {"alt": (ROBUST_CONNECT, ROBUST_WIDE), "connect": (ROBUST_WIDE,)}.get(ROBUST_RULE, (ROBUST_CONNECT,))
+ROBUST_MODES = tuple(dict.fromkeys((*ROBUST_CONNECTS, ROBUST_FAST)))
 
 # --- study toggles (Python only; native has the defaults) --------------------
 # Set any and tests/native_subs/gear.py's GEAR_STUDY_ENV keeps the shifter in Python.
@@ -306,13 +324,13 @@ class GearShifter(L.Policy):
         """Session frames: the cap's connect mode first, then ROBUST_CONNECT
         (MPP -4 dB: qpsk-r1/5 bursts 38% usable, n4-qpsk-r1/3 91%; 9 of 12
         loss-study sessions there never connected in qpsk-r1/5)."""
-        return CONNECT[cap] if tries == 0 else ROBUST_CONNECT
+        return CONNECT[cap] if tries == 0 else ROBUST_CONNECTS[(tries - 1) % len(ROBUST_CONNECTS)]
 
     def robust_mode(self) -> str:
         """In a session, the robust control mode: ROBUST_FAST if the peer's
         last measured spread_est says fast fading, else ROBUST_CONNECT."""
         fast = self.last_spread is not None and self.last_spread >= ROBUST_FAST_SPREAD_HZ
-        return ROBUST_FAST if fast else ROBUST_CONNECT
+        return ROBUST_FAST if fast or ROBUST_FAST_RULE == "always" else ROBUST_CONNECT
 
     def airtime(self, m, n_cw, dup=False):
         """`dup`: a CPM burst's control twice (the second copy is a short
