@@ -9,7 +9,8 @@ from .. import codes, cpm, modem
 from ..config import SUBMODES
 from .frames import BANDS_CODE, MAX_CTL
 
-MODES = {**SUBMODES, **cpm.SPECS, **(cpm.WIDE_SPECS if cpm.WIDE_ON else {})}  # WIDE_ON: studies only
+# the wide grids' specs: an on-air grid's (cpm.ON_AIR_WIDE: control-only, no recommendation code), or all (WIDE_ON)
+MODES = {**SUBMODES, **cpm.SPECS, **{n: s for n, s in cpm.WIDE_SPECS.items() if cpm.WIDE_ON or s.grid in cpm.ON_AIR_WIDE}}
 
 
 def is_cpm(spec) -> bool:

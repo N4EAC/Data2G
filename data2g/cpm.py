@@ -139,9 +139,10 @@ WIDE_GRIDS = {g.name: g for g in [
     # 30 Hz). 4 tones 100 Hz apart held more (85-99 of 100) but need a GF(4) code family; this reuses GF(8)'s
     Grid("c8w50", 8, 50.0, L=2, hdr=12),
 ]}
-# DATA2G_CPM_ONAIR=c8w50 (studies): these wide grids as on-air ones, after today's: searched by every receiver,
-# their modes in arq.modes.MODES and the recommendation codes after today's six (data2g.arq.policy's robust rules).
-ON_AIR_WIDE = tuple(n for n in os.environ.get("DATA2G_CPM_ONAIR", "").split(",") if n)
+# DATA2G_CPM_ONAIR (default c8w50; "" or off: none, today's three grids): these wide grids as on-air ones, after
+# today's: searched by every receiver, their modes in arq.modes.MODES (no recommendation codes: control-only,
+# data2g.arq.policy's robust rules).
+ON_AIR_WIDE = tuple(n for n in os.environ.get("DATA2G_CPM_ONAIR", "c8w50").split(",") if n and n != "off")
 GRIDS = _Toolbox({g.name: g for g in [
     Grid("c16r25", 16, 25.0),  # 400 Hz of tones: a 500 Hz segment
     Grid("c8r50", 8, 50.0),  # the same
@@ -245,7 +246,19 @@ WIDE_ON = os.environ.get("DATA2G_CPM_WIDE", "") == "1"  # studies: the wide mode
 SPECS = _Toolbox({s.name: s for g in GRIDS.values() if g.L == 1 for s in (
     CpmSpec(f"{_grid_name(g)}-r1/3", g.name, 0, "gf", 320, DATA_N),
     CpmSpec(f"{_grid_name(g)}-r1/2", g.name, 1, "gf", 480, DATA_N),
-)} | {n: s for n, s in WIDE_SPECS.items() if s.grid in ON_AIR_WIDE}, WIDE_SPECS)
+)}, WIDE_SPECS)
+# c32r62's third data mode (2026-11-23, scripts/fast_fading_study.py: the grid's
+# tones carry 0.78-0.97 of their 5 bits on every fading preset from 0 dB up,
+# and r1/2 was its top). Header index 4: the word's index field is mode index
+# + 2 x duplicated, so 2 and 3 are r1/3's and r1/2's duplicated-control words;
+# 4 (6 duplicated) is free, and every older word reads as before. Last of the
+# SPECS: arq.modes' recommendation codes go by SPECS' order. (An on-air wide
+# grid's specs are not in SPECS' iteration: control-only so far, they have no
+# recommendation code; arq.modes.MODES holds them.)
+# DATA2G_CPM_R23=0 (or off): not offered (today's six modes and header words).
+R23 = os.environ.get("DATA2G_CPM_R23", "1") not in ("0", "off", "")
+if R23:
+    SPECS["fsk32r62-r2/3"] = CpmSpec("fsk32r62-r2/3", "c32r62", 4, "gf", 640, DATA_N)
 CTL = _Toolbox({g: WIDE_CTL[g] if g in WIDE_CTL else CpmSpec(f"{_grid_name(GRIDS[g])}-ctl", g, -1, "polar", CTL_K, CTL_N)
                 for g in GRIDS}, WIDE_CTL)
 
@@ -277,6 +290,20 @@ MID_LLR = {"c16r25": 24.0, "c8r50": 24.0, "c32r62": 24.0, "c16w125": 24.0, "c8w5
 # (the wide grids, scripts/wide_fsk_study.py cal, 600 noise hops: coarse medians front 0.073 / 0.112, mid 0.081 /
 # 0.142, the mid floors 1.4x as the others'; largest header scores 14-17 as the on-air grids', so their gates)
 HDR_MARGIN = (8.0, 4.0)  # the read word's LLR over the runner-up's: one copy, both
+# DATA2G_CPM_SPILL="lock:1,ctl:1,data:1,dd:1" (studies): the weight of spill() in tone_metric's N0,
+# per consumer: lock (tone_llr: every lock gate, header scores, refine, nods), ctl (llrs: the control
+# codeword's square-law bit LLRs), data (symbol_ll: a data codeword's first pass), dd (dd_metric's
+# square-law probabilities of the rows not yet known). Unnamed consumers keep 1.
+SPILL = {"lock": 1.0, "ctl": 1.0, "data": 1.0, "dd": 1.0}
+SPILL.update({k: float(v) for k, v in (e.split(":") for e in os.environ.get("DATA2G_CPM_SPILL", "").split(",") if e)})
+# DATA2G_CPM_LEAK="ctl,data,dd" (studies): those consumers on leak_metric, not the spill-inflated square law.
+LEAK = frozenset(filter(None, os.environ.get("DATA2G_CPM_LEAK", "").split(",")))
+LEAK_K = float(os.environ.get("DATA2G_CPM_LEAK_K") or 0.5)  # leak_metric's k
+# "ctlsq" in DATA2G_CPM_LEAK: a control codeword whose rows' spill() is at least this stays on the square law
+# (leak_metric with "ctl"), not COH_CTL's coherent metric: the channel no longer holds from one symbol to the
+# next (fsk16r25 on 30 Hz: control decoded 5-38% coherent, 80-93% on leak_metric; its
+# control rows read 0.16-0.24 there, every other grid and preset under 0.145; scripts/spill_study.py)
+CTL_SQ = float(os.environ.get("DATA2G_CPM_CTL_SQ") or 0.15)
 LLR_EPS = 0.02  # tone_llr's outlier share: a row whose tone the model rejects costs at most -ln(EPS)
 WAIT_LLR = {"c16r25": 0.0, "c8r50": 0.0, "c32r62": 0.0, "c16w125": 0.0, "c8w50": 0.0}  # a front waits for its second copy from this LLR
 # An early lock (front + header copy 1) is looked at again once its mid block
@@ -373,7 +400,8 @@ def hdr_len(g: Grid) -> int:
 
 def header_word(index: int, n_data: int, dup: bool) -> int:
     """16 bits as the OFDM header's: index (4) | n field (6) | CRC-6; index
-    = mode index + 2 x duplicated control, n field = data codewords + 1."""
+    = mode index + 2 x duplicated control (mode indices 0, 1, 4: SPECS), n
+    field = data codewords + 1."""
     from .modem import crc6
 
     v = ((index + 2 * dup) << 6) | n_data
@@ -647,8 +675,36 @@ class CoarseTrack:
         return out
 
 
+# DATA2G_CPM_ACQ_K (studies; 1: as shipped): the coarse stage's best ACQ_K placements go on to the fine stage and
+# the header read, not the single best. Of the bursts a known start decoded and the receiver did not (c8w50 260,
+# c16r25 199; mpg / mpp / mpd / nvis-d / awgn at the floors), none had a lock, and the coarse best was somewhere
+# else in 76% / 55% of them (a noise placement outscoring a faded front), while the header gates passed at the
+# true start in 60% / 29%. Placements are distinct: one within a symbol and a tone spacing of a better one is the
+# same peak. DATA2G_CPM_ACQ_SCREEN: a placement after the first goes to the fine stage (45 energy evaluations)
+# only if its pattern's tone_llr at the coarse placement (one evaluation) reaches this; "all:x": the first too.
+ACQ_K = int(os.environ.get("DATA2G_CPM_ACQ_K") or 1)
+_scr = os.environ.get("DATA2G_CPM_ACQ_SCREEN", "")
+ACQ_SCREEN_ALL = _scr.startswith("all:")
+ACQ_SCREEN = float(_scr.split(":")[-1]) if _scr else None
+ACQ_FLOOR = float(os.environ.get("DATA2G_CPM_ACQ_FLOOR") or 1.0)  # with ACQ_K > 1: the coarse floors times this
+STATS = {"fine": 0, "screen": 0, "hops": 0}  # detect's work (studies: the listening cost)
+
+
+def _fine(g: Grid, x: np.ndarray, s0: int, cfo: float, rows, tones_, span: int) -> tuple:
+    """detect's fine stage at a coarse placement: timing to T/32, CFO to R/16."""
+    T = g.T
+    STATS["fine"] += 1
+    cand = []
+    for dt in range(-T // 8, T // 8 + 1, max(1, T // 32)):
+        for df in np.arange(-0.125, 0.126, 0.0625) * g.rate:
+            E = _energies(g, x, s0 + dt, span, cfo + df)
+            cand.append((E[rows, tones_].sum() / E[rows].sum(), s0 + dt, cfo + df))
+    _, s0, cfo = max(cand)
+    return s0, cfo
+
+
 def detect(g: Grid, x: np.ndarray, reach_hz: float = 150.0, fine=True, front_only: bool = False, n_sym: int = 0,
-           floor: float = -1.0, mid: bool = False, track: "CoarseTrack | None" = None, x0: int = 0):
+           floor: float = -1.0, mid: bool = False, track: "CoarseTrack | None" = None, x0: int = 0, k: int = 1):
     """-> (score, burst start sample, cfo Hz): the sync pattern's best
     placement. Coarse: symbol energies at T/4 hops and quarter-bin CFO
     steps, as shares, summed over the sync symbols of the shortest burst
@@ -658,7 +714,10 @@ def detect(g: Grid, x: np.ndarray, reach_hz: float = 150.0, fine=True, front_onl
     block alone, its first sample for the burst's start (find_mid);
     `floor`: no fine stage under this score (the search's CPU on noise).
     `track`: its rows for the coarse stage instead (x: stream samples from
-    `x0`, rows on the stream's timing grid)."""
+    `x0`, rows on the stream's timing grid).
+    `k` > 1: a list of up to k (score, start, cfo), best first, distinct
+    placements (ACQ_K), each over `floor` (and ACQ_SCREEN) through the fine
+    stage."""
     lay = layout(g.name, n_sym or stream_symbols(g.name, 0, False))
     rows, tones_ = lay.sync_rows, lay.sync_tones
     if front_only:
@@ -670,6 +729,8 @@ def detect(g: Grid, x: np.ndarray, reach_hz: float = 150.0, fine=True, front_onl
     T = g.T
     extra = int(np.ceil(reach_hz / g.rate))
     best = (-1.0, 0, 0.0)
+    pool = []  # k > 1: each CFO fraction and phase's best placements
+    STATS["hops"] += 1
     # per timing phase: (its first symbol's sample in x, coarse_rows of its symbols)
     if track is None:
         C = [(ph * T // 4, coarse_rows(g, x[ph * T // 4:], extra)) for ph in range(4)]
@@ -689,22 +750,41 @@ def detect(g: Grid, x: np.ndarray, reach_hz: float = 150.0, fine=True, front_onl
             Er = E[np.asarray(rows)[:, None] + np.arange(J)]  # (rows, J, bins)
             cols = np.asarray(tones_)[:, None] + extra + np.arange(-extra, extra + 1)  # (rows, dk)
             S = Er[np.arange(len(rows))[:, None], :, cols].sum(axis=0)  # (dk, J)
-            k = int(np.argmax(S))
-            if S.flat[k] / len(rows) > best[0]:
-                dk, j = divmod(k, J)
-                best = (float(S.flat[k]) / len(rows), off + j * T, (dk - extra) * g.rate + frac * g.rate)
+            ib = int(np.argmax(S))
+            if S.flat[ib] / len(rows) > best[0]:
+                dk, j = divmod(ib, J)
+                best = (float(S.flat[ib]) / len(rows), off + j * T, (dk - extra) * g.rate + frac * g.rate)
+            if k > 1:
+                n_top = min(int(4 * k), S.size)
+                for it in np.argpartition(S.ravel(), -n_top)[-n_top:]:
+                    dk, j = divmod(int(it), J)
+                    pool.append((float(S.flat[it]) / len(rows), off + j * T, (dk - extra) * g.rate + frac * g.rate))
+    if k > 1:
+        out = []
+        for sc, s0, cfo in sorted(pool, reverse=True):
+            if len(out) == int(k) or sc < floor:
+                break
+            if any(abs(s0 - s1) < T and abs(cfo - c1) < g.rate for _, s1, c1 in out):
+                continue  # the same peak
+            out.append((sc, s0, cfo))
+        res = []
+        for i, (sc, s0, cfo) in enumerate(out):
+            if fine:
+                if ACQ_SCREEN is not None and (i or ACQ_SCREEN_ALL):
+                    STATS["screen"] += 1
+                    L = tone_llr(g, _energies(g, x, s0, span, cfo))
+                    if float(L[rows, tones_].sum()) < ACQ_SCREEN:
+                        continue
+                s0, cfo = _fine(g, x, s0, cfo, rows, tones_, span)
+            res.append((sc, s0, cfo))
+        return res
     score, s0, cfo = best
     if fine and score >= floor:  # timing to T/32, CFO to R/16
-        cand = []
-        for dt in range(-T // 8, T // 8 + 1, max(1, T // 32)):
-            for df in np.arange(-0.125, 0.126, 0.0625) * g.rate:
-                E = _energies(g, x, s0 + dt, span, cfo + df)
-                cand.append((E[rows, tones_].sum() / E[rows].sum(), s0 + dt, cfo + df))
-        _, s0, cfo = max(cand)
+        s0, cfo = _fine(g, x, s0, cfo, rows, tones_, span)
     return score, s0, cfo
 
 
-def tone_metric(g: Grid, E: np.ndarray) -> np.ndarray:
+def tone_metric(g: Grid, E: np.ndarray, use: str = "lock") -> np.ndarray:
     """(n_sym, m) tone energies of one codeword -> (n_sym, m) log P(E | tone
     sent) up to a per-symbol constant. Noncoherent square-law metric, exact
     for Rayleigh fading: E_m g, g = Es / (N0 (N0 + Es)), Es and N0 the
@@ -716,10 +796,45 @@ def tone_metric(g: Grid, E: np.ndarray) -> np.ndarray:
     n0 = np.median(np.sort(E, axis=1)[:, :-1]) / _noise_median(k)  # exponential: median = N0 ln 2
     n0 = max(n0, 1e-12 * np.mean(top) + 1e-300)  # noise-free tests
     es = max(np.mean(top) / k - n0, 1e-3 * n0)
-    n0 += spill(E, k * n0, k * es) * es
+    if use in LEAK:
+        return leak_metric(E, n0, es, LEAK_K, k)
+    n0 += SPILL[use] * spill(E, k * n0, k * es) * es
     # es / (n0 (n0 + es)) without its underflow: a codeword past the audio's
     # end (zero-padded: a header claiming more than arrived) reads as erasures
     return E * (es / (n0 + es) / n0)
+
+
+def leak_metric(E: np.ndarray, n0: float, es: float, k: float, subs: int = 1) -> np.ndarray:
+    """tone_metric with the Doppler spill as part of the signal, not as noise:
+    under tone t the bins t - 1 and t + 1 hold a = spill() of Es over the
+    noise (independent exponentials: the leak comes of the channel's change
+    over the symbol, the tone of its mean), so log P(E | t) up to a row
+    constant is E_t (1/N - 1/(N + Es)) + (E_t-1 + E_t+1) (1/N - 1/(N + a Es))
+    - ln(1 + a Es / N) per neighbour inside the grid: energy beside a tone
+    counts for it, and two adjacent tones are told apart on the scale of the
+    spill, far ones on the noise's. N = N0 + k a Es: what the model leaves out
+    (bins further off, the neighbouring symbols' tones through a delayed
+    path) is the signal's own too; with k = 0 the confidence grows with SNR
+    as #244's did (fsk32r62-r2/3, hilat-d: 100% decoded at PEP cell 2 dB,
+    30% at 18). a = 0 (AWGN, slow fading): the square law exactly.
+    scripts/spill_study.py (2026-11-23).
+    `subs` (a wide grid): E sums that many sub-windows, n0 and es are one's:
+    each bin a sum of independent exponentials, so the same terms with the
+    neighbours' log term once per sub-window."""
+    a = spill(E, subs * n0, subs * es)
+    n0 = n0 + k * a * es
+    return es / (n0 + es) / n0 * E + _leak_sides(E, n0, a * es, subs)
+
+
+def _leak_sides(E: np.ndarray, n0: float, leak: float, subs: int = 1) -> np.ndarray:
+    """leak_metric's neighbour terms: per tone, its two neighbours' energies as bins of mean n0 + leak under it."""
+    P = np.pad(E, ((0, 0), (1, 1)))
+    inside = np.ones(E.shape[1] + 2)
+    inside[[0, -1]] = 0.0
+    side = leak / (n0 + leak) / n0 * (P[:, :-2] + P[:, 2:])
+    if subs == 1:
+        return side - np.log1p(leak / n0) * (inside[:-2] + inside[2:])
+    return side - subs * np.log1p(leak / n0) * (inside[:-2] + inside[2:])
 
 
 def spill(E: np.ndarray, n0: float, es: float) -> float:
@@ -740,7 +855,7 @@ def llrs(g: Grid, E: np.ndarray) -> np.ndarray:
     """(n_sym, m) tone energies of one codeword -> (n_sym * bits,) coded-bit
     LLRs (positive: 0) in mapping order (data2g.codes.combine / decode_many's),
     marginals of tone_metric: the control codeword's."""
-    return bit_llrs(g, tone_metric(g, E))
+    return bit_llrs(g, tone_metric(g, E, "ctl"))
 
 
 def bit_llrs(g: Grid, metric: np.ndarray) -> np.ndarray:
@@ -757,7 +872,7 @@ def symbol_ll(g: Grid, E: np.ndarray) -> np.ndarray:
     """(n_sym, m) tone energies of one codeword -> (n_sym * m,) symbol
     log-likelihoods in mapping order, symbol-major, value v's on tone
     gray(v) (to_tones): a GF(M) codeword's soft values (data2g.codes)."""
-    return tone_metric(g, E)[:, _gray(g.m)].reshape(-1)
+    return tone_metric(g, E, "data")[:, _gray(g.m)].reshape(-1)
 
 
 
@@ -970,6 +1085,24 @@ def find(g: Grid, x: np.ndarray, threshold: float | None = None, reach_hz: float
     searches each start once: detect's cost is the audio it is given).
     `track`, `x0`: detect's (x the stream from sample x0)."""
     floor = SYNC_THRESHOLD[g.name] if threshold is None else threshold
+    if ACQ_K > 1:  # each of the best placements in turn: the first lock, else the first front still waiting
+        floor *= ACQ_FLOOR
+        a, b = 0, len(x)
+        if lo or hi is not None:
+            lay0 = layout(g.name, stream_symbols(g.name, 0, False))
+            span = ((lay0.sync_rows[lay0.front - 1] if front_only else lay0.sync_rows[-1]) + 2) * g.T
+            a, b = max(0, lo - g.T), len(x) if hi is None else min(len(x), hi + span + g.T)
+        waiting = None
+        for score, s0, cfo in detect(g, x[a:b], reach_hz=reach_hz, front_only=front_only, floor=floor, track=track,
+                                     x0=x0 + a, k=ACQ_K):
+            s0 += a
+            if (lo or hi is not None) and not lo <= s0 < (len(x) if hi is None else hi):
+                continue
+            got = _find_at(g, x, score, s0, cfo, floor if threshold is None else threshold, wait, threshold is None)
+            if got is not None and not got.get("wait"):
+                return got
+            waiting = waiting or got
+        return waiting
     if lo or hi is not None:
         lay0 = layout(g.name, stream_symbols(g.name, 0, False))
         span = ((lay0.sync_rows[lay0.front - 1] if front_only else lay0.sync_rows[-1]) + 2) * g.T
@@ -982,8 +1115,16 @@ def find(g: Grid, x: np.ndarray, threshold: float | None = None, reach_hz: float
             return None
     else:
         score, s0, cfo = detect(g, x, reach_hz=reach_hz, front_only=front_only, floor=floor, track=track, x0=x0)
+    return _find_at(g, x, score, s0, cfo, threshold, wait)
+
+
+def _find_at(g: Grid, x: np.ndarray, score: float, s0: int, cfo: float, threshold, wait: bool, gated: bool = False):
+    """find's reading of one placement: its lock, its waiting candidate, or
+    None. `gated`: `threshold` is the coarse floor only (the lock gates apply)."""
     if score < (SYNC_THRESHOLD[g.name] if threshold is None else threshold):
         return None
+    if gated:
+        threshold = None
     if s0 + hdr_span(g.name, 1) > len(x):
         return None  # its header copy is still arriving
     if s0 < 0:
@@ -1022,10 +1163,24 @@ def find_mid(g: Grid, x: np.ndarray, lo: int = 0, hi: int | None = None, track: 
     T, nb = g.T, len(mid_block(g))
     a = max(0, lo - T)
     b = len(x) if hi is None else min(len(x), hi + (nb + 1) * T)
+    if ACQ_K > 1:
+        for score, p, cfo in detect(g, x[a:b], mid=True, floor=MID_THRESHOLD[g.name] * ACQ_FLOOR, track=track, x0=x0 + a,
+                                    k=ACQ_K):
+            if lo <= p + a < (len(x) if hi is None else hi):
+                got = _mid_at(g, x, score, p + a, cfo)
+                if got is not None:
+                    return got
+        return None
     score, p, cfo = detect(g, x[a:b], mid=True, floor=MID_THRESHOLD[g.name], track=track, x0=x0 + a)
     p += a
     if score < MID_THRESHOLD[g.name] or not lo <= p < (len(x) if hi is None else hi):
         return None
+    return _mid_at(g, x, score, p, cfo)
+
+
+def _mid_at(g: Grid, x: np.ndarray, score: float, p: int, cfo: float):
+    """find_mid's reading of one mid block placement."""
+    T, nb = g.T, len(mid_block(g))
     if p + (nb + hdr_len(g)) * T > len(x):
         return None  # its second header copy is still arriving
     h = read_mid(g, x, p, cfo)
@@ -1180,8 +1335,21 @@ def receive(x: np.ndarray, lock: dict) -> dict:
     r["Z"] = bins(g, x, s0, layout(g.name, stream_symbols(g.name, lock["n_data"], lock["dup"])).n, cfo)
     if COH_CTL and g.name not in COH_CTL_OFF:  # the control slots on the coherent metric (sync and header rows known, the rest square-law decided)
         for s in range(r["n_ctl_slots"]):
-            soft_[s] = dd_soft(r, dd_metric(r, {}, s), s)
+            if not ctl_square(g, E, s):
+                soft_[s] = dd_soft(r, dd_metric(r, {}, s), s)
     return r
+
+
+def ctl_square(g: Grid, E: np.ndarray, slot: int) -> bool:
+    """Control slot `slot` of the stream energies E stays on the square law (CTL_SQ)."""
+    if "ctlsq" not in LEAK:
+        return False
+    n = CTL[g.name].n_sym
+    Es = E[slot * n:(slot + 1) * n]
+    k = g.k
+    n0 = _n0(Es, k) if k > 1 else _n0(Es)
+    es = max(float(np.mean(Es.max(axis=1))) / k - n0, 1e-3 * n0)
+    return spill(Es, k * n0, k * es) >= CTL_SQ
 
 
 # --- coherent detection --------------------------------------------------------------
@@ -1387,7 +1555,7 @@ def dd_metric(r: dict, post: dict, slot: int) -> np.ndarray:
     a, b = max(0, rows[slot][0] - ws), min(lay.n, rows[slot][-1] + 1 + ws)
     Z = r["Z"][a:b]
     E = _sq(Z) if g.L == 1 else _sq(Z).sum(axis=1)
-    G = tone_metric(g, E)
+    G = tone_metric(g, E, "dd")
     P = np.exp(G - G.max(axis=1, keepdims=True))
     P /= P.sum(axis=1, keepdims=True)
     h = header_symbols(g.name, header_word(spec.index, n_data, dup))
@@ -1406,7 +1574,15 @@ def dd_metric(r: dict, post: dict, slot: int) -> np.ndarray:
         q = np.exp(lp - lp.max(axis=1, keepdims=True))
         q /= q.sum(axis=1, keepdims=True)
         P[rr[keep][:, None] - a, gray[None]] = q  # value v on tone gray(v)
-    return coh_metric(Z.reshape(-1, g.m), P, W, _n0(E, g.k) if g.L > 1 else _n0(E), g.L)[rows[slot] - a]
+    n0 = _n0(E, g.k) if g.L > 1 else _n0(E)
+    if "coh" in LEAK and g.L == 1:
+        # leak_metric's model under the coherent one: coh_metric falls back to the square law at the raw N0
+        # where its channel estimate is poor (fast fading: where the spill is), #244's confidence again
+        es = max(float(np.mean(E.max(axis=1))) - n0, 1e-3 * n0)
+        leak = spill(E, n0, es) * es
+        n0 += LEAK_K * leak
+        return (coh_metric(Z, P, W, n0) + _leak_sides(E, n0, leak))[rows[slot] - a]
+    return coh_metric(Z.reshape(-1, g.m), P, W, n0, g.L)[rows[slot] - a]
 
 
 def dd_soft(r: dict, metric: np.ndarray, slot: int) -> np.ndarray:

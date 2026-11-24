@@ -1,5 +1,5 @@
 {
- "_source": "runs/ladder_dd_10pct.csv (e5519aa): 10% codeword failure SNR (dB) per channel; 99: never reached in the study; its n10-64l-r3/4 and n10-256l-r3/4 rows added 2026-10-06 (runs/n10_top_ladder.sh, the same seeded study); n10 cells moved by support_slack (2026-10-19, runs/support_ladder.sh, paired with the commit before it, same seeds, DD unbudgeted, native): the paired difference added, or the new threshold where the old was never; CPM rows rerun 2026-10-27 on cpm-gfm-on-acq (GF(M) data code on the cpm-acq-gap receiver, the same seeded study, native; runs/cpm-combined/ladder_cpm_combined.csv)",
+ "_source": "runs/ladder_dd_10pct.csv (e5519aa): 10% codeword failure SNR (dB) per channel; 99: never reached in the study; its n10-64l-r3/4 and n10-256l-r3/4 rows added 2026-10-06 (runs/n10_top_ladder.sh, the same seeded study); n10 cells moved by support_slack (2026-10-19, runs/support_ladder.sh, paired with the commit before it, same seeds, DD unbudgeted, native): the paired difference added, or the new threshold where the old was never; CPM rows rerun 2026-10-27 on cpm-gfm-on-acq (GF(M) data code on the cpm-acq-gap receiver, the same seeded study, native; runs/cpm-combined/ladder_cpm_combined.csv); fsk32r62-r2/3 added 2026-11-23: fsk32r62-r1/2's row plus the paired difference of the two on the same seeded study, Python (runs/ladder_r23.csv on c32r62-r23: r1/2 -8.75 -2.9375 -3.3125 -3.125, r2/3 -8.9375 -1.25 -2.1875 -2.0)",
  "channels": [
   "awgn",
   "mpg",
@@ -306,6 +306,12 @@
    24.6875,
    20.875,
    99
+  ],
+  "fsk32r62-r2/3": [
+   -8.1875,
+   -0.3125,
+   -1.625,
+   -1.625
   ]
  }
 }
