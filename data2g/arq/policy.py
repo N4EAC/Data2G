@@ -137,7 +137,10 @@ if ROBUST_FAST_RULE:
     ROBUST_FAST = ROBUST_WIDE
 # connect retries' modes, in turn
 ROBUST_CONNECTS = {"alt": (ROBUST_CONNECT, ROBUST_WIDE), "connect": (ROBUST_WIDE,)}.get(ROBUST_RULE, (ROBUST_CONNECT,))
-ROBUST_MODES = tuple(dict.fromkeys((*ROBUST_CONNECTS, ROBUST_FAST)))
+# (ROBUST_CONNECT stays among them under "connect": the session's robust polls are still in it, and are answered
+# in it. Until 2026-11-24 it was left out there, so a fsk16r25 robust poll was answered in the reply mode: the
+# connect-rule loss numbers of that day, hilat-m 20 dB -12% among them, were measured with that fault.)
+ROBUST_MODES = tuple(dict.fromkeys((ROBUST_CONNECT, *ROBUST_CONNECTS, ROBUST_FAST)))
 
 # --- study toggles (Python only; native has the defaults) --------------------
 # Set any and tests/native_subs/gear.py's GEAR_STUDY_ENV keeps the shifter in Python.
@@ -194,7 +197,8 @@ assert DROP <= set(MODES), f"DATA2G_DROP_MODES: unknown {sorted(DROP - set(MODES
 
 def allowed(cap: int) -> list:
     """The modes the shifter may pick within cap `cap` (modes.allowed less DROP)."""
-    return [s for s in MODES.values() if width_hz(s) <= CAP_HZ[cap] and s.name not in DROP]
+    # (a wide grid's modes are control-only: the robust rules send them, the shifter and the host's lists do not)
+    return [s for s in MODES.values() if width_hz(s) <= CAP_HZ[cap] and s.name not in DROP and s.name not in cpm.WIDE_SPECS]
 
 
 CTL_BYTES = 12  # a data burst's typical control: core 4, new 3, rv 3, a flag or two
