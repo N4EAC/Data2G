@@ -8,6 +8,26 @@ Both connected (hybrid ARQ) and broadcast (FEC) modes are available.
 
 A 2400Hz channel is required for full speed but Data2G can be configured for a maximum bandwidth of 500Hz to fit within narrowband segments of the bandplan.
 
+## N4EAC macOS build
+
+[Download Data2G for macOS](https://github.com/N4EAC/Data2G/releases/latest).
+Apple Silicon, macOS 27 or later. This fork packages upstream's native Qt GUI,
+HF modem, Hamlib, TCI and command/KISS interfaces as **Data2G.app**. The
+upstream engine base is `95c94b1` (v0.5.3 plus later fixes). The experimental
+FM profile is not included. Original project and author documentation follow.
+
+This app's settings are independent at
+`~/Library/Application Support/Data2G macOS/data2g.conf`. For use with
+[Ragtime macOS](https://github.com/N4EAC/ragtime), start Data2G and configure
+radio audio/PTT, then use host `127.0.0.1`, KISS port `8100` and command
+port `8300` in Ragtime (session data is `8301`). Both can share rigctld at
+`localhost:4555` for CAT; Data2G owns modem audio and PTT.
+
+Build with `brew install cmake ninja pkg-config qtbase qtwebsockets qtsvg hamlib`,
+then `bash tools/macos/build.sh`. The recipe runs native/GUI tests and verifies
+the staged app. Use an empty `STAGE_DIR` when repackaging. Packages are ad hoc
+signed, without Apple notarization. See [macOS changelog](CHANGELOG-macOS.md).
+
 ## Status
 
 This is beta-quality software. It's been tested on air, it has a growing community, and the protocol is mostly stabilized. However, bugs may exist and incompatible changes may occur. The authors don't warrant Data2G for life-safety purposes. Experiment and have fun!
