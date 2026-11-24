@@ -32,6 +32,22 @@ CARRIER0 = 950  # Hz; occupied ~925..2125 Hz
 FCENTER = 1500  # Hz; baseband conversion frequency
 
 SYMS_PER_FRAME = 6  # 1 pilot + 5 data
+# DATA2G_PILOTS=k3d2 (study flag, Python only, both ends; 2026-11-23, scripts/fast_fading_study.py): on these
+# bands a frame's pilots are every 3rd carrier of symbols 0, 2 and 4, one carrier on each time (the same
+# 1/6 of its cells, the other 5 nc data), not its first symbol; the header closes with a pilot of its own
+# and the header copy's frame ends with one (modem.sc_cells). Carriers a multiple of 3, own sync.
+# DATA2G_PILOTS=gold (or gold:1/6; round 4, scripts/pilot_seq_study.py): the pilots are the first nc terms of a
+# sequence both ends share, cell i g mod 6 nc of the frame's cells taken symbol by symbol, g the integer nearest
+# 6 nc / golden ratio coprime to 6 nc: each carrier once a frame on every band (so n10 and n4 take it), 1-2 fewer
+# or more than nc / 6 a symbol. Other densities are the sequence's other prefixes; only 1/6 keeps a frame's 5 nc
+# data cells, and only it is built.
+PILOTS = os.environ.get("DATA2G_PILOTS", "")
+SC_LAYOUT, _, _density = PILOTS.partition(":")
+# DATA2G_PILOTS=mix (round 5): the same sequence with a stride per band (modem.SC_STRIDES): k3d2's on w and w48
+# (2 nc + 1: gold's 179 on 48 carriers leaves holes that cost hilat-m a third of its gain), gold's on n10 and n4.
+if SC_LAYOUT not in ("", "k3d2", "gold", "mix") or _density not in ("", "1/6"):
+    raise ValueError(f"DATA2G_PILOTS={PILOTS}: k3d2, gold or mix, at 1/6")
+SC_BANDS = {"k3d2": ("w", "w48"), "gold": ("w", "w48", "n10", "n4"), "mix": ("w", "w48", "n10", "n4")}.get(SC_LAYOUT, ())
 DATA_SYMS_PER_FRAME = SYMS_PER_FRAME - 1
 FRAME_SAMPLES = SYMS_PER_FRAME * NSYM  # 1152 = 144 ms
 
