@@ -23,6 +23,9 @@ int main(int argc, char** argv) {
             if (!home || !*home) throw std::runtime_error("HOME is not set");
             auto file = std::filesystem::path(home) / "Library/Application Support/Data2G macOS/data2g.conf";
             std::filesystem::create_directories(file.parent_path());
+            auto previous = std::filesystem::path(home) / "Library/Application Support/Data2G Local/data2g.conf";
+            if (!std::filesystem::exists(file) && std::filesystem::is_regular_file(previous))
+                std::filesystem::copy_file(previous, file);
             args.insert(args.end(), {"--config", file.string()});
         }
         for (int i = 1; i < argc; ++i) args.emplace_back(argv[i]);

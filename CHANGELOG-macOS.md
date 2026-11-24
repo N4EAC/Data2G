@@ -5,7 +5,8 @@
 - Package the upstream HF modem and Qt GUI through `95c94b1` as Data2G.app.
 - Include HF carrier/noise and receive-preview fixes after upstream v0.5.3.
 - Bundle Hamlib, miniaudio, TCI, command/KISS interfaces and diagnostic tools.
-- Isolate preferences from the official build and Ragtime apps.
+- Isolate preferences from the official build and Ragtime apps; retain
+  settings from the preliminary Data2G Local build when first opened.
 - Include source revisions, licenses and a reproducible macOS build recipe.
 - Verify 33 native/GUI tests and interoperability with Ragtime macOS.
 
